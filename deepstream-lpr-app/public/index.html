@@ -57,10 +57,21 @@
               <option value="obb">obb</option>
             </select>
           </label>
+          <label>
+            YOLO version
+            <select id="buildYoloVersion">
+              <option value="yolov8">YOLOv8</option>
+              <option value="yolov9">YOLOv9</option>
+              <option value="yolov10">YOLOv10</option>
+              <option value="yolo11">YOLO11</option>
+              <option value="yolov12">YOLOv12</option>
+              <option value="yolov13">YOLOv13</option>
+            </select>
+          </label>
           <label>TensorRT workspace MB <input id="buildWorkspaceMb" type="number" value="2048" /></label>
-          <label>Number of classes <input id="buildNumClasses" type="number" value="1" min="1" /></label>
         </div>
-        <div class="grid one">
+        <div class="grid">
+          <label>Number of classes <input id="buildNumClasses" type="number" value="1" min="1" /></label>
           <label>Source .pt/.onnx <input id="sourceModelFile" type="file" accept=".pt,.onnx" /></label>
         </div>
         <div class="checks">
@@ -68,7 +79,7 @@
           <label><input id="buildSimplify" type="checkbox" checked /> Simplify ONNX</label>
           <label><input id="buildDynamic" type="checkbox" /> Dynamic shape</label>
           <label><input id="buildEngine" type="checkbox" checked /> Build TensorRT engine</label>
-          <label><input id="buildParser" type="checkbox" checked /> Build YOLOv8+ parser</label>
+          <label><input id="buildParser" type="checkbox" checked /> Build DeepStream-Yolo parser</label>
         </div>
         <div class="actions inline-actions">
           <button id="uploadSourceBtn" type="button">Upload source</button>

@@ -9,16 +9,19 @@ const APP_ROOT = path.resolve(__dirname, "..");
 const PUBLIC_DIR = path.join(APP_ROOT, "public");
 const RUNTIME_DIR = path.join(APP_ROOT, "runtime");
 const GENERATED_DIR = path.join(RUNTIME_DIR, "generated");
+const THIRD_PARTY_DIR = path.join(RUNTIME_DIR, "third_party");
 const MODELS_DIR = path.join(APP_ROOT, "models");
 const CONFIG_FILE = path.join(RUNTIME_DIR, "config.json");
 const COMPOSE_FILE = path.join(RUNTIME_DIR, "docker-compose.generated.yml");
 const PORT = Number(process.env.LPR_CONTROL_PORT || 5190);
+const DEEPSTREAM_YOLO_REPO = process.env.DEEPSTREAM_YOLO_REPO || "https://github.com/marcoslucianops/DeepStream-Yolo.git";
+const DEEPSTREAM_YOLO_REF = process.env.DEEPSTREAM_YOLO_REF || "2894babce8e75c49115dbe0c7b516289ed853565";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 function ensureDirs() {
-  for (const dir of [RUNTIME_DIR, GENERATED_DIR, MODELS_DIR]) {
+  for (const dir of [RUNTIME_DIR, GENERATED_DIR, THIRD_PARTY_DIR, MODELS_DIR]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }
@@ -217,9 +220,9 @@ function modelConfig(slot, model, gieId, networkType, operateOnGieId = null) {
     lines.push(`num-detected-classes=${Math.max(1, Number(model.numClasses || 1))}`);
     lines.push(
       "cluster-mode=2",
-      `parse-bbox-func-name=${model.parseBboxFunc || "NvDsInferParseYoloV8"}`
+      `parse-bbox-func-name=${model.parseBboxFunc || "NvDsInferParseYolo"}`
     );
-    if (model.engineCreateFunc) lines.push(`engine-create-func-name=${model.engineCreateFunc}`);
+    lines.push(`engine-create-func-name=${model.engineCreateFunc || "NvDsInferYoloCudaEngineGet"}`);
   }
   lines.push("", "[class-attrs-all]", "pre-cluster-threshold=0.35", "nms-iou-threshold=0.45", "");
   return lines.join("\n");
@@ -246,7 +249,8 @@ function modelBuildPaths(group) {
     dir,
     onnx: path.join(dir, `${group}.onnx`),
     engine: path.join(dir, `${group}.engine`),
-    parserLib: path.join(dir, "libnvdsinfer_custom_impl_yolov8.so"),
+    labels: path.join(dir, "labels.txt"),
+    parserLib: path.join(dir, "libnvdsinfer_custom_impl_Yolo.so"),
     log: path.join(dir, "build.log")
   };
 }
@@ -259,28 +263,49 @@ function countLabelLines(filePath) {
   }
 }
 
-async function buildYoloV8Parser(config, group, paths) {
-  const includeDir = "/opt/nvidia/deepstream/deepstream/sources/includes";
+async function ensureDeepStreamYoloRepo() {
+  const repoDir = path.join(THIRD_PARTY_DIR, "DeepStream-Yolo");
+  const gitDir = path.join(repoDir, ".git");
+  if (!fs.existsSync(gitDir)) {
+    await fsp.rm(repoDir, { recursive: true, force: true });
+    const clone = await runCommand("git", ["clone", "--depth", "1", DEEPSTREAM_YOLO_REPO, repoDir], { cwd: APP_ROOT });
+    if (clone.code !== 0) {
+      throw new Error(`Cannot clone DeepStream-Yolo repo.\n${clone.output}`);
+    }
+  }
+
+  const fetch = await runCommand("git", ["fetch", "--depth", "1", "origin", DEEPSTREAM_YOLO_REF], { cwd: repoDir });
+  if (fetch.code !== 0) {
+    throw new Error(`Cannot fetch DeepStream-Yolo ref ${DEEPSTREAM_YOLO_REF}.\n${fetch.output}`);
+  }
+  const checkout = await runCommand("git", ["checkout", "--detach", DEEPSTREAM_YOLO_REF], { cwd: repoDir });
+  if (checkout.code !== 0) {
+    throw new Error(`Cannot checkout DeepStream-Yolo ref ${DEEPSTREAM_YOLO_REF}.\n${checkout.output}`);
+  }
+  return repoDir;
+}
+
+async function buildDeepStreamYoloParser(config, group, paths) {
+  const repoDir = await ensureDeepStreamYoloRepo();
+  const mountedRepoDir = "/workspace/deepstream-lpr-app/runtime/third_party/DeepStream-Yolo";
+  const mountedOutput = `/workspace/deepstream-lpr-app/models/${group}/build/libnvdsinfer_custom_impl_Yolo.so`;
   const compileCommand = [
     "set -e",
-    "command -v g++ >/dev/null || (apt-get update && apt-get install -y g++)",
-    [
-      "g++",
-      "-shared",
-      "-fPIC",
-      "-std=c++17",
-      `-I${includeDir}`,
-      "-I/usr/local/cuda/include",
-      "-o",
-      `/workspace/deepstream-lpr-app/models/${group}/build/libnvdsinfer_custom_impl_yolov8.so`,
-      "/workspace/deepstream-lpr-app/parser-builder/yolov8/nvdsinfer_custom_impl_yolov8.cpp"
-    ].join(" ")
+    "command -v g++ >/dev/null || (apt-get update && apt-get install -y build-essential)",
+    "command -v make >/dev/null || (apt-get update && apt-get install -y make)",
+    "CUDA_VER=${CUDA_VER:-$(nvcc --version | sed -n 's/.*release \\([0-9][0-9]*\\.[0-9][0-9]*\\).*/\\1/p' | head -n1)}",
+    "test -n \"$CUDA_VER\"",
+    "if [ ! -d \"/usr/local/cuda-$CUDA_VER\" ] && [ -d /usr/local/cuda ]; then ln -sfn /usr/local/cuda \"/usr/local/cuda-$CUDA_VER\"; fi",
+    `make -C ${mountedRepoDir}/nvdsinfer_custom_impl_Yolo clean CUDA_VER=$CUDA_VER`,
+    `make -C ${mountedRepoDir}/nvdsinfer_custom_impl_Yolo CUDA_VER=$CUDA_VER`,
+    `cp ${mountedRepoDir}/nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so ${mountedOutput}`
   ].join(" && ");
   const result = await runCommand("docker", [
     "run",
     "--rm",
     "--network", "host",
     "-v", `${APP_ROOT.replace(/\\/g, "/")}:/workspace/deepstream-lpr-app`,
+    "-v", `${repoDir.replace(/\\/g, "/")}:${mountedRepoDir}`,
     "-w", "/workspace/deepstream-lpr-app",
     config.deepstreamImage,
     "bash",
@@ -289,13 +314,13 @@ async function buildYoloV8Parser(config, group, paths) {
   ], { cwd: APP_ROOT });
 
   if (result.code !== 0) {
-    throw new Error(`YOLOv8 parser build failed. Make sure Docker can run the DeepStream image and that it contains DeepStream headers.\n${result.output}`);
+    throw new Error(`DeepStream-Yolo parser build failed. Make sure Docker can run the DeepStream image and CUDA_VER matches your Jetson/DeepStream image.\n${result.output}`);
   }
 
   if (!fs.existsSync(paths.parserLib)) {
-    throw new Error("YOLOv8 parser build finished but output .so was not found.");
+    throw new Error("DeepStream-Yolo parser build finished but output .so was not found.");
   }
-  return result.output;
+  return `DeepStream-Yolo ref: ${DEEPSTREAM_YOLO_REF}\n${result.output}`;
 }
 
 async function buildYoloModel(group, options = {}) {
@@ -312,25 +337,42 @@ async function buildYoloModel(group, options = {}) {
   const imgsz = Math.max(32, Number(options.imgsz || 640));
   const opset = Math.max(11, Number(options.opset || 17));
   const task = options.task || "detect";
+  const yoloVersion = String(options.yoloVersion || model.yoloVersion || "yolov8").toLowerCase();
   const simplify = parseBool(options.simplify, true);
   const dynamic = parseBool(options.dynamic, false);
   const buildEngine = parseBool(options.buildEngine, true);
   const fp16 = parseBool(options.fp16, true);
   const workspaceMb = Math.max(256, Number(options.workspaceMb || 2048));
-  const canUseYoloV8Parser = group !== "plate_ocr" && (task === "detect" || task === "auto");
-  const buildParser = parseBool(options.buildParser, canUseYoloV8Parser);
+  const canUseDeepStreamYolo = group !== "plate_ocr" && (task === "detect" || task === "auto");
+  const buildParser = parseBool(options.buildParser, canUseDeepStreamYolo);
   const numClassesFromLabels = countLabelLines(hostPathFromWorkspace(model.labels));
-  const numClasses = Math.max(1, Number(options.numClasses || model.numClasses || numClassesFromLabels || 1));
+  let numClasses = Math.max(1, Number(options.numClasses || model.numClasses || numClassesFromLabels || 1));
   let output = "";
 
-  const exportArgs = [
-    path.join(APP_ROOT, "model-builder", "export_yolo.py"),
-    "--source", source,
-    "--output", paths.onnx,
-    "--imgsz", String(imgsz),
-    "--opset", String(opset),
-    "--task", task
-  ];
+  const sourceExt = path.extname(source).toLowerCase();
+  const exportArgs = [];
+  if (canUseDeepStreamYolo && sourceExt === ".pt") {
+    const repoDir = await ensureDeepStreamYoloRepo();
+    exportArgs.push(
+      path.join(APP_ROOT, "model-builder", "export_deepstream_yolo.py"),
+      "--source", source,
+      "--output", paths.onnx,
+      "--repo-dir", repoDir,
+      "--version", yoloVersion,
+      "--imgsz", String(imgsz),
+      "--opset", String(opset),
+      "--labels-output", paths.labels
+    );
+  } else {
+    exportArgs.push(
+      path.join(APP_ROOT, "model-builder", "export_yolo.py"),
+      "--source", source,
+      "--output", paths.onnx,
+      "--imgsz", String(imgsz),
+      "--opset", String(opset),
+      "--task", task
+    );
+  }
   if (simplify) exportArgs.push("--simplify");
   if (dynamic) exportArgs.push("--dynamic");
 
@@ -342,6 +384,14 @@ async function buildYoloModel(group, options = {}) {
   }
 
   model.onnx = workspacePath(paths.onnx);
+  model.yoloVersion = yoloVersion;
+  if (!model.labels && fs.existsSync(paths.labels)) {
+    model.labels = workspacePath(paths.labels);
+  }
+  const generatedLabelCount = countLabelLines(paths.labels);
+  if (!options.numClasses && generatedLabelCount > 0) {
+    numClasses = generatedLabelCount;
+  }
 
   if (buildEngine) {
     const trtexec = findTrtexec();
@@ -363,19 +413,19 @@ async function buildYoloModel(group, options = {}) {
 
   model.numClasses = numClasses;
 
-  if (buildParser && canUseYoloV8Parser) {
+  if (buildParser && canUseDeepStreamYolo) {
     let parserOutput = "";
     try {
-      parserOutput = await buildYoloV8Parser(config, group, paths);
+      parserOutput = await buildDeepStreamYoloParser(config, group, paths);
     } catch (error) {
-      output += `\n# Build YOLOv8+ DeepStream parser\n${error.message}\n`;
+      output += `\n# Build DeepStream-Yolo parser\n${error.message}\n`;
       await fsp.writeFile(paths.log, output);
       throw error;
     }
-    output += `\n# Build YOLOv8+ DeepStream parser\n${parserOutput}\n`;
+    output += `\n# Build DeepStream-Yolo parser\n${parserOutput}\n`;
     model.customLib = workspacePath(paths.parserLib);
-    model.parseBboxFunc = "NvDsInferParseYoloV8";
-    delete model.engineCreateFunc;
+    model.parseBboxFunc = "NvDsInferParseYolo";
+    model.engineCreateFunc = "NvDsInferYoloCudaEngineGet";
   }
 
   model.build = {
@@ -385,6 +435,7 @@ async function buildYoloModel(group, options = {}) {
     customLib: model.customLib || "",
     parseBboxFunc: model.parseBboxFunc || "",
     numClasses,
+    yoloVersion,
     imgsz,
     opset,
     task,

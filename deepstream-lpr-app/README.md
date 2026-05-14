@@ -36,10 +36,11 @@ Neu model cua ban den tu YOLO family, control UI co them vung **YOLO Model Build
 
 Pipeline hien tai:
 
-- `.pt` -> export ONNX bang `ultralytics`.
+- `.pt` detection model -> export ONNX bang export script cua `marcoslucianops/DeepStream-Yolo`.
+- `.pt` non-detection model -> export ONNX bang `ultralytics`.
 - `.onnx` -> copy vao thu muc build.
 - ONNX -> TensorRT `.engine` bang `trtexec` neu bat `Build TensorRT engine`.
-- YOLOv8+ detect -> compile DeepStream parser `.so` neu bat `Build YOLOv8+ parser`.
+- YOLOv8+ detect -> clone/pin `DeepStream-Yolo`, compile `libnvdsinfer_custom_impl_Yolo.so` neu bat `Build DeepStream-Yolo parser`.
 - Tu dong cap nhat `runtime/config.json` va generated DeepStream config.
 
 Thu muc build se nam trong:
@@ -55,7 +56,7 @@ Log build co the xem trong UI bang nut `View build log`.
 De build tu `.pt`:
 
 ```bash
-python3 -m pip install ultralytics onnx onnxsim
+python3 -m pip install ultralytics onnx onnxslim onnxsim
 ```
 
 De build TensorRT engine, Jetson/DeepStream image can co `trtexec`. Thuong nam o:
@@ -73,24 +74,32 @@ npm run lpr:control
 
 Nen build TensorRT engine truc tiep tren chinh Jetson se deploy, vi engine phu thuoc CUDA, TensorRT, GPU va precision.
 
-De auto build parser `.so`, may Jetson can chay duoc Docker DeepStream image da chon trong UI. Builder se compile source:
+De auto build parser `.so`, may Jetson can chay duoc Docker DeepStream image da chon trong UI. Builder se clone/pin repo:
 
 ```text
-deepstream-lpr-app/parser-builder/yolov8/nvdsinfer_custom_impl_yolov8.cpp
+https://github.com/marcoslucianops/DeepStream-Yolo
+ref: 2894babce8e75c49115dbe0c7b516289ed853565
 ```
 
-Thanh:
+Repo se nam trong runtime ignored folder:
 
 ```text
-deepstream-lpr-app/models/<model_group>/build/libnvdsinfer_custom_impl_yolov8.so
+deepstream-lpr-app/runtime/third_party/DeepStream-Yolo
 ```
 
-Parser nay ho tro output detect pho bien cua Ultralytics YOLOv8 tro len:
+Va compile thanh:
 
-- `[1, 4 + num_classes, anchors]`
-- `[1, anchors, 4 + num_classes]`
+```text
+deepstream-lpr-app/models/<model_group>/build/libnvdsinfer_custom_impl_Yolo.so
+```
 
-Khi dung parser nay, export ONNX phai de `nms=False`. Script export cua repo da set san nhu vay.
+Mac dinh builder dung export script cua DeepStream-Yolo cho YOLOv8, YOLOv9, YOLOv10, YOLO11, YOLOv12, YOLOv13. Neu muon override repo/ref:
+
+```bash
+export DEEPSTREAM_YOLO_REPO=https://github.com/marcoslucianops/DeepStream-Yolo.git
+export DEEPSTREAM_YOLO_REF=2894babce8e75c49115dbe0c7b516289ed853565
+npm run lpr:control
+```
 
 ## Model placeholders
 
@@ -107,14 +116,17 @@ Cac slot upload thu cong van duoc giu lai:
 - `*_labels`
 - `*_custom_lib`
 
-Voi YOLOv8+ detection model theo output Ultralytics pho bien, UI co the tu build parser `.so` va gan vao config:
+Voi YOLOv8+ detection model, UI co the tu build parser `.so` theo chuan DeepStream-Yolo va gan vao config:
 
 ```text
-custom-lib-path=/workspace/deepstream-lpr-app/models/<model_group>/build/libnvdsinfer_custom_impl_yolov8.so
-parse-bbox-func-name=NvDsInferParseYoloV8
+custom-lib-path=/workspace/deepstream-lpr-app/models/<model_group>/build/libnvdsinfer_custom_impl_Yolo.so
+parse-bbox-func-name=NvDsInferParseYolo
+engine-create-func-name=NvDsInferYoloCudaEngineGet
 ```
 
-Neu model cua ban export ra format dac biet, co NMS san trong ONNX, hoac khong phai detect output dang `xywh + class scores`, hay upload parser rieng vao slot `vehicle_front_custom_lib` va `plate_detector_custom_lib`.
+Neu model cua ban export ra format dac biet hoac khong nam trong nhom YOLOv8+, YOLOv9, YOLOv10, YOLO11, YOLOv12, YOLOv13, hay upload parser rieng vao slot `vehicle_front_custom_lib` va `plate_detector_custom_lib`.
+
+DeepStream-Yolo dung MIT license. Neu vendor source repo nay vao san pham, can giu license notice cua ho.
 
 Tham khao NVIDIA docs: https://docs.nvidia.com/metropolis/deepstream/8.0/text/DS_using_custom_model.html
 
