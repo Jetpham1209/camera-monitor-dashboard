@@ -14,15 +14,19 @@
       </header>
 
       <section class="panel">
-        <h2>Stream & ROI</h2>
-        <label>RTSP URL <input id="rtspUrl" placeholder="rtsp://user:pass@host:554/stream1" /></label>
+        <h2>Cameras & ROI</h2>
+        <div id="cameraList" class="camera-list"></div>
+        <div class="actions inline-actions">
+          <button id="addCameraBtn" type="button">Add camera</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Runtime Settings</h2>
         <div class="grid">
           <label>Width <input id="streamWidth" type="number" value="1920" /></label>
           <label>Height <input id="streamHeight" type="number" value="1080" /></label>
-          <label>Cooldown moi xe (giay) <input id="captureCooldownSec" type="number" value="30" /></label>
         </div>
-        <label>ROI polygon JSON <textarea id="roiPolygon"></textarea></label>
-        <label>Front vehicle class IDs <input id="frontVehicleClassIds" value="0" /></label>
         <label>DeepStream Docker image <input id="deepstreamImage" value="nvcr.io/nvidia/deepstream-l4t:7.1-samples" /></label>
       </section>
 

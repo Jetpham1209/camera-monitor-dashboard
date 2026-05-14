@@ -73,6 +73,40 @@ textarea { min-height: 120px; resize: vertical; }
   background: #fbfcff;
 }
 .upload-card strong { display: block; margin-bottom: 8px; }
+.camera-list {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.camera-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fbfcff;
+}
+.camera-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.camera-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.inline-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.inline-check input {
+  width: auto;
+}
 .model-builders {
   display: grid;
   gap: 14px;

@@ -41,13 +41,11 @@ const modelBuilderGroups = [
 ];
 
 const els = {
-  rtspUrl: document.querySelector("#rtspUrl"),
   streamWidth: document.querySelector("#streamWidth"),
   streamHeight: document.querySelector("#streamHeight"),
-  captureCooldownSec: document.querySelector("#captureCooldownSec"),
-  roiPolygon: document.querySelector("#roiPolygon"),
-  frontVehicleClassIds: document.querySelector("#frontVehicleClassIds"),
   deepstreamImage: document.querySelector("#deepstreamImage"),
+  cameraList: document.querySelector("#cameraList"),
+  addCameraBtn: document.querySelector("#addCameraBtn"),
   uploads: document.querySelector("#uploads"),
   modelBuilders: document.querySelector("#modelBuilders"),
   checkpointList: document.querySelector("#checkpointList"),
@@ -63,6 +61,8 @@ const els = {
   runTestImageBtn: document.querySelector("#runTestImageBtn"),
   runTestVideoBtn: document.querySelector("#runTestVideoBtn")
 };
+
+let cameraDrafts = [];
 
 function print(value) {
   els.output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -100,12 +100,9 @@ async function apiText(path) {
 
 function formConfig() {
   return {
-    rtspUrl: els.rtspUrl.value.trim(),
+    streams: readCameraCards(),
     streamWidth: Number(els.streamWidth.value),
     streamHeight: Number(els.streamHeight.value),
-    captureCooldownSec: Number(els.captureCooldownSec.value),
-    roi: { polygon: JSON.parse(els.roiPolygon.value) },
-    frontVehicleClassIds: els.frontVehicleClassIds.value,
     deepstreamImage: els.deepstreamImage.value.trim()
   };
 }
@@ -130,13 +127,76 @@ function buildOptions(group) {
   };
 }
 
+function defaultCamera(index = 0) {
+  return {
+    id: `camera-${index + 1}`,
+    name: `Camera ${index + 1}`,
+    rtspUrl: "",
+    enabled: true,
+    roi: { polygon: [[100, 100], [900, 100], [900, 700], [100, 700]] },
+    frontVehicleClassIds: [0],
+    captureCooldownSec: 30
+  };
+}
+
+function readCameraCards() {
+  return [...document.querySelectorAll("[data-camera-card]")].map((card, index) => ({
+    id: card.querySelector("[data-camera-field='id']").value.trim() || `camera-${index + 1}`,
+    name: card.querySelector("[data-camera-field='name']").value.trim() || `Camera ${index + 1}`,
+    rtspUrl: card.querySelector("[data-camera-field='rtspUrl']").value.trim(),
+    enabled: card.querySelector("[data-camera-field='enabled']").checked,
+    roi: { polygon: JSON.parse(card.querySelector("[data-camera-field='roi']").value) },
+    frontVehicleClassIds: card.querySelector("[data-camera-field='frontVehicleClassIds']").value,
+    captureCooldownSec: Number(card.querySelector("[data-camera-field='captureCooldownSec']").value)
+  }));
+}
+
+function renderCameras(streams = []) {
+  cameraDrafts = streams.length ? streams : [defaultCamera(0)];
+  els.cameraList.innerHTML = cameraDrafts.map((camera, index) => `
+    <article class="camera-card" data-camera-card data-camera-index="${index}">
+      <div class="camera-head">
+        <div>
+          <h3>${escapeHtml(camera.name || `Camera ${index + 1}`)}</h3>
+          <p>${escapeHtml(camera.id || `camera-${index + 1}`)}</p>
+        </div>
+        <label class="inline-check"><input data-camera-field="enabled" type="checkbox" ${camera.enabled !== false ? "checked" : ""} /> Enabled</label>
+      </div>
+      <div class="grid">
+        <label>Camera ID <input data-camera-field="id" value="${escapeHtml(camera.id || `camera-${index + 1}`)}" /></label>
+        <label>Camera name <input data-camera-field="name" value="${escapeHtml(camera.name || `Camera ${index + 1}`)}" /></label>
+        <label>Cooldown moi xe (giay) <input data-camera-field="captureCooldownSec" type="number" value="${camera.captureCooldownSec || 30}" /></label>
+      </div>
+      <label>RTSP URL <input data-camera-field="rtspUrl" placeholder="rtsp://user:pass@host:554/stream1" value="${escapeHtml(camera.rtspUrl || "")}" /></label>
+      <div class="grid one">
+        <label>ROI polygon JSON <textarea data-camera-field="roi">${escapeHtml(JSON.stringify(camera.roi?.polygon || defaultCamera(index).roi.polygon, null, 2))}</textarea></label>
+      </div>
+      <label>Front vehicle class IDs <input data-camera-field="frontVehicleClassIds" value="${escapeHtml((camera.frontVehicleClassIds || [0]).join(","))}" /></label>
+      <div class="actions inline-actions">
+        <button type="button" data-remove-camera="${index}">Remove camera</button>
+      </div>
+    </article>
+  `).join("");
+  document.querySelectorAll("[data-remove-camera]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const index = Number(button.dataset.removeCamera);
+      const current = readCameraCards();
+      current.splice(index, 1);
+      renderCameras(current.length ? current : [defaultCamera(0)]);
+    });
+  });
+}
+
+function addCamera() {
+  const current = readCameraCards();
+  current.push(defaultCamera(current.length));
+  renderCameras(current);
+}
+
 function renderConfig(config) {
-  els.rtspUrl.value = config.rtspUrl || "";
+  renderCameras(config.streams || []);
   els.streamWidth.value = config.streamWidth || 1920;
   els.streamHeight.value = config.streamHeight || 1080;
-  els.captureCooldownSec.value = config.captureCooldownSec || 30;
-  els.roiPolygon.value = JSON.stringify(config.roi?.polygon || [], null, 2);
-  els.frontVehicleClassIds.value = (config.frontVehicleClassIds || [0]).join(",");
   els.deepstreamImage.value = config.deepstreamImage || "nvcr.io/nvidia/deepstream-l4t:7.1-samples";
   print(config);
 }
@@ -338,6 +398,13 @@ els.deployBtn.addEventListener("click", () => deploy().catch((error) => {
 }));
 els.stopBtn.addEventListener("click", () => stop().catch((error) => print(error.message)));
 els.eventsBtn.addEventListener("click", () => loadEvents().catch((error) => print(error.message)));
+els.addCameraBtn.addEventListener("click", () => {
+  try {
+    addCamera();
+  } catch (error) {
+    print(error.message);
+  }
+});
 els.uploadTestImageBtn.addEventListener("click", () => uploadTestMedia("image").catch((error) => print(error.message)));
 els.uploadTestVideoBtn.addEventListener("click", () => uploadTestMedia("video").catch((error) => print(error.message)));
 els.runTestImageBtn.addEventListener("click", () => runTestMedia("image").catch((error) => {

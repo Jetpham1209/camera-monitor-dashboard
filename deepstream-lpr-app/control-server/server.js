@@ -42,6 +42,17 @@ async function writeJson(file, value) {
 function defaultConfig() {
   return {
     rtspUrl: "",
+    streams: [
+      {
+        id: "camera-1",
+        name: "Camera 1",
+        rtspUrl: "",
+        enabled: true,
+        roi: { polygon: [[100, 100], [900, 100], [900, 700], [100, 700]] },
+        frontVehicleClassIds: [0],
+        captureCooldownSec: 30
+      }
+    ],
     streamWidth: 1920,
     streamHeight: 1080,
     roi: { polygon: [[100, 100], [900, 100], [900, 700], [100, 700]] },
@@ -71,6 +82,15 @@ async function getConfig() {
 function mergeConfig(base, patch) {
   const output = { ...base, ...patch };
   output.roi = { ...base.roi, ...(patch.roi || {}) };
+  output.streams = Array.isArray(patch.streams)
+    ? patch.streams
+    : (patch.rtspUrl ? [{
+      ...base.streams[0],
+      rtspUrl: patch.rtspUrl,
+      roi: patch.roi || base.roi,
+      frontVehicleClassIds: patch.frontVehicleClassIds || [0],
+      captureCooldownSec: patch.captureCooldownSec || 30
+    }] : base.streams);
   output.models = {
     ...base.models,
     ...(patch.models || {}),
@@ -227,6 +247,44 @@ function hostPathFromWorkspace(filePath) {
   return filePath;
 }
 
+function normalizeClassIds(value) {
+  const ids = Array.isArray(value) ? value : String(value || "").split(",");
+  return ids.map((item) => Number(String(item).trim())).filter((item) => Number.isInteger(item));
+}
+
+function normalizeStreams(inputStreams, fallback) {
+  const sourceStreams = Array.isArray(inputStreams) ? inputStreams : [];
+  const fallbackStream = {
+    id: "camera-1",
+    name: "Camera 1",
+    rtspUrl: fallback.rtspUrl || "",
+    enabled: true,
+    roi: fallback.roi || { polygon: [[100, 100], [900, 100], [900, 700], [100, 700]] },
+    frontVehicleClassIds: fallback.frontVehicleClassIds || [0],
+    captureCooldownSec: fallback.captureCooldownSec || 30
+  };
+  return (sourceStreams.length ? sourceStreams : [fallbackStream]).map((stream, index) => {
+    const polygon = stream.roi?.polygon || fallbackStream.roi.polygon;
+    if (!Array.isArray(polygon) || polygon.length < 3) {
+      throw new Error(`ROI polygon cua camera ${index + 1} can it nhat 3 diem.`);
+    }
+    const classIds = normalizeClassIds(stream.frontVehicleClassIds);
+    return {
+      id: String(stream.id || `camera-${index + 1}`).trim() || `camera-${index + 1}`,
+      name: String(stream.name || `Camera ${index + 1}`).trim() || `Camera ${index + 1}`,
+      rtspUrl: String(stream.rtspUrl || "").trim(),
+      enabled: stream.enabled !== false,
+      roi: { polygon },
+      frontVehicleClassIds: classIds.length ? classIds : [0],
+      captureCooldownSec: Math.max(1, Number(stream.captureCooldownSec || fallbackStream.captureCooldownSec || 30))
+    };
+  });
+}
+
+function enabledRtspStreams(config) {
+  return (config.streams || []).filter((stream) => stream.enabled !== false && /^rtsp:\/\//i.test(stream.rtspUrl || ""));
+}
+
 function normalizeConfig(input, existing) {
   const config = mergeConfig(existing, input || {});
   if (!config.rtspUrl || !/^rtsp:\/\//i.test(config.rtspUrl)) {
@@ -264,7 +322,26 @@ function normalizeRuntimeConfig(input, existing) {
   return config;
 }
 
-function modelConfig(slot, model, gieId, networkType, operateOnGieId = null) {
+function normalizeMultiCameraConfig(input, existing, requireRtsp = true) {
+  const config = mergeConfig(existing, input || {});
+  config.streams = normalizeStreams(config.streams, config);
+  const enabledStreams = enabledRtspStreams(config);
+  if (requireRtsp && !enabledStreams.length) {
+    throw new Error("Can it nhat 1 camera enabled va RTSP URL phai bat dau bang rtsp://.");
+  }
+  const firstStream = enabledStreams[0] || config.streams[0];
+  config.rtspUrl = firstStream?.rtspUrl || "";
+  config.roi = firstStream?.roi || config.roi;
+  config.frontVehicleClassIds = firstStream?.frontVehicleClassIds || normalizeClassIds(config.frontVehicleClassIds);
+  if (!config.frontVehicleClassIds.length) config.frontVehicleClassIds = [0];
+  config.streamWidth = Math.max(320, Number(config.streamWidth || 1920));
+  config.streamHeight = Math.max(240, Number(config.streamHeight || 1080));
+  config.captureCooldownSec = Math.max(1, Number(config.captureCooldownSec || firstStream?.captureCooldownSec || 30));
+  config.appRoot = "/workspace/deepstream-lpr-app";
+  return config;
+}
+
+function modelConfig(slot, model, gieId, networkType, operateOnGieId = null, batchSize = 1) {
   const lines = [
     "[property]",
     "gpu-id=0",
@@ -273,7 +350,7 @@ function modelConfig(slot, model, gieId, networkType, operateOnGieId = null) {
     model.engine ? `model-engine-file=${model.engine}` : "# model-engine-file=/workspace/deepstream-lpr-app/models/model.engine",
     model.labels ? `labelfile-path=${model.labels}` : "# labelfile-path=/workspace/deepstream-lpr-app/models/labels.txt",
     model.customLib ? `custom-lib-path=${model.customLib}` : "# custom-lib-path=/workspace/deepstream-lpr-app/models/libnvdsinfer_custom_impl_Yolo.so",
-    "batch-size=1",
+    `batch-size=${Math.max(1, Number(batchSize || 1))}`,
     "network-mode=2",
     `network-type=${networkType}`,
     `gie-unique-id=${gieId}`,
@@ -649,9 +726,10 @@ async function buildYoloModel(group, options = {}) {
 async function generateRuntime(config) {
   await fsp.mkdir(GENERATED_DIR, { recursive: true });
   await writeJson(CONFIG_FILE, config);
-  await fsp.writeFile(path.join(GENERATED_DIR, "config_infer_vehicle_front.txt"), modelConfig("vehicle_front", config.models.vehicle_front, 1, 0));
-  await fsp.writeFile(path.join(GENERATED_DIR, "config_infer_plate_detector.txt"), modelConfig("plate_detector", config.models.plate_detector, 2, 0, 1));
-  await fsp.writeFile(path.join(GENERATED_DIR, "config_infer_plate_ocr.txt"), modelConfig("plate_ocr", config.models.plate_ocr, 3, 1, 2));
+  const sourceBatchSize = Math.max(1, enabledRtspStreams(config).length || (config.streams || []).length || 1);
+  await fsp.writeFile(path.join(GENERATED_DIR, "config_infer_vehicle_front.txt"), modelConfig("vehicle_front", config.models.vehicle_front, 1, 0, null, sourceBatchSize));
+  await fsp.writeFile(path.join(GENERATED_DIR, "config_infer_plate_detector.txt"), modelConfig("plate_detector", config.models.plate_detector, 2, 0, 1, sourceBatchSize));
+  await fsp.writeFile(path.join(GENERATED_DIR, "config_infer_plate_ocr.txt"), modelConfig("plate_ocr", config.models.plate_ocr, 3, 1, 2, sourceBatchSize));
   await fsp.writeFile(path.join(GENERATED_DIR, "tracker_config.yml"), "BaseConfig:\n  minDetectorConfidence: 0.3\nTargetManagement:\n  enableBboxUnClipping: 1\n");
   const template = await fsp.readFile(path.join(APP_ROOT, "templates", "docker-compose.yml"), "utf8");
   const compose = template
@@ -841,7 +919,7 @@ app.get("/api/config", async (_req, res) => {
 
 app.put("/api/config", async (req, res) => {
   try {
-    const config = normalizeConfig(req.body, await getConfig());
+    const config = normalizeMultiCameraConfig(req.body, await getConfig(), true);
     await generateRuntime(config);
     res.json(config);
   } catch (error) {
@@ -905,7 +983,7 @@ app.post("/api/test-media/:kind", uploadTestMedia.single("file"), async (req, re
 app.post("/api/test/:kind", async (req, res) => {
   try {
     const kind = sanitizeTestKind(req.params.kind);
-    const config = normalizeRuntimeConfig(req.body, await getConfig());
+    const config = normalizeMultiCameraConfig(req.body, await getConfig(), false);
     const result = await runTestMedia(kind, config);
     res.json(result);
   } catch (error) {
@@ -935,7 +1013,7 @@ app.get("/api/build/:group/log", async (req, res) => {
 
 app.post("/api/deploy", async (req, res) => {
   try {
-    const config = normalizeConfig(req.body, await getConfig());
+    const config = normalizeMultiCameraConfig(req.body, await getConfig(), true);
     const result = await deploy(config);
     res.json(result);
   } catch (error) {

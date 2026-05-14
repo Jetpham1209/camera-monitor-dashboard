@@ -32,31 +32,58 @@ class LprRuntime:
         self.capture_dir = self.runtime_dir / "captures"
         self.events_file = self.runtime_dir / "events.jsonl"
         self.capture_dir.mkdir(parents=True, exist_ok=True)
-        self.front_class_ids = set(config.get("frontVehicleClassIds", [0]))
-        self.roi = config.get("roi", {}).get("polygon", [])
-        self.cooldown_sec = float(config.get("captureCooldownSec", 30))
+        self.streams = self.normalize_streams(config)
         self.captured = {}
 
-    def point_in_polygon(self, x, y):
-        if len(self.roi) < 3:
+    def normalize_streams(self, config):
+        if config.get("inputUri"):
+            base = (config.get("streams") or [{}])[0]
+            return [{
+                "id": base.get("id", "test-input"),
+                "name": base.get("name", "Test input"),
+                "rtspUrl": config["inputUri"],
+                "roi": base.get("roi") or config.get("roi", {}),
+                "frontVehicleClassIds": base.get("frontVehicleClassIds", config.get("frontVehicleClassIds", [0])),
+                "captureCooldownSec": base.get("captureCooldownSec", config.get("captureCooldownSec", 30)),
+            }]
+        streams = [item for item in config.get("streams", []) if item.get("enabled", True) and item.get("rtspUrl")]
+        if streams:
+            return streams
+        return [{
+            "id": "camera-1",
+            "name": "Camera 1",
+            "rtspUrl": config.get("rtspUrl", ""),
+            "roi": config.get("roi", {}),
+            "frontVehicleClassIds": config.get("frontVehicleClassIds", [0]),
+            "captureCooldownSec": config.get("captureCooldownSec", 30),
+        }]
+
+    def stream_config(self, source_id):
+        if 0 <= source_id < len(self.streams):
+            return self.streams[source_id]
+        return self.streams[0]
+
+    def point_in_polygon(self, polygon, x, y):
+        if len(polygon) < 3:
             return True
         inside = False
-        j = len(self.roi) - 1
-        for i, point in enumerate(self.roi):
+        j = len(polygon) - 1
+        for i, point in enumerate(polygon):
             xi, yi = point
-            xj, yj = self.roi[j]
+            xj, yj = polygon[j]
             intersects = ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-9) + xi)
             if intersects:
                 inside = not inside
             j = i
         return inside
 
-    def should_capture(self, object_id):
+    def should_capture(self, source_id, object_id, cooldown_sec):
         now = time.time()
-        previous = self.captured.get(object_id)
-        if previous and now - previous < self.cooldown_sec:
+        key = (source_id, object_id)
+        previous = self.captured.get(key)
+        if previous and now - previous < cooldown_sec:
             return False
-        self.captured[object_id] = now
+        self.captured[key] = now
         return True
 
     def extract_plate_text(self, obj_meta):
@@ -105,22 +132,30 @@ class LprRuntime:
         frame_list = batch_meta.frame_meta_list
         while frame_list is not None:
             frame_meta = pyds.NvDsFrameMeta.cast(frame_list.data)
+            source_id = int(frame_meta.source_id)
+            stream_config = self.stream_config(source_id)
+            front_class_ids = set(stream_config.get("frontVehicleClassIds", [0]))
+            roi = stream_config.get("roi", {}).get("polygon", [])
+            cooldown_sec = float(stream_config.get("captureCooldownSec", 30))
             obj_list = frame_meta.obj_meta_list
             while obj_list is not None:
                 obj_meta = pyds.NvDsObjectMeta.cast(obj_list.data)
-                if obj_meta.unique_component_id == 1 and obj_meta.class_id in self.front_class_ids:
+                if obj_meta.unique_component_id == 1 and obj_meta.class_id in front_class_ids:
                     rect = obj_meta.rect_params
                     center_x = float(rect.left + rect.width / 2)
                     center_y = float(rect.top + rect.height / 2)
                     object_id = int(obj_meta.object_id)
-                    if self.point_in_polygon(center_x, center_y) and self.should_capture(object_id):
-                        event_id = f"{int(time.time())}_{frame_meta.frame_num}_{object_id}"
+                    if self.point_in_polygon(roi, center_x, center_y) and self.should_capture(source_id, object_id, cooldown_sec):
+                        event_id = f"{int(time.time())}_{source_id}_{frame_meta.frame_num}_{object_id}"
                         plate_text = self.extract_plate_text(obj_meta)
                         image_path = self.save_frame(gst_buffer, frame_meta, obj_meta, event_id)
                         event = {
                             "eventId": event_id,
                             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                            "stream": self.config.get("inputUri") or self.config.get("rtspUrl"),
+                            "sourceId": source_id,
+                            "cameraId": stream_config.get("id", f"camera-{source_id + 1}"),
+                            "cameraName": stream_config.get("name", f"Camera {source_id + 1}"),
+                            "stream": stream_config.get("rtspUrl"),
                             "objectId": object_id,
                             "frameNum": int(frame_meta.frame_num),
                             "classId": int(obj_meta.class_id),
@@ -148,11 +183,11 @@ def make_element(factory, name):
     return element
 
 
-def on_decodebin_pad_added(_decodebin, pad, streammux):
+def on_decodebin_pad_added(_decodebin, pad, streammux, sink_index):
     caps = pad.get_current_caps()
     if caps and "video" not in caps.to_string():
         return
-    sink_pad = streammux.request_pad_simple("sink_0")
+    sink_pad = streammux.request_pad_simple(f"sink_{sink_index}")
     if not sink_pad:
         raise RuntimeError("Could not get streammux sink pad")
     if pad.link(sink_pad) != Gst.PadLinkReturn.OK:
@@ -161,12 +196,16 @@ def on_decodebin_pad_added(_decodebin, pad, streammux):
 
 def build_pipeline(runtime):
     config = runtime.config
-    input_uri = config.get("inputUri") or config.get("rtspUrl")
-    if not input_uri:
-        raise RuntimeError("Missing inputUri/rtspUrl")
+    input_uris = [item.get("rtspUrl") for item in runtime.streams if item.get("rtspUrl")]
+    if not input_uris:
+        raise RuntimeError("No input streams configured")
     Gst.init(None)
     pipeline = Gst.Pipeline.new("deepstream-lpr-pipeline")
-    source = make_element("uridecodebin", "input-source")
+    sources = []
+    for index, input_uri in enumerate(input_uris):
+        source = make_element("uridecodebin", f"input-source-{index}")
+        source.set_property("uri", input_uri)
+        sources.append(source)
     streammux = make_element("nvstreammux", "streammux")
     pgie = make_element("nvinfer", "vehicle-front-detector")
     tracker = make_element("nvtracker", "tracker")
@@ -176,11 +215,10 @@ def build_pipeline(runtime):
     osd = make_element("nvdsosd", "onscreendisplay")
     sink = make_element("fakesink", "sink")
 
-    source.set_property("uri", input_uri)
-    streammux.set_property("batch-size", 1)
+    streammux.set_property("batch-size", len(input_uris))
     streammux.set_property("width", int(config.get("streamWidth", 1920)))
     streammux.set_property("height", int(config.get("streamHeight", 1080)))
-    streammux.set_property("live-source", 1 if input_uri.lower().startswith("rtsp://") else 0)
+    streammux.set_property("live-source", 1 if any(uri.lower().startswith("rtsp://") for uri in input_uris) else 0)
     streammux.set_property("batched-push-timeout", 40000)
     pgie.set_property("config-file-path", str(runtime.runtime_dir / "generated" / "config_infer_vehicle_front.txt"))
     tracker.set_property("ll-lib-file", config.get("trackerLib", "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so"))
@@ -189,9 +227,10 @@ def build_pipeline(runtime):
     ocr_sgie.set_property("config-file-path", str(runtime.runtime_dir / "generated" / "config_infer_plate_ocr.txt"))
     sink.set_property("sync", False)
 
-    for element in [source, streammux, pgie, tracker, plate_sgie, ocr_sgie, conv, osd, sink]:
+    for element in [*sources, streammux, pgie, tracker, plate_sgie, ocr_sgie, conv, osd, sink]:
         pipeline.add(element)
-    source.connect("pad-added", on_decodebin_pad_added, streammux)
+    for index, source in enumerate(sources):
+        source.connect("pad-added", on_decodebin_pad_added, streammux, index)
     for left, right in [(streammux, pgie), (pgie, tracker), (tracker, plate_sgie), (plate_sgie, ocr_sgie), (ocr_sgie, conv), (conv, osd), (osd, sink)]:
         if not left.link(right):
             raise RuntimeError(f"Could not link {left.name} -> {right.name}")

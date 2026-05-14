@@ -4,8 +4,9 @@ Scaffold deploy tren Jetson cho bai toan nhan dien dau xe va doc bien so trong R
 
 ## Muc tieu
 
-- Input RTSP.
-- Phat hien dau xe trong vung polygon xac dinh.
+- Input nhieu RTSP camera.
+- Moi camera co config rieng: ten camera, RTSP URL, ROI polygon, class id dau xe, cooldown capture.
+- Phat hien dau xe trong vung polygon xac dinh cua tung camera.
 - Detect/OCR bien so.
 - Tracking object id de tranh capture qua nhieu lan cho cung mot xe.
 - Control UI de nhap RTSP, ROI, upload model YOLO, build ONNX/TensorRT engine, upload labels/custom parser, roi bam Deploy.
@@ -24,6 +25,26 @@ Mo:
 ```text
 http://<ip-jetson>:5190
 ```
+
+## Multi-camera config
+
+UI co vung **Cameras & ROI** de them nhieu camera. Moi camera gom:
+
+- `Camera ID`
+- `Camera name`
+- `RTSP URL`
+- `Enabled`
+- `ROI polygon JSON`
+- `Front vehicle class IDs`
+- `Cooldown moi xe`
+
+Khi deploy, app tao mot `uridecodebin` cho tung camera enabled, link vao `nvstreammux` theo `sink_0`, `sink_1`, ... va set `batch-size` theo so camera. Event output co them:
+
+- `sourceId`
+- `cameraId`
+- `cameraName`
+
+Config cu dang single `rtspUrl/roi` van duoc tu dong map ve camera dau tien de tranh mat tuong thich.
 
 ## YOLO model builder
 
