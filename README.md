@@ -33,6 +33,23 @@ git clone https://github.com/Jetpham1209/camera-monitor-dashboard.git
 cd camera-monitor-dashboard
 ```
 
+Chạy script cài đặt và khởi động trên Linux/macOS/WSL/Git Bash:
+
+```bash
+sh install.sh
+```
+
+Script sẽ tự tạo `.env`, tạo file data tối thiểu, cài dependencies và chạy server.
+
+Trên Linux/macOS cũng có thể cấp quyền execute rồi chạy trực tiếp:
+
+```bash
+chmod +x install.sh
+./install.sh
+```
+
+Nếu muốn cài thủ công, dùng các bước dưới đây.
+
 Cài dependencies:
 
 ```bash
