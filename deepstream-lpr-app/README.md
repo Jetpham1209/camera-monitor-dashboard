@@ -27,12 +27,13 @@ http://<ip-jetson>:5190
 
 ## YOLO model builder
 
-Neu model cua ban den tu YOLO family, control UI co them vung **YOLO Model Builder**:
+Neu model cua ban den tu YOLO family, control UI co them vung **LPR Model Builders** voi 3 card rieng:
 
-1. Chon `Model group`: `vehicle_front`, `plate_detector`, hoac `plate_ocr`.
-2. Upload source model `.pt` hoac `.onnx`.
-3. Chon `imgsz`, `opset`, `task`.
-4. Bam `Build model`.
+- `vehicle_front`: upload/build model phat hien dau xe.
+- `plate_detector`: upload/build model phat hien bien so.
+- `plate_ocr`: upload/build model doc bien so/OCR.
+
+Moi card co source model `.pt/.onnx`, `imgsz`, `opset`, `task`, YOLO version, class count, TensorRT/parser toggles, nut upload, nut build, va nut xem log rieng. Vi vay build loi model nao thi checkpoint/log cua model do se hien rieng, khong bi lan voi model khac.
 
 Pipeline hien tai:
 

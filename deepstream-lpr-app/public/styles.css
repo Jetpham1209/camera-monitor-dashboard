@@ -28,6 +28,7 @@ header p {
 }
 h1 { margin: 0 0 20px; font-size: 36px; }
 h2 { margin: 0 0 14px; font-size: 18px; }
+h3 { margin: 0; font-size: 16px; }
 .panel {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -72,6 +73,37 @@ textarea { min-height: 120px; resize: vertical; }
   background: #fbfcff;
 }
 .upload-card strong { display: block; margin-bottom: 8px; }
+.model-builders {
+  display: grid;
+  gap: 14px;
+}
+.model-builder-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fbfcff;
+}
+.model-builder-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.model-builder-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.model-builder-head code {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: white;
+  color: var(--blue);
+  font-weight: 800;
+  white-space: nowrap;
+}
 .checks {
   display: flex;
   gap: 16px;
