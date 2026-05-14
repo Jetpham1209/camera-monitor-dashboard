@@ -19,6 +19,55 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
+run_as_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  elif command_exists sudo; then
+    sudo "$@"
+  else
+    fail "This step needs root permission. Please install sudo or run this script as root."
+  fi
+}
+
+install_node_ubuntu() {
+  info "Node.js is missing. Installing Node.js $MIN_NODE_MAJOR on Ubuntu/Debian."
+  command_exists apt-get || return 1
+
+  run_as_root apt-get update
+  run_as_root apt-get install -y ca-certificates curl gnupg
+  run_as_root install -d -m 0755 /etc/apt/keyrings
+  run_as_root rm -f /etc/apt/keyrings/nodesource.gpg
+
+  curl -fsSL "https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key" | run_as_root gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+
+  NODE_MAJOR_VERSION="$MIN_NODE_MAJOR"
+  echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR_VERSION}.x nodistro main" | run_as_root tee /etc/apt/sources.list.d/nodesource.list >/dev/null
+
+  run_as_root apt-get update
+  run_as_root apt-get install -y nodejs
+}
+
+ensure_node() {
+  if command_exists node && command_exists npm && [ "$(get_node_major)" -ge "$MIN_NODE_MAJOR" ]; then
+    return
+  fi
+
+  if [ -f /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    case "${ID:-}" in
+      ubuntu|debian|linuxmint)
+        install_node_ubuntu || fail "Could not install Node.js automatically."
+        ;;
+      *)
+        fail "Node.js is not installed. Please install Node.js $MIN_NODE_MAJOR or newer, then run this script again."
+        ;;
+    esac
+  else
+    fail "Node.js is not installed. Please install Node.js $MIN_NODE_MAJOR or newer, then run this script again."
+  fi
+}
+
 get_node_major() {
   node -p "Number(process.versions.node.split('.')[0])"
 }
@@ -35,12 +84,11 @@ get_lan_ip() {
 
 info "Starting $APP_NAME setup"
 
-command_exists node || fail "Node.js is not installed. Please install Node.js $MIN_NODE_MAJOR or newer, then run this script again."
-command_exists npm || fail "npm is not installed. Please install npm, then run this script again."
+ensure_node
 
 NODE_MAJOR="$(get_node_major)"
 if [ "$NODE_MAJOR" -lt "$MIN_NODE_MAJOR" ]; then
-  fail "Node.js $MIN_NODE_MAJOR or newer is required. Current major version: $NODE_MAJOR."
+  fail "Node.js $MIN_NODE_MAJOR or newer is required. Current major version: $NODE_MAJOR. Automatic install did not complete."
 fi
 
 if [ ! -f ".env" ]; then
