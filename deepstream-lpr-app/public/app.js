@@ -22,6 +22,7 @@ const els = {
   frontVehicleClassIds: document.querySelector("#frontVehicleClassIds"),
   deepstreamImage: document.querySelector("#deepstreamImage"),
   uploads: document.querySelector("#uploads"),
+  checkpointList: document.querySelector("#checkpointList"),
   output: document.querySelector("#output"),
   saveBtn: document.querySelector("#saveBtn"),
   deployBtn: document.querySelector("#deployBtn"),
@@ -49,13 +50,26 @@ function print(value) {
   els.output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
 }
 
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     headers: options.body instanceof FormData ? {} : { "Content-Type": "application/json" },
     ...options
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(body.error || `HTTP ${response.status}`);
+    error.body = body;
+    throw error;
+  }
   return body;
 }
 
@@ -105,6 +119,25 @@ function renderConfig(config) {
   print(config);
 }
 
+function renderCheckpoints(checkpoints = []) {
+  if (!checkpoints.length) {
+    els.checkpointList.innerHTML = '<div class="empty">No checkpoints yet.</div>';
+    return;
+  }
+  els.checkpointList.innerHTML = checkpoints.map((checkpoint) => `
+    <div class="checkpoint ${checkpoint.status}">
+      <div class="checkpoint-main">
+        <span class="checkpoint-order">${checkpoint.order}</span>
+        <strong>${escapeHtml(checkpoint.label)}</strong>
+        <span class="status">${escapeHtml(checkpoint.status)}</span>
+      </div>
+      <div class="checkpoint-message">${escapeHtml(checkpoint.message || "")}</div>
+      ${checkpoint.durationMs !== null ? `<div class="checkpoint-time">${checkpoint.durationMs} ms</div>` : ""}
+      ${checkpoint.output ? `<pre class="checkpoint-output">${escapeHtml(checkpoint.output)}</pre>` : ""}
+    </div>
+  `).join("");
+}
+
 function renderUploads() {
   els.uploads.innerHTML = slots.map((slot) => `
     <div class="upload-card">
@@ -138,11 +171,15 @@ async function uploadSource() {
 
 async function buildModel() {
   const group = els.buildGroup.value;
+  renderCheckpoints([
+    { order: 1, label: "Build requested", status: "running", message: `Building ${group}...`, durationMs: null }
+  ]);
   print(`Building ${group}. Viec nay co the mat vai phut tren Jetson...`);
   const result = await api(`/api/build/${group}`, {
     method: "POST",
     body: JSON.stringify(buildOptions())
   });
+  renderCheckpoints(result.checkpoints || []);
   print(result);
 }
 
@@ -157,8 +194,12 @@ async function saveConfig() {
 }
 
 async function deploy() {
+  renderCheckpoints([
+    { order: 1, label: "Deploy requested", status: "running", message: "Starting deploy...", durationMs: null }
+  ]);
   print("Deploying...");
   const result = await api("/api/deploy", { method: "POST", body: JSON.stringify(formConfig()) });
+  renderCheckpoints(result.checkpoints || []);
   print(result);
 }
 
@@ -173,14 +214,21 @@ async function loadEvents() {
 
 async function init() {
   renderUploads();
+  renderCheckpoints();
   renderConfig(await api("/api/config"));
 }
 
 els.saveBtn.addEventListener("click", () => saveConfig().catch((error) => print(error.message)));
-els.deployBtn.addEventListener("click", () => deploy().catch((error) => print(error.message)));
+els.deployBtn.addEventListener("click", () => deploy().catch((error) => {
+  renderCheckpoints(error.body?.checkpoints || []);
+  print(error.message);
+}));
 els.stopBtn.addEventListener("click", () => stop().catch((error) => print(error.message)));
 els.eventsBtn.addEventListener("click", () => loadEvents().catch((error) => print(error.message)));
 els.uploadSourceBtn.addEventListener("click", () => uploadSource().catch((error) => print(error.message)));
-els.buildModelBtn.addEventListener("click", () => buildModel().catch((error) => print(error.message)));
+els.buildModelBtn.addEventListener("click", () => buildModel().catch((error) => {
+  renderCheckpoints(error.body?.checkpoints || []);
+  print(error.message);
+}));
 els.buildLogBtn.addEventListener("click", () => viewBuildLog().catch((error) => print(error.message)));
 init().catch((error) => print(error.message));

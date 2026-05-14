@@ -233,6 +233,73 @@ function parseBool(value, fallback = false) {
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
 }
 
+function createCheckpoints(items) {
+  return items.map((item, index) => ({
+    id: item.id,
+    label: item.label,
+    order: index + 1,
+    status: "pending",
+    message: "",
+    startedAt: null,
+    finishedAt: null,
+    durationMs: null,
+    output: ""
+  }));
+}
+
+function getCheckpoint(checkpoints, id) {
+  const checkpoint = checkpoints.find((item) => item.id === id);
+  if (!checkpoint) throw new Error(`Unknown checkpoint: ${id}`);
+  return checkpoint;
+}
+
+function updateCheckpoint(checkpoints, id, patch) {
+  Object.assign(getCheckpoint(checkpoints, id), patch);
+}
+
+async function runCheckpoint(checkpoints, id, action, successMessage = "OK") {
+  const started = Date.now();
+  updateCheckpoint(checkpoints, id, {
+    status: "running",
+    message: "",
+    startedAt: new Date(started).toISOString(),
+    finishedAt: null,
+    durationMs: null,
+    output: ""
+  });
+  try {
+    const result = await action();
+    updateCheckpoint(checkpoints, id, {
+      status: "success",
+      message: successMessage,
+      finishedAt: new Date().toISOString(),
+      durationMs: Date.now() - started,
+      output: typeof result?.output === "string" ? result.output.slice(-2000) : ""
+    });
+    return result;
+  } catch (error) {
+    updateCheckpoint(checkpoints, id, {
+      status: "failed",
+      message: error.message,
+      finishedAt: new Date().toISOString(),
+      durationMs: Date.now() - started,
+      output: typeof error.output === "string" ? error.output.slice(-2000) : ""
+    });
+    error.checkpoints = checkpoints;
+    throw error;
+  }
+}
+
+function skipCheckpoint(checkpoints, id, message) {
+  updateCheckpoint(checkpoints, id, {
+    status: "skipped",
+    message,
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+    durationMs: 0
+  });
+}
+
 function findTrtexec() {
   const candidates = [
     process.env.TRTEXEC_PATH,
@@ -285,8 +352,8 @@ async function ensureDeepStreamYoloRepo() {
   return repoDir;
 }
 
-async function buildDeepStreamYoloParser(config, group, paths) {
-  const repoDir = await ensureDeepStreamYoloRepo();
+async function buildDeepStreamYoloParser(config, group, paths, repoDir = null) {
+  repoDir = repoDir || await ensureDeepStreamYoloRepo();
   const mountedRepoDir = "/workspace/deepstream-lpr-app/runtime/third_party/DeepStream-Yolo";
   const mountedOutput = `/workspace/deepstream-lpr-app/models/${group}/build/libnvdsinfer_custom_impl_Yolo.so`;
   const compileCommand = [
@@ -324,14 +391,33 @@ async function buildDeepStreamYoloParser(config, group, paths) {
 }
 
 async function buildYoloModel(group, options = {}) {
+  const checkpoints = createCheckpoints([
+    { id: "validate_source", label: "Validate source model" },
+    { id: "prepare_workspace", label: "Prepare build workspace" },
+    { id: "sync_deepstream_yolo", label: "Sync DeepStream-Yolo repo" },
+    { id: "export_onnx", label: "Export ONNX" },
+    { id: "build_tensorrt", label: "Build TensorRT engine" },
+    { id: "build_parser", label: "Build DeepStream parser" },
+    { id: "write_runtime_config", label: "Write runtime config" }
+  ]);
   const config = await getConfig();
   const model = config.models[group] || {};
   const source = hostPathFromWorkspace(model.source);
+  await runCheckpoint(checkpoints, "validate_source", async () => {
+    if (!source || !fs.existsSync(source)) {
+      throw new Error(`Chua co source model cho ${group}. Upload .pt hoac .onnx truoc.`);
+    }
+    return { output: `Source: ${source}` };
+  }, "Source model exists.");
   if (!source || !fs.existsSync(source)) {
     throw new Error(`Chưa có source model cho ${group}. Upload .pt hoặc .onnx trước.`);
   }
 
   const paths = modelBuildPaths(group);
+  await runCheckpoint(checkpoints, "prepare_workspace", async () => {
+    await fsp.mkdir(paths.dir, { recursive: true });
+    return { output: `Build dir: ${paths.dir}` };
+  }, "Build workspace ready.");
   await fsp.mkdir(paths.dir, { recursive: true });
 
   const imgsz = Math.max(32, Number(options.imgsz || 640));
@@ -348,11 +434,19 @@ async function buildYoloModel(group, options = {}) {
   const numClassesFromLabels = countLabelLines(hostPathFromWorkspace(model.labels));
   let numClasses = Math.max(1, Number(options.numClasses || model.numClasses || numClassesFromLabels || 1));
   let output = "";
+  let repoDir = "";
 
   const sourceExt = path.extname(source).toLowerCase();
+  if ((canUseDeepStreamYolo && sourceExt === ".pt") || (canUseDeepStreamYolo && buildParser)) {
+    repoDir = (await runCheckpoint(checkpoints, "sync_deepstream_yolo", async () => {
+      const syncedRepoDir = await ensureDeepStreamYoloRepo();
+      return { repoDir: syncedRepoDir, output: `Repo: ${syncedRepoDir}\nRef: ${DEEPSTREAM_YOLO_REF}` };
+    }, "DeepStream-Yolo repo ready.")).repoDir;
+  } else {
+    skipCheckpoint(checkpoints, "sync_deepstream_yolo", "No DeepStream-Yolo repo needed for this model/task.");
+  }
   const exportArgs = [];
   if (canUseDeepStreamYolo && sourceExt === ".pt") {
-    const repoDir = await ensureDeepStreamYoloRepo();
     exportArgs.push(
       path.join(APP_ROOT, "model-builder", "export_deepstream_yolo.py"),
       "--source", source,
@@ -376,7 +470,15 @@ async function buildYoloModel(group, options = {}) {
   if (simplify) exportArgs.push("--simplify");
   if (dynamic) exportArgs.push("--dynamic");
 
-  const exportResult = await runCommand("python3", exportArgs, { cwd: APP_ROOT });
+  const exportResult = await runCheckpoint(checkpoints, "export_onnx", async () => {
+    const result = await runCommand("python3", exportArgs, { cwd: APP_ROOT });
+    if (result.code !== 0) {
+      const error = new Error(`Export ONNX failed:\n${result.output}`);
+      error.output = result.output;
+      throw error;
+    }
+    return result;
+  }, "ONNX exported.");
   output += `# Export ONNX\n${exportResult.output}\n`;
   if (exportResult.code !== 0) {
     await fsp.writeFile(paths.log, output);
@@ -394,21 +496,31 @@ async function buildYoloModel(group, options = {}) {
   }
 
   if (buildEngine) {
-    const trtexec = findTrtexec();
-    const trtArgs = [
-      `--onnx=${paths.onnx}`,
-      `--saveEngine=${paths.engine}`,
-      `--memPoolSize=workspace:${workspaceMb}`,
-      "--verbose"
-    ];
-    if (fp16) trtArgs.push("--fp16");
-    const trtResult = await runCommand(trtexec, trtArgs, { cwd: APP_ROOT });
+    const trtResult = await runCheckpoint(checkpoints, "build_tensorrt", async () => {
+      const trtexec = findTrtexec();
+      const trtArgs = [
+        `--onnx=${paths.onnx}`,
+        `--saveEngine=${paths.engine}`,
+        `--memPoolSize=workspace:${workspaceMb}`,
+        "--verbose"
+      ];
+      if (fp16) trtArgs.push("--fp16");
+      const result = await runCommand(trtexec, trtArgs, { cwd: APP_ROOT });
+      if (result.code !== 0) {
+        const error = new Error(`TensorRT engine build failed. Make sure trtexec is installed and compatible with this Jetson.\n${result.output}`);
+        error.output = result.output;
+        throw error;
+      }
+      return result;
+    }, "TensorRT engine built.");
     output += `\n# Build TensorRT engine\n${trtResult.output}\n`;
     if (trtResult.code !== 0) {
       await fsp.writeFile(paths.log, output);
       throw new Error(`TensorRT engine build failed. Make sure trtexec is installed and compatible with this Jetson.\n${trtResult.output}`);
     }
     model.engine = workspacePath(paths.engine);
+  } else {
+    skipCheckpoint(checkpoints, "build_tensorrt", "Build TensorRT engine is disabled.");
   }
 
   model.numClasses = numClasses;
@@ -416,7 +528,11 @@ async function buildYoloModel(group, options = {}) {
   if (buildParser && canUseDeepStreamYolo) {
     let parserOutput = "";
     try {
-      parserOutput = await buildDeepStreamYoloParser(config, group, paths);
+      const parserResult = await runCheckpoint(checkpoints, "build_parser", async () => {
+        const builtParserOutput = await buildDeepStreamYoloParser(config, group, paths, repoDir || null);
+        return { output: builtParserOutput };
+      }, "DeepStream parser built.");
+      parserOutput = parserResult.output || "";
     } catch (error) {
       output += `\n# Build DeepStream-Yolo parser\n${error.message}\n`;
       await fsp.writeFile(paths.log, output);
@@ -426,6 +542,8 @@ async function buildYoloModel(group, options = {}) {
     model.customLib = workspacePath(paths.parserLib);
     model.parseBboxFunc = "NvDsInferParseYolo";
     model.engineCreateFunc = "NvDsInferYoloCudaEngineGet";
+  } else {
+    skipCheckpoint(checkpoints, "build_parser", "Build parser is disabled or not applicable for this model/task.");
   }
 
   model.build = {
@@ -445,13 +563,18 @@ async function buildYoloModel(group, options = {}) {
     buildEngine,
     buildParser,
     updatedAt: new Date().toISOString(),
-    log: workspacePath(paths.log)
+    log: workspacePath(paths.log),
+    checkpoints
   };
   config.models[group] = model;
-  await fsp.writeFile(paths.log, output);
+  await runCheckpoint(checkpoints, "write_runtime_config", async () => {
+    await fsp.writeFile(paths.log, output);
+    await writeJson(CONFIG_FILE, config);
+    await generateRuntime(config);
+    return { output: `Log: ${paths.log}` };
+  }, "Runtime config generated.");
   await writeJson(CONFIG_FILE, config);
-  await generateRuntime(config);
-  return { group, model, output: output.slice(-8000) };
+  return { group, model, checkpoints, output: output.slice(-8000) };
 }
 
 async function generateRuntime(config) {
@@ -481,15 +604,71 @@ function runCommand(command, args, options = {}) {
 }
 
 async function deploy(config) {
-  await generateRuntime(config);
-  const result = await runCommand("docker", ["compose", "-f", COMPOSE_FILE, "up", "-d", "--force-recreate"], { cwd: APP_ROOT });
-  config.deploy = {
-    lastStatus: result.code === 0 ? "deployed" : "failed",
-    lastOutput: result.output.slice(-5000),
-    updatedAt: new Date().toISOString()
-  };
-  await writeJson(CONFIG_FILE, config);
-  return config.deploy;
+  const checkpoints = createCheckpoints([
+    { id: "validate_config", label: "Validate deploy config" },
+    { id: "generate_runtime", label: "Generate DeepStream runtime files" },
+    { id: "docker_compose_up", label: "Start DeepStream container" },
+    { id: "verify_container", label: "Verify container is running" },
+    { id: "save_deploy_state", label: "Save deploy state" }
+  ]);
+  let composeOutput = "";
+  try {
+    await runCheckpoint(checkpoints, "validate_config", async () => {
+      if (!config.rtspUrl || !/^rtsp:\/\//i.test(config.rtspUrl)) {
+        throw new Error("RTSP URL is required and must start with rtsp://.");
+      }
+      return { output: `RTSP: ${config.rtspUrl}` };
+    }, "Deploy config looks valid.");
+
+    await runCheckpoint(checkpoints, "generate_runtime", async () => {
+      await generateRuntime(config);
+      return { output: `Compose: ${COMPOSE_FILE}` };
+    }, "Runtime files generated.");
+
+    const composeResult = await runCheckpoint(checkpoints, "docker_compose_up", async () => {
+      const result = await runCommand("docker", ["compose", "-f", COMPOSE_FILE, "up", "-d", "--force-recreate"], { cwd: APP_ROOT });
+      if (result.code !== 0) {
+        const error = new Error(`Docker Compose failed:\n${result.output}`);
+        error.output = result.output;
+        throw error;
+      }
+      return result;
+    }, "Docker Compose started.");
+    composeOutput = composeResult.output || "";
+
+    await runCheckpoint(checkpoints, "verify_container", async () => {
+      const result = await runCommand("docker", ["inspect", "-f", "{{.State.Running}}", "deepstream-lpr"], { cwd: APP_ROOT });
+      if (result.code !== 0 || !result.output.trim().includes("true")) {
+        const error = new Error(`DeepStream container is not running:\n${result.output}`);
+        error.output = result.output;
+        throw error;
+      }
+      return result;
+    }, "DeepStream container is running.");
+
+    config.deploy = {
+      lastStatus: "deployed",
+      lastOutput: composeOutput.slice(-5000),
+      updatedAt: new Date().toISOString(),
+      checkpoints
+    };
+    await runCheckpoint(checkpoints, "save_deploy_state", async () => {
+      await writeJson(CONFIG_FILE, config);
+      return { output: `Saved: ${CONFIG_FILE}` };
+    }, "Deploy state saved.");
+    await writeJson(CONFIG_FILE, config);
+    return { ...config.deploy, checkpoints };
+  } catch (error) {
+    config.deploy = {
+      lastStatus: "failed",
+      lastOutput: (error.output || error.message || "").slice(-5000),
+      updatedAt: new Date().toISOString(),
+      checkpoints
+    };
+    await writeJson(CONFIG_FILE, config).catch(() => {});
+    error.checkpoints = checkpoints;
+    throw error;
+  }
 }
 
 ensureDirs();
@@ -552,7 +731,7 @@ app.post("/api/build/:group", async (req, res) => {
     const result = await buildYoloModel(group, req.body || {});
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message, checkpoints: error.checkpoints || [] });
   }
 });
 
@@ -572,7 +751,7 @@ app.post("/api/deploy", async (req, res) => {
     const result = await deploy(config);
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message, checkpoints: error.checkpoints || [] });
   }
 });
 

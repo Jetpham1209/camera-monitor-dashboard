@@ -51,6 +51,30 @@ deepstream-lpr-app/models/<model_group>/build/
 
 Log build co the xem trong UI bang nut `View build log`.
 
+## Checkpoints
+
+Khi bam `Build model` hoac `Deploy / Update`, UI hien danh sach checkpoint de biet dang fail o dau.
+
+Build model checkpoints:
+
+- Validate source model
+- Prepare build workspace
+- Sync DeepStream-Yolo repo
+- Export ONNX
+- Build TensorRT engine
+- Build DeepStream parser
+- Write runtime config
+
+Deploy checkpoints:
+
+- Validate deploy config
+- Generate DeepStream runtime files
+- Start DeepStream container
+- Verify container is running
+- Save deploy state
+
+Moi checkpoint co status `pending`, `running`, `success`, `failed`, hoac `skipped`. Neu fail, response API van tra ve `checkpoints` va UI se danh dau buoc fail.
+
 ## Yeu cau tren Jetson
 
 De build tu `.pt`:
