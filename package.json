@@ -11,6 +11,10 @@
     "pm2:restart": "pm2 restart camera-monitor-dashboard --update-env",
     "pm2:stop": "pm2 stop camera-monitor-dashboard",
     "pm2:logs": "pm2 logs camera-monitor-dashboard",
+    "company:heartbeat": "node company-heartbeat-server/server.js",
+    "company:pm2:start": "pm2 start company-heartbeat-server/ecosystem.config.cjs --update-env",
+    "company:pm2:restart": "pm2 restart company-heartbeat-server --update-env",
+    "company:pm2:logs": "pm2 logs company-heartbeat-server",
     "package": "powershell -ExecutionPolicy Bypass -File scripts/package.ps1",
     "package:with-data": "powershell -ExecutionPolicy Bypass -File scripts/package.ps1 -IncludeRuntimeData",
     "package:offline-windows": "powershell -ExecutionPolicy Bypass -File scripts/package.ps1 -IncludeRuntimeData -IncludeNodeModules"

@@ -279,6 +279,31 @@ Lưu ý: gói offline có `node_modules` chỉ nên dùng cho thiết bị cùng
 
 Gói `with-data` có thể chứa RTSP URL kèm username/password và Telegram token, nên chỉ chia sẻ trong môi trường tin cậy.
 
+## Company Heartbeat Server
+
+Repo có kèm server riêng để chạy ở server công ty/VPS nhằm theo dõi Jetson có bị tắt, mất mạng hoặc app monitor chết không.
+
+Xem chi tiết ở:
+
+```text
+company-heartbeat-server/README.md
+```
+
+Chạy heartbeat server:
+
+```bash
+cp company-heartbeat-server/.env.example company-heartbeat-server/.env
+npm run company:heartbeat
+```
+
+Jetson gửi heartbeat mỗi phút:
+
+```bash
+* * * * * curl -fsS http://localhost:5174/api/cameras >/dev/null && curl -fsS -X POST -H "Authorization: Bearer YOUR_SECRET" -H "Content-Type: application/json" -d '{"app":"camera-monitor-dashboard"}' https://monitor.company.com/api/heartbeat/jetson-01 >/dev/null
+```
+
+Nếu server công ty không nhận heartbeat quá thời gian cấu hình, nó sẽ gửi Telegram alert.
+
 ## Scripts
 
 ```bash

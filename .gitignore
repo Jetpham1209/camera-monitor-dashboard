@@ -6,5 +6,7 @@ data/hls/
 data/captures/
 dist/
 .env
+company-heartbeat-server/.env
+company-heartbeat-server/data/
 server.*.log
 npm-debug.log*
