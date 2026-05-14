@@ -214,11 +214,12 @@ function modelConfig(slot, model, gieId, networkType, operateOnGieId = null) {
     lines.push(`operate-on-gie-id=${operateOnGieId}`);
   }
   if (networkType === 0) {
+    lines.push(`num-detected-classes=${Math.max(1, Number(model.numClasses || 1))}`);
     lines.push(
       "cluster-mode=2",
-      "parse-bbox-func-name=NvDsInferParseYolo",
-      "engine-create-func-name=NvDsInferYoloCudaEngineGet"
+      `parse-bbox-func-name=${model.parseBboxFunc || "NvDsInferParseYoloV8"}`
     );
+    if (model.engineCreateFunc) lines.push(`engine-create-func-name=${model.engineCreateFunc}`);
   }
   lines.push("", "[class-attrs-all]", "pre-cluster-threshold=0.35", "nms-iou-threshold=0.45", "");
   return lines.join("\n");
@@ -245,8 +246,56 @@ function modelBuildPaths(group) {
     dir,
     onnx: path.join(dir, `${group}.onnx`),
     engine: path.join(dir, `${group}.engine`),
+    parserLib: path.join(dir, "libnvdsinfer_custom_impl_yolov8.so"),
     log: path.join(dir, "build.log")
   };
+}
+
+function countLabelLines(filePath) {
+  try {
+    return fs.readFileSync(filePath, "utf8").split(/\r?\n/).filter((line) => line.trim()).length;
+  } catch {
+    return 0;
+  }
+}
+
+async function buildYoloV8Parser(config, group, paths) {
+  const includeDir = "/opt/nvidia/deepstream/deepstream/sources/includes";
+  const compileCommand = [
+    "set -e",
+    "command -v g++ >/dev/null || (apt-get update && apt-get install -y g++)",
+    [
+      "g++",
+      "-shared",
+      "-fPIC",
+      "-std=c++17",
+      `-I${includeDir}`,
+      "-I/usr/local/cuda/include",
+      "-o",
+      `/workspace/deepstream-lpr-app/models/${group}/build/libnvdsinfer_custom_impl_yolov8.so`,
+      "/workspace/deepstream-lpr-app/parser-builder/yolov8/nvdsinfer_custom_impl_yolov8.cpp"
+    ].join(" ")
+  ].join(" && ");
+  const result = await runCommand("docker", [
+    "run",
+    "--rm",
+    "--network", "host",
+    "-v", `${APP_ROOT.replace(/\\/g, "/")}:/workspace/deepstream-lpr-app`,
+    "-w", "/workspace/deepstream-lpr-app",
+    config.deepstreamImage,
+    "bash",
+    "-lc",
+    compileCommand
+  ], { cwd: APP_ROOT });
+
+  if (result.code !== 0) {
+    throw new Error(`YOLOv8 parser build failed. Make sure Docker can run the DeepStream image and that it contains DeepStream headers.\n${result.output}`);
+  }
+
+  if (!fs.existsSync(paths.parserLib)) {
+    throw new Error("YOLOv8 parser build finished but output .so was not found.");
+  }
+  return result.output;
 }
 
 async function buildYoloModel(group, options = {}) {
@@ -268,6 +317,10 @@ async function buildYoloModel(group, options = {}) {
   const buildEngine = parseBool(options.buildEngine, true);
   const fp16 = parseBool(options.fp16, true);
   const workspaceMb = Math.max(256, Number(options.workspaceMb || 2048));
+  const canUseYoloV8Parser = group !== "plate_ocr" && (task === "detect" || task === "auto");
+  const buildParser = parseBool(options.buildParser, canUseYoloV8Parser);
+  const numClassesFromLabels = countLabelLines(hostPathFromWorkspace(model.labels));
+  const numClasses = Math.max(1, Number(options.numClasses || model.numClasses || numClassesFromLabels || 1));
   let output = "";
 
   const exportArgs = [
@@ -308,10 +361,30 @@ async function buildYoloModel(group, options = {}) {
     model.engine = workspacePath(paths.engine);
   }
 
+  model.numClasses = numClasses;
+
+  if (buildParser && canUseYoloV8Parser) {
+    let parserOutput = "";
+    try {
+      parserOutput = await buildYoloV8Parser(config, group, paths);
+    } catch (error) {
+      output += `\n# Build YOLOv8+ DeepStream parser\n${error.message}\n`;
+      await fsp.writeFile(paths.log, output);
+      throw error;
+    }
+    output += `\n# Build YOLOv8+ DeepStream parser\n${parserOutput}\n`;
+    model.customLib = workspacePath(paths.parserLib);
+    model.parseBboxFunc = "NvDsInferParseYoloV8";
+    delete model.engineCreateFunc;
+  }
+
   model.build = {
     source: model.source,
     onnx: model.onnx,
     engine: model.engine || "",
+    customLib: model.customLib || "",
+    parseBboxFunc: model.parseBboxFunc || "",
+    numClasses,
     imgsz,
     opset,
     task,
@@ -319,6 +392,7 @@ async function buildYoloModel(group, options = {}) {
     dynamic,
     fp16,
     buildEngine,
+    buildParser,
     updatedAt: new Date().toISOString(),
     log: workspacePath(paths.log)
   };
@@ -395,6 +469,10 @@ app.post("/api/upload/:slot", upload.single("file"), async (req, res) => {
     const group = slot.startsWith("vehicle_front") ? "vehicle_front" : `${prefix}_${rest[0]}`;
     const kind = slot.replace(`${group}_`, "").replace("custom_lib", "customLib");
     config.models[group][kind] = workspacePath(req.file.path);
+    if (kind === "labels") {
+      const labelCount = countLabelLines(req.file.path);
+      if (labelCount > 0) config.models[group].numClasses = labelCount;
+    }
     await writeJson(CONFIG_FILE, config);
     res.json({ slot, path: config.models[group][kind], config });
   } catch (error) {

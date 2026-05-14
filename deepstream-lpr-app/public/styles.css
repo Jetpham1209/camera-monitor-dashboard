@@ -57,6 +57,9 @@ textarea { min-height: 120px; resize: vertical; }
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
+.grid.one {
+  grid-template-columns: 1fr;
+}
 .uploads {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

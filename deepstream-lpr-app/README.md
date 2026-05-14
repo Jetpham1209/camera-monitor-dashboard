@@ -39,6 +39,7 @@ Pipeline hien tai:
 - `.pt` -> export ONNX bang `ultralytics`.
 - `.onnx` -> copy vao thu muc build.
 - ONNX -> TensorRT `.engine` bang `trtexec` neu bat `Build TensorRT engine`.
+- YOLOv8+ detect -> compile DeepStream parser `.so` neu bat `Build YOLOv8+ parser`.
 - Tu dong cap nhat `runtime/config.json` va generated DeepStream config.
 
 Thu muc build se nam trong:
@@ -72,6 +73,25 @@ npm run lpr:control
 
 Nen build TensorRT engine truc tiep tren chinh Jetson se deploy, vi engine phu thuoc CUDA, TensorRT, GPU va precision.
 
+De auto build parser `.so`, may Jetson can chay duoc Docker DeepStream image da chon trong UI. Builder se compile source:
+
+```text
+deepstream-lpr-app/parser-builder/yolov8/nvdsinfer_custom_impl_yolov8.cpp
+```
+
+Thanh:
+
+```text
+deepstream-lpr-app/models/<model_group>/build/libnvdsinfer_custom_impl_yolov8.so
+```
+
+Parser nay ho tro output detect pho bien cua Ultralytics YOLOv8 tro len:
+
+- `[1, 4 + num_classes, anchors]`
+- `[1, anchors, 4 + num_classes]`
+
+Khi dung parser nay, export ONNX phai de `nms=False`. Script export cua repo da set san nhu vay.
+
 ## Model placeholders
 
 Cac nhom model:
@@ -87,14 +107,14 @@ Cac slot upload thu cong van duoc giu lai:
 - `*_labels`
 - `*_custom_lib`
 
-Voi YOLO detection model trong DeepStream, ban van can custom parser `.so` phu hop, vi app nay khong tu bien Python YOLO model thanh DeepStream parser. Generated config dang dung:
+Voi YOLOv8+ detection model theo output Ultralytics pho bien, UI co the tu build parser `.so` va gan vao config:
 
 ```text
-parse-bbox-func-name=NvDsInferParseYolo
-engine-create-func-name=NvDsInferYoloCudaEngineGet
+custom-lib-path=/workspace/deepstream-lpr-app/models/<model_group>/build/libnvdsinfer_custom_impl_yolov8.so
+parse-bbox-func-name=NvDsInferParseYoloV8
 ```
 
-Hay upload file parser vao slot `vehicle_front_custom_lib` va `plate_detector_custom_lib` neu detection model cua ban can parser do.
+Neu model cua ban export ra format dac biet, co NMS san trong ONNX, hoac khong phai detect output dang `xywh + class scores`, hay upload parser rieng vao slot `vehicle_front_custom_lib` va `plate_detector_custom_lib`.
 
 Tham khao NVIDIA docs: https://docs.nvidia.com/metropolis/deepstream/8.0/text/DS_using_custom_model.html
 

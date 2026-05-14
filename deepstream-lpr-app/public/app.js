@@ -32,11 +32,13 @@ const els = {
   buildOpset: document.querySelector("#buildOpset"),
   buildTask: document.querySelector("#buildTask"),
   buildWorkspaceMb: document.querySelector("#buildWorkspaceMb"),
+  buildNumClasses: document.querySelector("#buildNumClasses"),
   sourceModelFile: document.querySelector("#sourceModelFile"),
   buildFp16: document.querySelector("#buildFp16"),
   buildSimplify: document.querySelector("#buildSimplify"),
   buildDynamic: document.querySelector("#buildDynamic"),
   buildEngine: document.querySelector("#buildEngine"),
+  buildParser: document.querySelector("#buildParser"),
   uploadSourceBtn: document.querySelector("#uploadSourceBtn"),
   buildModelBtn: document.querySelector("#buildModelBtn"),
   buildLogBtn: document.querySelector("#buildLogBtn")
@@ -81,10 +83,12 @@ function buildOptions() {
     opset: Number(els.buildOpset.value),
     task: els.buildTask.value,
     workspaceMb: Number(els.buildWorkspaceMb.value),
+    numClasses: Number(els.buildNumClasses.value),
     fp16: els.buildFp16.checked,
     simplify: els.buildSimplify.checked,
     dynamic: els.buildDynamic.checked,
-    buildEngine: els.buildEngine.checked
+    buildEngine: els.buildEngine.checked,
+    buildParser: els.buildParser.checked
   };
 }
 

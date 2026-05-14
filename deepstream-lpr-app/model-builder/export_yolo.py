@@ -21,6 +21,7 @@ def export_pt_to_onnx(source, output, imgsz, opset, simplify, dynamic, task):
         opset=opset,
         simplify=simplify,
         dynamic=dynamic,
+        nms=False,
     )
     exported_path = Path(exported)
     output.parent.mkdir(parents=True, exist_ok=True)

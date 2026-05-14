@@ -58,6 +58,9 @@
             </select>
           </label>
           <label>TensorRT workspace MB <input id="buildWorkspaceMb" type="number" value="2048" /></label>
+          <label>Number of classes <input id="buildNumClasses" type="number" value="1" min="1" /></label>
+        </div>
+        <div class="grid one">
           <label>Source .pt/.onnx <input id="sourceModelFile" type="file" accept=".pt,.onnx" /></label>
         </div>
         <div class="checks">
@@ -65,6 +68,7 @@
           <label><input id="buildSimplify" type="checkbox" checked /> Simplify ONNX</label>
           <label><input id="buildDynamic" type="checkbox" /> Dynamic shape</label>
           <label><input id="buildEngine" type="checkbox" checked /> Build TensorRT engine</label>
+          <label><input id="buildParser" type="checkbox" checked /> Build YOLOv8+ parser</label>
         </div>
         <div class="actions inline-actions">
           <button id="uploadSourceBtn" type="button">Upload source</button>
