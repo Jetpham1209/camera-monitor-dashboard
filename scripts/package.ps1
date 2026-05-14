@@ -40,6 +40,11 @@ foreach ($File in $Files) {
 }
 
 Copy-Item -LiteralPath (Join-Path $Root "public") -Destination (Join-Path $StageDir "public") -Recurse -Force
+Copy-Item -LiteralPath (Join-Path $Root "deepstream-lpr-app") -Destination (Join-Path $StageDir "deepstream-lpr-app") -Recurse -Force
+Remove-Item -LiteralPath (Join-Path $StageDir "deepstream-lpr-app\runtime") -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $StageDir "deepstream-lpr-app\models") -Recurse -Force -ErrorAction SilentlyContinue
+Get-ChildItem -LiteralPath (Join-Path $StageDir "deepstream-lpr-app") -Recurse -Force -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force
+Get-ChildItem -LiteralPath (Join-Path $StageDir "deepstream-lpr-app") -Recurse -Force -File -Filter "*.pyc" | Remove-Item -Force
 
 $StageDataDir = Join-Path $StageDir "data"
 New-Item -ItemType Directory -Force -Path $StageDataDir | Out-Null

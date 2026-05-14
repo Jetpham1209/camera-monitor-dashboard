@@ -304,6 +304,36 @@ Jetson gửi heartbeat mỗi phút:
 
 Nếu server công ty không nhận heartbeat quá thời gian cấu hình, nó sẽ gửi Telegram alert.
 
+## DeepStream LPR App
+
+Repo cũng có scaffold app DeepStream để chạy trên Jetson cho bài toán nhận diện đầu xe và đọc biển số trong ROI.
+
+Chạy control UI:
+
+```bash
+npm run lpr:control
+```
+
+Mở:
+
+```text
+http://<ip-jetson>:5190
+```
+
+Trong UI bạn có thể:
+
+- nhập RTSP stream
+- nhập ROI polygon
+- upload placeholder models cho `vehicle_front`, `plate_detector`, `plate_ocr`
+- nhập class id đầu xe
+- bấm `Deploy / Update` để generate config và restart DeepStream container
+
+Chi tiết ở:
+
+```text
+deepstream-lpr-app/README.md
+```
+
 ## Scripts
 
 ```bash

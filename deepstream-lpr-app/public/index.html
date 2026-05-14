@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DeepStream LPR Deploy</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <p>DeepStream LPR</p>
+        <h1>Deploy App Nhận Diện Biển Số</h1>
+      </header>
+
+      <section class="panel">
+        <h2>Stream & ROI</h2>
+        <label>RTSP URL <input id="rtspUrl" placeholder="rtsp://user:pass@host:554/stream1" /></label>
+        <div class="grid">
+          <label>Width <input id="streamWidth" type="number" value="1920" /></label>
+          <label>Height <input id="streamHeight" type="number" value="1080" /></label>
+          <label>Cooldown mỗi xe (giây) <input id="captureCooldownSec" type="number" value="30" /></label>
+        </div>
+        <label>ROI polygon JSON <textarea id="roiPolygon"></textarea></label>
+        <label>Front vehicle class IDs <input id="frontVehicleClassIds" value="0" /></label>
+        <label>DeepStream Docker image <input id="deepstreamImage" value="nvcr.io/nvidia/deepstream-l4t:7.1-samples" /></label>
+      </section>
+
+      <section class="panel">
+        <h2>Model Upload Placeholders</h2>
+        <div id="uploads" class="uploads"></div>
+      </section>
+
+      <section class="actions">
+        <button id="saveBtn">Save config</button>
+        <button id="deployBtn">Deploy / Update</button>
+        <button id="stopBtn">Stop</button>
+        <button id="eventsBtn">Load events</button>
+      </section>
+
+      <section class="panel">
+        <h2>Output</h2>
+        <pre id="output"></pre>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

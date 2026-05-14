@@ -15,6 +15,7 @@
     "company:pm2:start": "pm2 start company-heartbeat-server/ecosystem.config.cjs --update-env",
     "company:pm2:restart": "pm2 restart company-heartbeat-server --update-env",
     "company:pm2:logs": "pm2 logs company-heartbeat-server",
+    "lpr:control": "node deepstream-lpr-app/control-server/server.js",
     "package": "powershell -ExecutionPolicy Bypass -File scripts/package.ps1",
     "package:with-data": "powershell -ExecutionPolicy Bypass -File scripts/package.ps1 -IncludeRuntimeData",
     "package:offline-windows": "powershell -ExecutionPolicy Bypass -File scripts/package.ps1 -IncludeRuntimeData -IncludeNodeModules"
@@ -24,6 +25,7 @@
     "ffmpeg-static": "^5.2.0",
     "hls.js": "^1.5.17",
     "lucide": "^0.468.0",
+    "multer": "^2.1.1",
     "pm2": "^7.0.1",
     "ws": "^8.17.1"
   }
