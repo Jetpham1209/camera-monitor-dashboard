@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Camera Monitor Dashboard</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">RTSP Monitor</p>
+          <h1>Camera Dashboard</h1>
+        </div>
+        <div class="header-actions">
+          <button class="icon-button" id="refreshBtn" type="button" title="Làm mới">
+            <i data-lucide="refresh-cw"></i>
+          </button>
+          <button class="primary-button" id="openAddBtn" type="button">
+            <i data-lucide="plus"></i>
+            <span>Thêm camera</span>
+          </button>
+        </div>
+      </header>
+
+      <section class="stats" aria-label="Tổng quan">
+        <div class="metric">
+          <span class="metric-label">Tổng camera</span>
+          <strong id="totalCount">0</strong>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Đang sống</span>
+          <strong id="onlineCount">0</strong>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Gián đoạn</span>
+          <strong id="offlineCount">0</strong>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Đang stream</span>
+          <strong id="streamingCount">0</strong>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <aside class="panel">
+          <div class="panel-title">
+            <h2>Danh sách camera</h2>
+            <span id="socketState">Đang kết nối</span>
+          </div>
+          <div class="camera-list" id="cameraList"></div>
+          <div class="empty-state" id="emptyState">
+            <i data-lucide="video"></i>
+            <p>Chưa có camera nào. Thêm RTSP URL để bắt đầu theo dõi.</p>
+          </div>
+        </aside>
+
+        <section class="viewer" id="viewer">
+          <div class="viewer-placeholder">
+            <i data-lucide="monitor-play"></i>
+            <p>Chọn một camera để xem stream, capture frame và lịch sử gián đoạn.</p>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="cameraDialog">
+      <form method="dialog" class="dialog-card" id="cameraForm">
+        <div class="dialog-header">
+          <h2 id="dialogTitle">Thêm camera</h2>
+          <button class="icon-button" value="cancel" type="button" id="closeDialogBtn" title="Đóng">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <input type="hidden" id="cameraId" />
+        <label>
+          <span>Tên camera</span>
+          <input id="cameraName" required placeholder="VD: Cổng chính" autocomplete="off" />
+        </label>
+        <label>
+          <span>RTSP URL</span>
+          <input id="cameraRtsp" required placeholder="rtsp://user:pass@host:554/stream1" autocomplete="off" />
+        </label>
+        <label>
+          <span>Chu kỳ kiểm tra (giây)</span>
+          <input id="cameraInterval" type="number" min="5" max="300" value="15" />
+        </label>
+        <label class="toggle-line">
+          <input id="cameraEnabled" type="checkbox" checked />
+          <span>Bật kiểm tra định kỳ</span>
+        </label>
+        <p class="form-error" id="formError"></p>
+        <div class="dialog-actions">
+          <button class="ghost-button" type="button" id="deleteBtn">
+            <i data-lucide="trash-2"></i>
+            <span>Xóa</span>
+          </button>
+          <button class="primary-button" type="submit">
+            <i data-lucide="save"></i>
+            <span>Lưu</span>
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="frameDialog" class="wide-dialog">
+      <div class="frame-dialog-card">
+        <div class="dialog-header">
+          <h2 id="frameDialogTitle">Frame capture</h2>
+          <button class="icon-button" type="button" id="closeFrameDialogBtn" title="Đóng">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="shape-toolbar" aria-label="Công cụ vẽ">
+          <button class="tool-button active" type="button" data-shape-tool="rectangle" title="Rectangle">
+            <i data-lucide="square"></i>
+            <span>Rectangle</span>
+          </button>
+          <button class="tool-button" type="button" data-shape-tool="circle" title="Circle">
+            <i data-lucide="circle"></i>
+            <span>Circle</span>
+          </button>
+          <button class="tool-button" type="button" data-shape-tool="polygon" title="Polygon">
+            <i data-lucide="pentagon"></i>
+            <span>Polygon</span>
+          </button>
+          <span class="toolbar-spacer"></span>
+          <button class="ghost-button" type="button" id="finishPolygonBtn">
+            <i data-lucide="check"></i>
+            <span>Chốt polygon</span>
+          </button>
+          <button class="ghost-button" type="button" id="undoShapeBtn">
+            <i data-lucide="undo-2"></i>
+            <span>Undo</span>
+          </button>
+          <button class="ghost-button" type="button" id="clearShapesBtn">
+            <i data-lucide="eraser"></i>
+            <span>Xóa</span>
+          </button>
+          <button class="primary-button" type="button" id="copyCoordinatesBtn">
+            <i data-lucide="copy"></i>
+            <span>Copy JSON</span>
+          </button>
+        </div>
+        <div class="frame-layout">
+          <div class="annotation-canvas-wrap">
+            <canvas id="annotationCanvas"></canvas>
+          </div>
+          <aside class="coordinate-panel">
+            <h3>Tọa độ shape</h3>
+            <textarea id="coordinateOutput" readonly spellcheck="false"></textarea>
+          </aside>
+        </div>
+      </div>
+    </dialog>
+
+    <script src="/vendor/hls.min.js"></script>
+    <script src="/vendor/lucide.min.js"></script>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

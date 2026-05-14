@@ -1,0 +1,9 @@
+node_modules/
+data/cameras.json
+data/state.json
+data/hls/
+data/captures/
+dist/
+.env
+server.*.log
+npm-debug.log*
