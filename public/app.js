@@ -272,7 +272,7 @@ function openDialog(camera = null) {
   els.cameraId.value = camera?.id || "";
   els.cameraName.value = camera?.name || "";
   els.cameraRtsp.value = camera?.rtspUrl || "";
-  els.cameraInterval.value = camera?.checkIntervalSec || 15;
+  els.cameraInterval.value = camera?.checkIntervalSec || 1;
   els.cameraEnabled.checked = camera?.enabled !== false;
   els.deleteBtn.style.display = camera ? "inline-flex" : "none";
   els.dialog.showModal();
@@ -287,7 +287,7 @@ async function saveCamera(event) {
     name: els.cameraName.value,
     rtspUrl: els.cameraRtsp.value,
     enabled: els.cameraEnabled.checked,
-    checkIntervalSec: Number(els.cameraInterval.value || 15)
+    checkIntervalSec: Number(els.cameraInterval.value || 1)
   };
 
   try {

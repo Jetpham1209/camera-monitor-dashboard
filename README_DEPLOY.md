@@ -21,7 +21,7 @@ npm install
 
 ```env
 PORT=5174
-CHECK_INTERVAL_MS=15000
+CHECK_INTERVAL_MS=1000
 PING_TIMEOUT_MS=3000
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
@@ -32,6 +32,12 @@ TELEGRAM_TIME_ZONE=Asia/Bangkok
 
 ```powershell
 npm start
+```
+
+Hoac chay bang PM2 de tu restart khi process bi crash:
+
+```powershell
+npm run pm2:start
 ```
 
 6. Mo dashboard:

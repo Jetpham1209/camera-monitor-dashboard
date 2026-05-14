@@ -29,6 +29,8 @@ $Files = @(
   "package.json",
   "package-lock.json",
   "server.js",
+  "ecosystem.config.cjs",
+  "install.sh",
   ".env.example",
   "README_DEPLOY.md"
 )

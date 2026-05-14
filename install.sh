@@ -50,7 +50,7 @@ if [ ! -f ".env" ]; then
   else
     cat > ".env" <<'EOF'
 PORT=5174
-CHECK_INTERVAL_MS=15000
+CHECK_INTERVAL_MS=1000
 PROBE_TIMEOUT_MS=10000
 PING_TIMEOUT_MS=3000
 TELEGRAM_BOT_TOKEN=
@@ -63,6 +63,26 @@ EOF
 else
   info ".env already exists"
 fi
+
+node <<'NODE'
+const fs = require("fs");
+const file = ".env";
+const required = {
+  CHECK_INTERVAL_MS: "1000"
+};
+let content = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+for (const [key, value] of Object.entries(required)) {
+  const line = `${key}=${value}`;
+  const pattern = new RegExp(`^${key}=.*$`, "m");
+  if (pattern.test(content)) {
+    content = content.replace(pattern, line);
+  } else {
+    content = `${content.trimEnd()}\n${line}\n`;
+  }
+}
+fs.writeFileSync(file, content);
+NODE
+info "Ensured CHECK_INTERVAL_MS=1000"
 
 mkdir -p data
 [ -f "data/cameras.json" ] || printf '%s\n' "[]" > "data/cameras.json"
@@ -85,6 +105,18 @@ info "Local URL: http://localhost:$PORT"
 if [ -n "$LAN_IP" ]; then
   info "LAN URL: http://$LAN_IP:$PORT"
 fi
-info "Starting server. Press Ctrl+C to stop."
+info "Starting server with PM2. The process will auto-restart if it crashes."
 
-npm start
+if npx pm2 describe camera-monitor-dashboard >/dev/null 2>&1; then
+  npx pm2 restart camera-monitor-dashboard --update-env
+else
+  npx pm2 start ecosystem.config.cjs --update-env
+fi
+
+npx pm2 save >/dev/null 2>&1 || true
+
+info "Server is running in the background."
+info "View logs: npx pm2 logs camera-monitor-dashboard"
+info "Restart: npx pm2 restart camera-monitor-dashboard --update-env"
+info "Stop: npx pm2 stop camera-monitor-dashboard"
+info "Optional reboot startup: npx pm2 startup"

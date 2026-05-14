@@ -39,7 +39,13 @@ Chạy script cài đặt và khởi động trên Linux/macOS/WSL/Git Bash:
 sh install.sh
 ```
 
-Script sẽ tự tạo `.env`, tạo file data tối thiểu, cài dependencies và chạy server.
+Script sẽ tự tạo `.env`, đặt `CHECK_INTERVAL_MS=1000`, tạo file data tối thiểu, cài dependencies và chạy server bằng PM2. PM2 sẽ tự restart app nếu process bị crash.
+
+Nếu muốn app tự bật lại sau khi thiết bị reboot, chạy thêm lệnh PM2 startup mà script in ra:
+
+```bash
+npx pm2 startup
+```
 
 Trên Linux/macOS cũng có thể cấp quyền execute rồi chạy trực tiếp:
 
@@ -94,7 +100,7 @@ Ví dụ:
 
 ```env
 PORT=5174
-CHECK_INTERVAL_MS=15000
+CHECK_INTERVAL_MS=1000
 PROBE_TIMEOUT_MS=10000
 PING_TIMEOUT_MS=3000
 
@@ -107,7 +113,7 @@ TELEGRAM_TIMEOUT_MS=10000
 Ý nghĩa:
 
 - `PORT`: port chạy dashboard.
-- `CHECK_INTERVAL_MS`: chu kỳ nền để quét danh sách camera.
+- `CHECK_INTERVAL_MS`: chu kỳ nền để quét danh sách camera. Mặc định là `1000ms`.
 - `PING_TIMEOUT_MS`: thời gian timeout cho mỗi lần ping camera.
 - `PROBE_TIMEOUT_MS`: timeout khi capture frame bằng FFmpeg.
 - `TELEGRAM_BOT_TOKEN`: token bot Telegram, lấy từ `@BotFather`.
@@ -266,7 +272,31 @@ Lưu ý: gói offline có `node_modules` chỉ nên dùng cho thiết bị cùng
 npm start
 ```
 
-Chạy server.
+Chạy server trực tiếp bằng Node.js ở foreground.
+
+```bash
+npm run pm2:start
+```
+
+Chạy server bằng PM2 với auto-restart khi crash.
+
+```bash
+npm run pm2:restart
+```
+
+Restart server PM2 và nạp lại `.env`.
+
+```bash
+npm run pm2:logs
+```
+
+Xem log server PM2.
+
+```bash
+npm run pm2:stop
+```
+
+Dừng server PM2.
 
 ```bash
 npm run dev

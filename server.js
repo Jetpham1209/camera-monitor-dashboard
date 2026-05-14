@@ -28,7 +28,7 @@ function loadEnvFile(file) {
 loadEnvFile(path.join(ROOT, ".env"));
 
 const PORT = Number(process.env.PORT || 5174);
-const CHECK_INTERVAL_MS = Number(process.env.CHECK_INTERVAL_MS || 15000);
+const CHECK_INTERVAL_MS = Number(process.env.CHECK_INTERVAL_MS || 1000);
 const PROBE_TIMEOUT_MS = Number(process.env.PROBE_TIMEOUT_MS || 10000);
 const PING_TIMEOUT_MS = Number(process.env.PING_TIMEOUT_MS || 3000);
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
@@ -119,7 +119,7 @@ function normalizeCamera(input, existing = {}) {
   const name = String(input.name || existing.name || "").trim();
   const rtspUrl = String(input.rtspUrl || existing.rtspUrl || "").trim();
   const enabled = input.enabled === undefined ? existing.enabled !== false : Boolean(input.enabled);
-  const checkIntervalSec = Number(input.checkIntervalSec || existing.checkIntervalSec || 15);
+  const checkIntervalSec = Number(input.checkIntervalSec || existing.checkIntervalSec || 1);
 
   if (!name) throw new Error("Tên camera là bắt buộc.");
   if (!/^rtsps?:\/\//i.test(rtspUrl)) throw new Error("RTSP URL phải bắt đầu bằng rtsp:// hoặc rtsps://.");
@@ -129,7 +129,7 @@ function normalizeCamera(input, existing = {}) {
     name,
     rtspUrl,
     enabled,
-    checkIntervalSec: Math.max(5, Math.min(300, checkIntervalSec))
+    checkIntervalSec: Math.max(1, Math.min(300, checkIntervalSec))
   };
 }
 
@@ -314,7 +314,7 @@ async function checkAllCameras(options = {}) {
 
       const now = new Date().toISOString();
       const current = state[camera.id] || { status: "unknown", outages: [] };
-      const intervalMs = Math.max(5, Number(camera.checkIntervalSec || 15)) * 1000;
+      const intervalMs = Math.max(1, Number(camera.checkIntervalSec || 1)) * 1000;
       const lastCheckedMs = current.lastCheckedAt ? new Date(current.lastCheckedAt).getTime() : 0;
       if (!forceIds.has(camera.id) && lastCheckedMs && Date.now() - lastCheckedMs < intervalMs) continue;
 
