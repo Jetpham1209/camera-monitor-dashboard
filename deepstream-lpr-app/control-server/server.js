@@ -97,6 +97,14 @@ function sanitizeSlot(value) {
   return slot;
 }
 
+function sanitizeModelGroup(value) {
+  const group = String(value || "").replace(/[^a-zA-Z0-9_-]/g, "");
+  if (!["vehicle_front", "plate_detector", "plate_ocr"].includes(group)) {
+    throw new Error("Invalid model group.");
+  }
+  return group;
+}
+
 const storage = multer.diskStorage({
   destination(req, _file, cb) {
     try {
@@ -118,10 +126,50 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
+const sourceStorage = multer.diskStorage({
+  destination(req, _file, cb) {
+    try {
+      const group = sanitizeModelGroup(req.params.group);
+      const dir = path.join(MODELS_DIR, group, "source");
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    } catch (error) {
+      cb(error);
+    }
+  },
+  filename(req, file, cb) {
+    const group = sanitizeModelGroup(req.params.group);
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${group}_source${ext}`);
+  }
+});
+
+const uploadSource = multer({
+  storage: sourceStorage,
+  fileFilter(_req, file, cb) {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (![".pt", ".onnx"].includes(ext)) {
+      cb(new Error("Source model must be a .pt or .onnx file."));
+      return;
+    }
+    cb(null, true);
+  }
+});
+
 function workspacePath(filePath) {
   if (!filePath) return "";
   const relative = path.relative(APP_ROOT, filePath).replace(/\\/g, "/");
   return `/workspace/deepstream-lpr-app/${relative}`;
+}
+
+function hostPathFromWorkspace(filePath) {
+  if (!filePath) return "";
+  const normalized = String(filePath).replace(/\\/g, "/");
+  const prefix = "/workspace/deepstream-lpr-app/";
+  if (normalized.startsWith(prefix)) {
+    return path.join(APP_ROOT, normalized.slice(prefix.length));
+  }
+  return filePath;
 }
 
 function normalizeConfig(input, existing) {
@@ -174,6 +222,111 @@ function modelConfig(slot, model, gieId, networkType, operateOnGieId = null) {
   }
   lines.push("", "[class-attrs-all]", "pre-cluster-threshold=0.35", "nms-iou-threshold=0.45", "");
   return lines.join("\n");
+}
+
+function parseBool(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
+}
+
+function findTrtexec() {
+  const candidates = [
+    process.env.TRTEXEC_PATH,
+    "trtexec",
+    "/usr/src/tensorrt/bin/trtexec",
+    "/usr/bin/trtexec"
+  ].filter(Boolean);
+  return candidates[0];
+}
+
+function modelBuildPaths(group) {
+  const dir = path.join(MODELS_DIR, group, "build");
+  return {
+    dir,
+    onnx: path.join(dir, `${group}.onnx`),
+    engine: path.join(dir, `${group}.engine`),
+    log: path.join(dir, "build.log")
+  };
+}
+
+async function buildYoloModel(group, options = {}) {
+  const config = await getConfig();
+  const model = config.models[group] || {};
+  const source = hostPathFromWorkspace(model.source);
+  if (!source || !fs.existsSync(source)) {
+    throw new Error(`Chưa có source model cho ${group}. Upload .pt hoặc .onnx trước.`);
+  }
+
+  const paths = modelBuildPaths(group);
+  await fsp.mkdir(paths.dir, { recursive: true });
+
+  const imgsz = Math.max(32, Number(options.imgsz || 640));
+  const opset = Math.max(11, Number(options.opset || 17));
+  const task = options.task || "detect";
+  const simplify = parseBool(options.simplify, true);
+  const dynamic = parseBool(options.dynamic, false);
+  const buildEngine = parseBool(options.buildEngine, true);
+  const fp16 = parseBool(options.fp16, true);
+  const workspaceMb = Math.max(256, Number(options.workspaceMb || 2048));
+  let output = "";
+
+  const exportArgs = [
+    path.join(APP_ROOT, "model-builder", "export_yolo.py"),
+    "--source", source,
+    "--output", paths.onnx,
+    "--imgsz", String(imgsz),
+    "--opset", String(opset),
+    "--task", task
+  ];
+  if (simplify) exportArgs.push("--simplify");
+  if (dynamic) exportArgs.push("--dynamic");
+
+  const exportResult = await runCommand("python3", exportArgs, { cwd: APP_ROOT });
+  output += `# Export ONNX\n${exportResult.output}\n`;
+  if (exportResult.code !== 0) {
+    await fsp.writeFile(paths.log, output);
+    throw new Error(`Export ONNX failed:\n${exportResult.output}`);
+  }
+
+  model.onnx = workspacePath(paths.onnx);
+
+  if (buildEngine) {
+    const trtexec = findTrtexec();
+    const trtArgs = [
+      `--onnx=${paths.onnx}`,
+      `--saveEngine=${paths.engine}`,
+      `--memPoolSize=workspace:${workspaceMb}`,
+      "--verbose"
+    ];
+    if (fp16) trtArgs.push("--fp16");
+    const trtResult = await runCommand(trtexec, trtArgs, { cwd: APP_ROOT });
+    output += `\n# Build TensorRT engine\n${trtResult.output}\n`;
+    if (trtResult.code !== 0) {
+      await fsp.writeFile(paths.log, output);
+      throw new Error(`TensorRT engine build failed. Make sure trtexec is installed and compatible with this Jetson.\n${trtResult.output}`);
+    }
+    model.engine = workspacePath(paths.engine);
+  }
+
+  model.build = {
+    source: model.source,
+    onnx: model.onnx,
+    engine: model.engine || "",
+    imgsz,
+    opset,
+    task,
+    simplify,
+    dynamic,
+    fp16,
+    buildEngine,
+    updatedAt: new Date().toISOString(),
+    log: workspacePath(paths.log)
+  };
+  config.models[group] = model;
+  await fsp.writeFile(paths.log, output);
+  await writeJson(CONFIG_FILE, config);
+  await generateRuntime(config);
+  return { group, model, output: output.slice(-8000) };
 }
 
 async function generateRuntime(config) {
@@ -249,6 +402,41 @@ app.post("/api/upload/:slot", upload.single("file"), async (req, res) => {
   }
 });
 
+app.post("/api/model-source/:group", uploadSource.single("file"), async (req, res) => {
+  try {
+    const group = sanitizeModelGroup(req.params.group);
+    if (!req.file) return res.status(400).json({ error: "No file uploaded." });
+    const config = await getConfig();
+    config.models[group].source = workspacePath(req.file.path);
+    config.models[group].sourceOriginalName = req.file.originalname;
+    config.models[group].sourceUploadedAt = new Date().toISOString();
+    await writeJson(CONFIG_FILE, config);
+    res.json({ group, model: config.models[group], config });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/build/:group", async (req, res) => {
+  try {
+    const group = sanitizeModelGroup(req.params.group);
+    const result = await buildYoloModel(group, req.body || {});
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/build/:group/log", async (req, res) => {
+  try {
+    const group = sanitizeModelGroup(req.params.group);
+    const log = await fsp.readFile(modelBuildPaths(group).log, "utf8");
+    res.type("text/plain").send(log);
+  } catch (error) {
+    res.status(404).type("text/plain").send(error.message);
+  }
+});
+
 app.post("/api/deploy", async (req, res) => {
   try {
     const config = normalizeConfig(req.body, await getConfig());
@@ -272,6 +460,10 @@ app.get("/api/events", async (_req, res) => {
   } catch {
     res.json([]);
   }
+});
+
+app.use((error, _req, res, _next) => {
+  res.status(400).json({ error: error.message || "Request failed." });
 });
 
 app.get("*", (_req, res) => {

@@ -10,7 +10,7 @@
     <main class="shell">
       <header>
         <p>DeepStream LPR</p>
-        <h1>Deploy App Nhận Diện Biển Số</h1>
+        <h1>Deploy App LPR Tren Jetson</h1>
       </header>
 
       <section class="panel">
@@ -19,7 +19,7 @@
         <div class="grid">
           <label>Width <input id="streamWidth" type="number" value="1920" /></label>
           <label>Height <input id="streamHeight" type="number" value="1080" /></label>
-          <label>Cooldown mỗi xe (giây) <input id="captureCooldownSec" type="number" value="30" /></label>
+          <label>Cooldown moi xe (giay) <input id="captureCooldownSec" type="number" value="30" /></label>
         </div>
         <label>ROI polygon JSON <textarea id="roiPolygon"></textarea></label>
         <label>Front vehicle class IDs <input id="frontVehicleClassIds" value="0" /></label>
@@ -29,6 +29,48 @@
       <section class="panel">
         <h2>Model Upload Placeholders</h2>
         <div id="uploads" class="uploads"></div>
+      </section>
+
+      <section class="panel">
+        <h2>YOLO Model Builder</h2>
+        <div class="grid">
+          <label>
+            Model group
+            <select id="buildGroup">
+              <option value="vehicle_front">vehicle_front</option>
+              <option value="plate_detector">plate_detector</option>
+              <option value="plate_ocr">plate_ocr</option>
+            </select>
+          </label>
+          <label>Image size <input id="buildImgsz" type="number" value="640" /></label>
+          <label>ONNX opset <input id="buildOpset" type="number" value="17" /></label>
+        </div>
+        <div class="grid">
+          <label>
+            YOLO task
+            <select id="buildTask">
+              <option value="detect">detect</option>
+              <option value="auto">auto</option>
+              <option value="classify">classify</option>
+              <option value="segment">segment</option>
+              <option value="pose">pose</option>
+              <option value="obb">obb</option>
+            </select>
+          </label>
+          <label>TensorRT workspace MB <input id="buildWorkspaceMb" type="number" value="2048" /></label>
+          <label>Source .pt/.onnx <input id="sourceModelFile" type="file" accept=".pt,.onnx" /></label>
+        </div>
+        <div class="checks">
+          <label><input id="buildFp16" type="checkbox" checked /> FP16 engine</label>
+          <label><input id="buildSimplify" type="checkbox" checked /> Simplify ONNX</label>
+          <label><input id="buildDynamic" type="checkbox" /> Dynamic shape</label>
+          <label><input id="buildEngine" type="checkbox" checked /> Build TensorRT engine</label>
+        </div>
+        <div class="actions inline-actions">
+          <button id="uploadSourceBtn" type="button">Upload source</button>
+          <button id="buildModelBtn" type="button">Build model</button>
+          <button id="buildLogBtn" type="button">View build log</button>
+        </div>
       </section>
 
       <section class="actions">

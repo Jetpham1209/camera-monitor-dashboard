@@ -26,7 +26,20 @@ const els = {
   saveBtn: document.querySelector("#saveBtn"),
   deployBtn: document.querySelector("#deployBtn"),
   stopBtn: document.querySelector("#stopBtn"),
-  eventsBtn: document.querySelector("#eventsBtn")
+  eventsBtn: document.querySelector("#eventsBtn"),
+  buildGroup: document.querySelector("#buildGroup"),
+  buildImgsz: document.querySelector("#buildImgsz"),
+  buildOpset: document.querySelector("#buildOpset"),
+  buildTask: document.querySelector("#buildTask"),
+  buildWorkspaceMb: document.querySelector("#buildWorkspaceMb"),
+  sourceModelFile: document.querySelector("#sourceModelFile"),
+  buildFp16: document.querySelector("#buildFp16"),
+  buildSimplify: document.querySelector("#buildSimplify"),
+  buildDynamic: document.querySelector("#buildDynamic"),
+  buildEngine: document.querySelector("#buildEngine"),
+  uploadSourceBtn: document.querySelector("#uploadSourceBtn"),
+  buildModelBtn: document.querySelector("#buildModelBtn"),
+  buildLogBtn: document.querySelector("#buildLogBtn")
 };
 
 function print(value) {
@@ -43,6 +56,13 @@ async function api(path, options = {}) {
   return body;
 }
 
+async function apiText(path) {
+  const response = await fetch(path);
+  const body = await response.text();
+  if (!response.ok) throw new Error(body || `HTTP ${response.status}`);
+  return body;
+}
+
 function formConfig() {
   return {
     rtspUrl: els.rtspUrl.value.trim(),
@@ -52,6 +72,19 @@ function formConfig() {
     roi: { polygon: JSON.parse(els.roiPolygon.value) },
     frontVehicleClassIds: els.frontVehicleClassIds.value,
     deepstreamImage: els.deepstreamImage.value.trim()
+  };
+}
+
+function buildOptions() {
+  return {
+    imgsz: Number(els.buildImgsz.value),
+    opset: Number(els.buildOpset.value),
+    task: els.buildTask.value,
+    workspaceMb: Number(els.buildWorkspaceMb.value),
+    fp16: els.buildFp16.checked,
+    simplify: els.buildSimplify.checked,
+    dynamic: els.buildDynamic.checked,
+    buildEngine: els.buildEngine.checked
   };
 }
 
@@ -81,11 +114,35 @@ function renderUploads() {
 
 async function uploadSlot(slot) {
   const input = document.querySelector(`[data-slot="${slot}"]`);
-  if (!input.files.length) return print("Chọn file trước khi upload.");
+  if (!input.files.length) return print("Chon file truoc khi upload.");
   const form = new FormData();
   form.append("file", input.files[0]);
   const result = await api(`/api/upload/${slot}`, { method: "POST", body: form });
   print(result);
+}
+
+async function uploadSource() {
+  if (!els.sourceModelFile.files.length) return print("Chon file .pt hoac .onnx truoc khi upload.");
+  const group = els.buildGroup.value;
+  const form = new FormData();
+  form.append("file", els.sourceModelFile.files[0]);
+  const result = await api(`/api/model-source/${group}`, { method: "POST", body: form });
+  print(result);
+}
+
+async function buildModel() {
+  const group = els.buildGroup.value;
+  print(`Building ${group}. Viec nay co the mat vai phut tren Jetson...`);
+  const result = await api(`/api/build/${group}`, {
+    method: "POST",
+    body: JSON.stringify(buildOptions())
+  });
+  print(result);
+}
+
+async function viewBuildLog() {
+  const group = els.buildGroup.value;
+  print(await apiText(`/api/build/${group}/log`));
 }
 
 async function saveConfig() {
@@ -117,4 +174,7 @@ els.saveBtn.addEventListener("click", () => saveConfig().catch((error) => print(
 els.deployBtn.addEventListener("click", () => deploy().catch((error) => print(error.message)));
 els.stopBtn.addEventListener("click", () => stop().catch((error) => print(error.message)));
 els.eventsBtn.addEventListener("click", () => loadEvents().catch((error) => print(error.message)));
+els.uploadSourceBtn.addEventListener("click", () => uploadSource().catch((error) => print(error.message)));
+els.buildModelBtn.addEventListener("click", () => buildModel().catch((error) => print(error.message)));
+els.buildLogBtn.addEventListener("click", () => viewBuildLog().catch((error) => print(error.message)));
 init().catch((error) => print(error.message));

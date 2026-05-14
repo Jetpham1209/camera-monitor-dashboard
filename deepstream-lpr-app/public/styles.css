@@ -43,7 +43,7 @@ label {
   font-weight: 700;
   margin-bottom: 12px;
 }
-input, textarea {
+input, textarea, select {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -69,11 +69,30 @@ textarea { min-height: 120px; resize: vertical; }
   background: #fbfcff;
 }
 .upload-card strong { display: block; margin-bottom: 8px; }
+.checks {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 4px 0 12px;
+}
+.checks label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink);
+}
+.checks input {
+  width: auto;
+}
 .actions {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
   margin-bottom: 14px;
+}
+.inline-actions {
+  margin: 0;
 }
 button {
   border: 1px solid var(--blue);
