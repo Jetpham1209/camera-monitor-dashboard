@@ -10,6 +10,7 @@ const PUBLIC_DIR = path.join(APP_ROOT, "public");
 const RUNTIME_DIR = path.join(APP_ROOT, "runtime");
 const GENERATED_DIR = path.join(RUNTIME_DIR, "generated");
 const THIRD_PARTY_DIR = path.join(RUNTIME_DIR, "third_party");
+const TEST_MEDIA_DIR = path.join(RUNTIME_DIR, "test-media");
 const MODELS_DIR = path.join(APP_ROOT, "models");
 const CONFIG_FILE = path.join(RUNTIME_DIR, "config.json");
 const COMPOSE_FILE = path.join(RUNTIME_DIR, "docker-compose.generated.yml");
@@ -21,7 +22,7 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 function ensureDirs() {
-  for (const dir of [RUNTIME_DIR, GENERATED_DIR, THIRD_PARTY_DIR, MODELS_DIR]) {
+  for (const dir of [RUNTIME_DIR, GENERATED_DIR, THIRD_PARTY_DIR, TEST_MEDIA_DIR, MODELS_DIR]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }
@@ -57,7 +58,8 @@ function defaultConfig() {
       lastStatus: "not_deployed",
       lastOutput: "",
       updatedAt: null
-    }
+    },
+    testMedia: {}
   };
 }
 
@@ -77,6 +79,7 @@ function mergeConfig(base, patch) {
     plate_ocr: { ...base.models.plate_ocr, ...(patch.models?.plate_ocr || {}) }
   };
   output.deploy = { ...base.deploy, ...(patch.deploy || {}) };
+  output.testMedia = { ...base.testMedia, ...(patch.testMedia || {}) };
   return output;
 }
 
@@ -159,6 +162,55 @@ const uploadSource = multer({
   }
 });
 
+function sanitizeTestKind(value) {
+  const kind = String(value || "").replace(/[^a-zA-Z0-9_-]/g, "");
+  if (!["image", "video"].includes(kind)) {
+    throw new Error("Invalid test media kind.");
+  }
+  return kind;
+}
+
+const testMediaStorage = multer.diskStorage({
+  destination(req, _file, cb) {
+    try {
+      const kind = sanitizeTestKind(req.params.kind);
+      const dir = path.join(TEST_MEDIA_DIR, kind);
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    } catch (error) {
+      cb(error);
+    }
+  },
+  filename(req, file, cb) {
+    const kind = sanitizeTestKind(req.params.kind);
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `test_${kind}${ext}`);
+  }
+});
+
+const uploadTestMedia = multer({
+  storage: testMediaStorage,
+  fileFilter(req, file, cb) {
+    try {
+      const kind = sanitizeTestKind(req.params.kind);
+      const ext = path.extname(file.originalname).toLowerCase();
+      const imageExts = new Set([".jpg", ".jpeg", ".png", ".bmp", ".webp"]);
+      const videoExts = new Set([".mp4", ".mov", ".mkv", ".avi", ".m4v"]);
+      if (kind === "image" && !imageExts.has(ext)) {
+        cb(new Error("Test image must be .jpg, .jpeg, .png, .bmp, or .webp."));
+        return;
+      }
+      if (kind === "video" && !videoExts.has(ext)) {
+        cb(new Error("Test video must be .mp4, .mov, .mkv, .avi, or .m4v."));
+        return;
+      }
+      cb(null, true);
+    } catch (error) {
+      cb(error);
+    }
+  }
+});
+
 function workspacePath(filePath) {
   if (!filePath) return "";
   const relative = path.relative(APP_ROOT, filePath).replace(/\\/g, "/");
@@ -182,6 +234,23 @@ function normalizeConfig(input, existing) {
   }
   if (!Array.isArray(config.roi.polygon) || config.roi.polygon.length < 3) {
     throw new Error("ROI polygon cần ít nhất 3 điểm.");
+  }
+  config.frontVehicleClassIds = String(config.frontVehicleClassIds)
+    .split(",")
+    .map((item) => Number(item.trim()))
+    .filter((item) => Number.isInteger(item));
+  if (!config.frontVehicleClassIds.length) config.frontVehicleClassIds = [0];
+  config.streamWidth = Math.max(320, Number(config.streamWidth || 1920));
+  config.streamHeight = Math.max(240, Number(config.streamHeight || 1080));
+  config.captureCooldownSec = Math.max(1, Number(config.captureCooldownSec || 30));
+  config.appRoot = "/workspace/deepstream-lpr-app";
+  return config;
+}
+
+function normalizeRuntimeConfig(input, existing) {
+  const config = mergeConfig(existing, input || {});
+  if (!Array.isArray(config.roi.polygon) || config.roi.polygon.length < 3) {
+    throw new Error("ROI polygon needs at least 3 points.");
   }
   config.frontVehicleClassIds = String(config.frontVehicleClassIds)
     .split(",")
@@ -671,6 +740,96 @@ async function deploy(config) {
   }
 }
 
+async function runTestMedia(kind, config) {
+  const checkpoints = createCheckpoints([
+    { id: "validate_test_media", label: "Validate test media" },
+    { id: "generate_runtime", label: "Generate DeepStream runtime files" },
+    { id: "run_test_container", label: `Run ${kind} test container` },
+    { id: "load_events", label: "Load test events" }
+  ]);
+  const mediaPath = hostPathFromWorkspace(config.testMedia?.[kind]?.path);
+  let commandOutput = "";
+  try {
+    await runCheckpoint(checkpoints, "validate_test_media", async () => {
+      if (!mediaPath || !fs.existsSync(mediaPath)) {
+        throw new Error(`No uploaded test ${kind}. Upload a ${kind} first.`);
+      }
+      return { output: `Media: ${mediaPath}` };
+    }, `Test ${kind} exists.`);
+
+    await runCheckpoint(checkpoints, "generate_runtime", async () => {
+      await generateRuntime(config);
+      return { output: `Config: ${CONFIG_FILE}` };
+    }, "Runtime files generated.");
+
+    const inputUri = `file://${workspacePath(mediaPath)}`;
+    const result = await runCheckpoint(checkpoints, "run_test_container", async () => {
+      const dockerResult = await runCommand("docker", [
+        "run",
+        "--rm",
+        "--network", "host",
+        "--ipc", "host",
+        "--privileged",
+        "--runtime", "nvidia",
+        "-e", `DISPLAY=${process.env.DISPLAY || ":0"}`,
+        "-e", "NVIDIA_VISIBLE_DEVICES=all",
+        "-e", "NVIDIA_DRIVER_CAPABILITIES=all",
+        "-v", `${APP_ROOT.replace(/\\/g, "/")}:/workspace/deepstream-lpr-app`,
+        "-v", "/tmp/.X11-unix:/tmp/.X11-unix",
+        "-w", "/workspace/deepstream-lpr-app",
+        config.deepstreamImage,
+        "python3",
+        "deepstream/deepstream_lpr_app.py",
+        "--config",
+        "runtime/config.json",
+        "--input-uri",
+        inputUri
+      ], { cwd: APP_ROOT });
+      if (dockerResult.code !== 0) {
+        const error = new Error(`DeepStream ${kind} test failed:\n${dockerResult.output}`);
+        error.output = dockerResult.output;
+        throw error;
+      }
+      return dockerResult;
+    }, `${kind} test finished.`);
+    commandOutput = result.output || "";
+
+    const events = await runCheckpoint(checkpoints, "load_events", async () => {
+      const file = path.join(RUNTIME_DIR, "events.jsonl");
+      let content = "";
+      try {
+        content = await fsp.readFile(file, "utf8");
+      } catch {
+        return { events: [], output: "No events file yet." };
+      }
+      const lines = content.trim().split(/\r?\n/).filter(Boolean);
+      return { events: lines.slice(-20).map((line) => JSON.parse(line)), output: `Loaded ${Math.min(lines.length, 20)} recent events.` };
+    }, "Events loaded.");
+
+    config.lastTest = {
+      kind,
+      status: "success",
+      media: workspacePath(mediaPath),
+      updatedAt: new Date().toISOString(),
+      checkpoints
+    };
+    await writeJson(CONFIG_FILE, config);
+    return { kind, status: "success", checkpoints, output: commandOutput.slice(-8000), events: events.events || [] };
+  } catch (error) {
+    config.lastTest = {
+      kind,
+      status: "failed",
+      media: mediaPath ? workspacePath(mediaPath) : "",
+      output: (error.output || error.message || "").slice(-5000),
+      updatedAt: new Date().toISOString(),
+      checkpoints
+    };
+    await writeJson(CONFIG_FILE, config).catch(() => {});
+    error.checkpoints = checkpoints;
+    throw error;
+  }
+}
+
 ensureDirs();
 app.use(express.static(PUBLIC_DIR));
 app.use("/models", express.static(MODELS_DIR));
@@ -722,6 +881,35 @@ app.post("/api/model-source/:group", uploadSource.single("file"), async (req, re
     res.json({ group, model: config.models[group], config });
   } catch (error) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/test-media/:kind", uploadTestMedia.single("file"), async (req, res) => {
+  try {
+    const kind = sanitizeTestKind(req.params.kind);
+    if (!req.file) return res.status(400).json({ error: "No file uploaded." });
+    const config = await getConfig();
+    config.testMedia = config.testMedia || {};
+    config.testMedia[kind] = {
+      path: workspacePath(req.file.path),
+      originalName: req.file.originalname,
+      uploadedAt: new Date().toISOString()
+    };
+    await writeJson(CONFIG_FILE, config);
+    res.json({ kind, media: config.testMedia[kind], config });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/test/:kind", async (req, res) => {
+  try {
+    const kind = sanitizeTestKind(req.params.kind);
+    const config = normalizeRuntimeConfig(req.body, await getConfig());
+    const result = await runTestMedia(kind, config);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message, checkpoints: error.checkpoints || [] });
   }
 });
 

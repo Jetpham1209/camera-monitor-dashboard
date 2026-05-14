@@ -55,7 +55,13 @@ const els = {
   saveBtn: document.querySelector("#saveBtn"),
   deployBtn: document.querySelector("#deployBtn"),
   stopBtn: document.querySelector("#stopBtn"),
-  eventsBtn: document.querySelector("#eventsBtn")
+  eventsBtn: document.querySelector("#eventsBtn"),
+  testImageFile: document.querySelector("#testImageFile"),
+  testVideoFile: document.querySelector("#testVideoFile"),
+  uploadTestImageBtn: document.querySelector("#uploadTestImageBtn"),
+  uploadTestVideoBtn: document.querySelector("#uploadTestVideoBtn"),
+  runTestImageBtn: document.querySelector("#runTestImageBtn"),
+  runTestVideoBtn: document.querySelector("#runTestVideoBtn")
 };
 
 function print(value) {
@@ -255,6 +261,28 @@ async function uploadSource(group) {
   print(result);
 }
 
+async function uploadTestMedia(kind) {
+  const input = kind === "image" ? els.testImageFile : els.testVideoFile;
+  if (!input.files.length) return print(`Chon ${kind} file truoc khi upload.`);
+  const form = new FormData();
+  form.append("file", input.files[0]);
+  const result = await api(`/api/test-media/${kind}`, { method: "POST", body: form });
+  print(result);
+}
+
+async function runTestMedia(kind) {
+  renderCheckpoints([
+    { order: 1, label: `${kind} test requested`, status: "running", message: `Running ${kind} test...`, durationMs: null }
+  ]);
+  print(`Running ${kind} test...`);
+  const result = await api(`/api/test/${kind}`, {
+    method: "POST",
+    body: JSON.stringify(formConfig())
+  });
+  renderCheckpoints(result.checkpoints || []);
+  print(result);
+}
+
 async function buildModel(group) {
   renderCheckpoints([
     { order: 1, label: "Build requested", status: "running", message: `Building ${group}...`, durationMs: null }
@@ -310,4 +338,14 @@ els.deployBtn.addEventListener("click", () => deploy().catch((error) => {
 }));
 els.stopBtn.addEventListener("click", () => stop().catch((error) => print(error.message)));
 els.eventsBtn.addEventListener("click", () => loadEvents().catch((error) => print(error.message)));
+els.uploadTestImageBtn.addEventListener("click", () => uploadTestMedia("image").catch((error) => print(error.message)));
+els.uploadTestVideoBtn.addEventListener("click", () => uploadTestMedia("video").catch((error) => print(error.message)));
+els.runTestImageBtn.addEventListener("click", () => runTestMedia("image").catch((error) => {
+  renderCheckpoints(error.body?.checkpoints || []);
+  print(error.message);
+}));
+els.runTestVideoBtn.addEventListener("click", () => runTestMedia("video").catch((error) => {
+  renderCheckpoints(error.body?.checkpoints || []);
+  print(error.message);
+}));
 init().catch((error) => print(error.message));

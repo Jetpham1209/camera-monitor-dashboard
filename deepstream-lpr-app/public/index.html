@@ -36,6 +36,30 @@
         <div id="modelBuilders" class="model-builders"></div>
       </section>
 
+      <section class="panel">
+        <h2>Test Flows</h2>
+        <div class="test-flows">
+          <article class="test-card">
+            <h3>Test by Image</h3>
+            <p>Upload mot anh bien so/dau xe va chay pipeline mot lan.</p>
+            <label>Image file <input id="testImageFile" type="file" accept=".jpg,.jpeg,.png,.bmp,.webp" /></label>
+            <div class="actions inline-actions">
+              <button id="uploadTestImageBtn" type="button">Upload image</button>
+              <button id="runTestImageBtn" type="button">Run image test</button>
+            </div>
+          </article>
+          <article class="test-card">
+            <h3>Test by Video</h3>
+            <p>Upload video ngan va chay pipeline tren file do.</p>
+            <label>Video file <input id="testVideoFile" type="file" accept=".mp4,.mov,.mkv,.avi,.m4v" /></label>
+            <div class="actions inline-actions">
+              <button id="uploadTestVideoBtn" type="button">Upload video</button>
+              <button id="runTestVideoBtn" type="button">Run video test</button>
+            </div>
+          </article>
+        </div>
+      </section>
+
       <section class="actions">
         <button id="saveBtn">Save config</button>
         <button id="deployBtn">Deploy / Update</button>

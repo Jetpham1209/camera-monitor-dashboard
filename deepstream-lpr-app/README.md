@@ -76,6 +76,21 @@ Deploy checkpoints:
 
 Moi checkpoint co status `pending`, `running`, `success`, `failed`, hoac `skipped`. Neu fail, response API van tra ve `checkpoints` va UI se danh dau buoc fail.
 
+## Test flows
+
+UI co them 2 luong test rieng de kiem tra model truoc khi deploy RTSP:
+
+- **Test by Image**: upload anh `.jpg`, `.jpeg`, `.png`, `.bmp`, hoac `.webp`, sau do bam `Run image test`.
+- **Test by Video**: upload video `.mp4`, `.mov`, `.mkv`, `.avi`, hoac `.m4v`, sau do bam `Run video test`.
+
+File test duoc luu trong:
+
+```text
+deepstream-lpr-app/runtime/test-media/
+```
+
+Khi chay test, control server se generate runtime config hien tai, chay DeepStream container bang `docker run --rm`, truyen input file qua `--input-uri file:///workspace/...`, roi load events moi nhat tu `runtime/events.jsonl`. Luong test nay khong restart service RTSP dang deploy.
+
 ## Yeu cau tren Jetson
 
 De build tu `.pt`:

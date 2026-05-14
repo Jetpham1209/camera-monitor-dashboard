@@ -120,7 +120,7 @@ class LprRuntime:
                         event = {
                             "eventId": event_id,
                             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                            "stream": self.config.get("rtspUrl"),
+                            "stream": self.config.get("inputUri") or self.config.get("rtspUrl"),
                             "objectId": object_id,
                             "frameNum": int(frame_meta.frame_num),
                             "classId": int(obj_meta.class_id),
@@ -161,9 +161,12 @@ def on_decodebin_pad_added(_decodebin, pad, streammux):
 
 def build_pipeline(runtime):
     config = runtime.config
+    input_uri = config.get("inputUri") or config.get("rtspUrl")
+    if not input_uri:
+        raise RuntimeError("Missing inputUri/rtspUrl")
     Gst.init(None)
     pipeline = Gst.Pipeline.new("deepstream-lpr-pipeline")
-    source = make_element("uridecodebin", "rtsp-source")
+    source = make_element("uridecodebin", "input-source")
     streammux = make_element("nvstreammux", "streammux")
     pgie = make_element("nvinfer", "vehicle-front-detector")
     tracker = make_element("nvtracker", "tracker")
@@ -173,11 +176,11 @@ def build_pipeline(runtime):
     osd = make_element("nvdsosd", "onscreendisplay")
     sink = make_element("fakesink", "sink")
 
-    source.set_property("uri", config["rtspUrl"])
+    source.set_property("uri", input_uri)
     streammux.set_property("batch-size", 1)
     streammux.set_property("width", int(config.get("streamWidth", 1920)))
     streammux.set_property("height", int(config.get("streamHeight", 1080)))
-    streammux.set_property("live-source", 1)
+    streammux.set_property("live-source", 1 if input_uri.lower().startswith("rtsp://") else 0)
     streammux.set_property("batched-push-timeout", 40000)
     pgie.set_property("config-file-path", str(runtime.runtime_dir / "generated" / "config_infer_vehicle_front.txt"))
     tracker.set_property("ll-lib-file", config.get("trackerLib", "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so"))
@@ -199,9 +202,12 @@ def build_pipeline(runtime):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
+    parser.add_argument("--input-uri", default="")
     args = parser.parse_args()
     with open(args.config, "r", encoding="utf-8") as file:
         config = json.load(file)
+    if args.input_uri:
+        config["inputUri"] = args.input_uri
     runtime = LprRuntime(config)
     pipeline = build_pipeline(runtime)
     loop = GLib.MainLoop()
