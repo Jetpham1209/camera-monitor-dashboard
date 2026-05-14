@@ -168,6 +168,16 @@ https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getUpdates
 
 4. Lấy giá trị `chat.id`.
 
+Bạn có thể cấu hình Telegram trực tiếp trong dashboard bằng nút `Telegram` ở góc trên:
+
+1. Nhập `Bot token`.
+2. Nhập `Chat ID`.
+3. Chọn `Timezone`, mặc định `Asia/Bangkok`.
+4. Bấm `Test` để lưu cấu hình và gửi tin nhắn test.
+5. Bấm `Lưu` nếu chỉ muốn lưu mà chưa gửi test.
+
+Cấu hình Telegram lưu trong `data/settings.json`. File này không được commit lên Git.
+
 ## Sử Dụng Dashboard
 
 1. Bấm `Thêm camera`.
@@ -237,6 +247,7 @@ Các file/thư mục runtime:
 
 - `data/cameras.json`: danh sách camera đã thêm.
 - `data/state.json`: trạng thái và lịch sử mất kết nối.
+- `data/settings.json`: cấu hình runtime như Telegram connection.
 - `data/captures/`: ảnh capture.
 - `data/hls/`: file stream HLS tạm.
 
@@ -252,7 +263,7 @@ Tạo gói source sạch, không kèm camera/state hiện tại:
 npm run package
 ```
 
-Tạo gói kèm `data/cameras.json` và `data/state.json` hiện tại:
+Tạo gói kèm `data/cameras.json`, `data/state.json` và `data/settings.json` hiện tại:
 
 ```bash
 npm run package:with-data
@@ -265,6 +276,8 @@ npm run package:offline-windows
 ```
 
 Lưu ý: gói offline có `node_modules` chỉ nên dùng cho thiết bị cùng hệ điều hành và kiến trúc với máy đóng gói. Nếu triển khai sang Linux hoặc máy khác kiến trúc, dùng gói không kèm `node_modules`, sau đó chạy `npm install` trên thiết bị đích.
+
+Gói `with-data` có thể chứa RTSP URL kèm username/password và Telegram token, nên chỉ chia sẻ trong môi trường tin cậy.
 
 ## Scripts
 

@@ -47,9 +47,15 @@ New-Item -ItemType Directory -Force -Path $StageDataDir | Out-Null
 if ($IncludeRuntimeData) {
   Copy-Item -LiteralPath (Join-Path $Root "data\cameras.json") -Destination (Join-Path $StageDataDir "cameras.json") -Force
   Copy-Item -LiteralPath (Join-Path $Root "data\state.json") -Destination (Join-Path $StageDataDir "state.json") -Force
+  if (Test-Path (Join-Path $Root "data\settings.json")) {
+    Copy-Item -LiteralPath (Join-Path $Root "data\settings.json") -Destination (Join-Path $StageDataDir "settings.json") -Force
+  } else {
+    Set-Content -LiteralPath (Join-Path $StageDataDir "settings.json") -Value "{}" -Encoding UTF8
+  }
 } else {
   Set-Content -LiteralPath (Join-Path $StageDataDir "cameras.json") -Value "[]" -Encoding UTF8
   Set-Content -LiteralPath (Join-Path $StageDataDir "state.json") -Value "{}" -Encoding UTF8
+  Set-Content -LiteralPath (Join-Path $StageDataDir "settings.json") -Value "{}" -Encoding UTF8
 }
 
 if ($IncludeNodeModules) {

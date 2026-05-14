@@ -60,11 +60,13 @@ Tao goi source sach, khong kem camera/state hien tai:
 npm run package
 ```
 
-Tao goi kem `data/cameras.json` va `data/state.json` hien tai:
+Tao goi kem `data/cameras.json`, `data/state.json` va `data/settings.json` hien tai:
 
 ```powershell
 npm run package:with-data
 ```
+
+Luu y: goi `with-data` co the chua RTSP username/password va Telegram token.
 
 Tao goi offline cho Windows, co kem `node_modules`:
 
@@ -78,6 +80,7 @@ Luu y: goi offline co `node_modules` chi nen dung khi thiet bi dich cung he dieu
 
 - Danh sach camera: `data/cameras.json`
 - Trang thai/lịch su mat ket noi: `data/state.json`
+- Cau hinh Telegram connection: `data/settings.json`
 - Anh capture: `data/captures/`
 - HLS stream tam: `data/hls/`
 

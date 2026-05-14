@@ -42,6 +42,7 @@ const HLS_DIR = path.join(DATA_DIR, "hls");
 const CAPTURE_DIR = path.join(DATA_DIR, "captures");
 const CAMERAS_FILE = path.join(DATA_DIR, "cameras.json");
 const STATE_FILE = path.join(DATA_DIR, "state.json");
+const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 
 const app = express();
 const server = http.createServer(app);
@@ -61,6 +62,7 @@ function ensureDirectories() {
   }
   if (!fs.existsSync(CAMERAS_FILE)) fs.writeFileSync(CAMERAS_FILE, "[]\n");
   if (!fs.existsSync(STATE_FILE)) fs.writeFileSync(STATE_FILE, "{}\n");
+  if (!fs.existsSync(SETTINGS_FILE)) fs.writeFileSync(SETTINGS_FILE, "{}\n");
 }
 
 async function readJson(file, fallback) {
@@ -92,6 +94,64 @@ async function getState() {
 
 async function saveState(state) {
   await writeJson(STATE_FILE, state);
+}
+
+async function getSettings() {
+  const settings = await readJson(SETTINGS_FILE, {});
+  return settings && typeof settings === "object" && !Array.isArray(settings) ? settings : {};
+}
+
+async function saveSettings(settings) {
+  await writeJson(SETTINGS_FILE, settings);
+}
+
+async function getTelegramSettings() {
+  const settings = await getSettings();
+  return {
+    botToken: String(settings.telegram?.botToken || TELEGRAM_BOT_TOKEN || "").trim(),
+    chatId: String(settings.telegram?.chatId || TELEGRAM_CHAT_ID || "").trim(),
+    timeZone: String(settings.telegram?.timeZone || TELEGRAM_TIME_ZONE || "Asia/Bangkok").trim(),
+    timeoutMs: Number(settings.telegram?.timeoutMs || TELEGRAM_TIMEOUT_MS || 10000)
+  };
+}
+
+function maskSecret(value) {
+  if (!value) return "";
+  if (value.length <= 8) return "********";
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+async function getTelegramPublicSettings() {
+  const settings = await getTelegramSettings();
+  return {
+    connected: Boolean(settings.botToken && settings.chatId),
+    botTokenMasked: maskSecret(settings.botToken),
+    chatId: settings.chatId,
+    timeZone: settings.timeZone,
+    timeoutMs: settings.timeoutMs
+  };
+}
+
+async function saveTelegramSettings(input) {
+  const settings = await getSettings();
+  const current = await getTelegramSettings();
+  const botTokenInput = input.botToken === undefined ? current.botToken : String(input.botToken || "").trim();
+  const botToken = botTokenInput || current.botToken;
+  const chatId = String(input.chatId || current.chatId || "").trim();
+  const timeZone = String(input.timeZone || current.timeZone || "Asia/Bangkok").trim();
+  const timeoutMs = Math.max(1000, Math.min(60000, Number(input.timeoutMs || current.timeoutMs || 10000)));
+
+  if (!botToken) throw new Error("Telegram bot token là bắt buộc.");
+  if (!chatId) throw new Error("Telegram chat id là bắt buộc.");
+  try {
+    new Intl.DateTimeFormat("vi-VN", { timeZone }).format(new Date());
+  } catch {
+    throw new Error("Telegram timezone không hợp lệ.");
+  }
+
+  settings.telegram = { botToken, chatId, timeZone, timeoutMs };
+  await saveSettings(settings);
+  return await getTelegramPublicSettings();
 }
 
 async function listCaptures(cameraId, limit = 20) {
@@ -191,26 +251,27 @@ async function broadcastDashboard() {
   broadcast({ type: "dashboard", cameras: await getDashboardData() });
 }
 
-function formatTelegramTime(value) {
+function formatTelegramTime(value, timeZone) {
   return new Intl.DateTimeFormat("vi-VN", {
     dateStyle: "short",
     timeStyle: "medium",
-    timeZone: TELEGRAM_TIME_ZONE
+    timeZone
   }).format(new Date(value));
 }
 
 async function sendTelegramMessage(text) {
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return { skipped: true };
+  const telegram = await getTelegramSettings();
+  if (!telegram.botToken || !telegram.chatId) return { skipped: true };
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TELEGRAM_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), telegram.timeoutMs);
 
-  const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+  const response = await fetch(`https://api.telegram.org/bot${telegram.botToken}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     signal: controller.signal,
     body: JSON.stringify({
-      chat_id: TELEGRAM_CHAT_ID,
+      chat_id: telegram.chatId,
       text,
       disable_web_page_preview: true
     })
@@ -225,10 +286,11 @@ async function sendTelegramMessage(text) {
 }
 
 async function notifyCameraOffline(camera, offlineAt) {
+  const telegram = await getTelegramSettings();
   const message = [
     "Camera bi ngat ket noi",
     `Ten camera: ${camera.name}`,
-    `Thoi gian ngat ket noi: ${formatTelegramTime(offlineAt)}`
+    `Thoi gian ngat ket noi: ${formatTelegramTime(offlineAt, telegram.timeZone)}`
   ].join("\n");
 
   try {
@@ -481,6 +543,28 @@ app.get("/vendor/lucide.min.js", (_req, res) => {
 
 app.get("/api/cameras", async (_req, res) => {
   res.json(await getDashboardData());
+});
+
+app.get("/api/settings/telegram", async (_req, res) => {
+  res.json(await getTelegramPublicSettings());
+});
+
+app.put("/api/settings/telegram", async (req, res) => {
+  try {
+    res.json(await saveTelegramSettings(req.body || {}));
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/settings/telegram/test", async (_req, res) => {
+  try {
+    const result = await sendTelegramMessage(`Camera Monitor Dashboard test\nThoi gian: ${formatTelegramTime(new Date().toISOString(), (await getTelegramSettings()).timeZone)}`);
+    if (result.skipped) return res.status(400).json({ error: "Telegram chưa được cấu hình." });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.post("/api/cameras", async (req, res) => {

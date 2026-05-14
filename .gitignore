@@ -1,6 +1,7 @@
 node_modules/
 data/cameras.json
 data/state.json
+data/settings.json
 data/hls/
 data/captures/
 dist/

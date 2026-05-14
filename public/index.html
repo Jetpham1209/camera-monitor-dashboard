@@ -14,6 +14,10 @@
           <h1>Camera Dashboard</h1>
         </div>
         <div class="header-actions">
+          <button class="ghost-button" id="openTelegramBtn" type="button" title="Telegram connection">
+            <i data-lucide="send"></i>
+            <span>Telegram</span>
+          </button>
           <button class="icon-button" id="refreshBtn" type="button" title="Làm mới">
             <i data-lucide="refresh-cw"></i>
           </button>
@@ -95,6 +99,49 @@
           <button class="ghost-button" type="button" id="deleteBtn">
             <i data-lucide="trash-2"></i>
             <span>Xóa</span>
+          </button>
+          <button class="primary-button" type="submit">
+            <i data-lucide="save"></i>
+            <span>Lưu</span>
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="telegramDialog">
+      <form method="dialog" class="dialog-card" id="telegramForm">
+        <div class="dialog-header">
+          <h2>Telegram connection</h2>
+          <button class="icon-button" value="cancel" type="button" id="closeTelegramDialogBtn" title="Đóng">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="connection-status" id="telegramConnectionStatus">
+          <span class="badge unknown">Chưa kiểm tra</span>
+        </div>
+        <label>
+          <span>Bot token</span>
+          <input id="telegramBotToken" type="password" placeholder="123456789:bot-token" autocomplete="off" />
+        </label>
+        <p class="field-hint" id="telegramTokenHint"></p>
+        <label>
+          <span>Chat ID</span>
+          <input id="telegramChatId" placeholder="-1001234567890 hoặc 123456789" autocomplete="off" />
+        </label>
+        <label>
+          <span>Timezone</span>
+          <input id="telegramTimeZone" value="Asia/Bangkok" autocomplete="off" />
+        </label>
+        <label>
+          <span>Timeout Telegram API (ms)</span>
+          <input id="telegramTimeout" type="number" min="1000" max="60000" value="10000" />
+        </label>
+        <p class="form-error" id="telegramFormError"></p>
+        <p class="form-success" id="telegramFormSuccess"></p>
+        <div class="dialog-actions">
+          <button class="ghost-button" type="button" id="testTelegramBtn">
+            <i data-lucide="send"></i>
+            <span>Test</span>
           </button>
           <button class="primary-button" type="submit">
             <i data-lucide="save"></i>

@@ -25,6 +25,7 @@ const els = {
   socketState: document.querySelector("#socketState"),
   refreshBtn: document.querySelector("#refreshBtn"),
   openAddBtn: document.querySelector("#openAddBtn"),
+  openTelegramBtn: document.querySelector("#openTelegramBtn"),
   dialog: document.querySelector("#cameraDialog"),
   form: document.querySelector("#cameraForm"),
   dialogTitle: document.querySelector("#dialogTitle"),
@@ -45,7 +46,19 @@ const els = {
   undoShapeBtn: document.querySelector("#undoShapeBtn"),
   clearShapesBtn: document.querySelector("#clearShapesBtn"),
   copyCoordinatesBtn: document.querySelector("#copyCoordinatesBtn"),
-  shapeToolButtons: document.querySelectorAll("[data-shape-tool]")
+  shapeToolButtons: document.querySelectorAll("[data-shape-tool]"),
+  telegramDialog: document.querySelector("#telegramDialog"),
+  telegramForm: document.querySelector("#telegramForm"),
+  closeTelegramDialogBtn: document.querySelector("#closeTelegramDialogBtn"),
+  telegramConnectionStatus: document.querySelector("#telegramConnectionStatus"),
+  telegramBotToken: document.querySelector("#telegramBotToken"),
+  telegramTokenHint: document.querySelector("#telegramTokenHint"),
+  telegramChatId: document.querySelector("#telegramChatId"),
+  telegramTimeZone: document.querySelector("#telegramTimeZone"),
+  telegramTimeout: document.querySelector("#telegramTimeout"),
+  telegramFormError: document.querySelector("#telegramFormError"),
+  telegramFormSuccess: document.querySelector("#telegramFormSuccess"),
+  testTelegramBtn: document.querySelector("#testTelegramBtn")
 };
 
 const icons = () => window.lucide?.createIcons();
@@ -336,6 +349,70 @@ async function capture(id) {
   state.captures.set(id, mergeCaptures([result, ...captures]).slice(0, 20));
   renderViewer();
   icons();
+}
+
+async function openTelegramDialog() {
+  clearTelegramMessages();
+  const settings = await api("/api/settings/telegram");
+  renderTelegramSettings(settings);
+  els.telegramDialog.showModal();
+  icons();
+}
+
+function renderTelegramSettings(settings) {
+  const connected = Boolean(settings.connected);
+  els.telegramConnectionStatus.innerHTML = `<span class="badge ${connected ? "online" : "unknown"}">${connected ? "Đã cấu hình" : "Chưa cấu hình"}</span>`;
+  els.telegramBotToken.value = "";
+  els.telegramBotToken.placeholder = connected ? "Để trống để giữ token hiện tại" : "123456789:bot-token";
+  els.telegramTokenHint.textContent = settings.botTokenMasked ? `Token hiện tại: ${settings.botTokenMasked}` : "Chưa có token.";
+  els.telegramChatId.value = settings.chatId || "";
+  els.telegramTimeZone.value = settings.timeZone || "Asia/Bangkok";
+  els.telegramTimeout.value = settings.timeoutMs || 10000;
+}
+
+function clearTelegramMessages() {
+  els.telegramFormError.textContent = "";
+  els.telegramFormSuccess.textContent = "";
+}
+
+async function saveTelegramSettings(event) {
+  event.preventDefault();
+  clearTelegramMessages();
+  try {
+    const settings = await persistTelegramSettings();
+    renderTelegramSettings(settings);
+    els.telegramFormSuccess.textContent = "Đã lưu Telegram connection.";
+  } catch (error) {
+    els.telegramFormError.textContent = error.message;
+  }
+}
+
+async function persistTelegramSettings() {
+  const payload = {
+    chatId: els.telegramChatId.value,
+    timeZone: els.telegramTimeZone.value,
+    timeoutMs: Number(els.telegramTimeout.value || 10000)
+  };
+  if (els.telegramBotToken.value.trim()) payload.botToken = els.telegramBotToken.value.trim();
+  return await api("/api/settings/telegram", {
+    method: "PUT",
+    body: JSON.stringify(payload)
+  });
+}
+
+async function testTelegramConnection() {
+  clearTelegramMessages();
+  els.testTelegramBtn.disabled = true;
+  try {
+    const settings = await persistTelegramSettings();
+    renderTelegramSettings(settings);
+    await api("/api/settings/telegram/test", { method: "POST" });
+    els.telegramFormSuccess.textContent = "Đã gửi tin nhắn test tới Telegram.";
+  } catch (error) {
+    els.telegramFormError.textContent = error.message;
+  } finally {
+    els.testTelegramBtn.disabled = false;
+  }
 }
 
 function getCapturesForCamera(camera) {
@@ -666,9 +743,13 @@ function connectSocket() {
 
 els.refreshBtn.addEventListener("click", loadCameras);
 els.openAddBtn.addEventListener("click", () => openDialog());
+els.openTelegramBtn.addEventListener("click", openTelegramDialog);
 els.closeDialogBtn.addEventListener("click", () => els.dialog.close());
 els.form.addEventListener("submit", saveCamera);
 els.deleteBtn.addEventListener("click", deleteSelectedCamera);
+els.closeTelegramDialogBtn.addEventListener("click", () => els.telegramDialog.close());
+els.telegramForm.addEventListener("submit", saveTelegramSettings);
+els.testTelegramBtn.addEventListener("click", testTelegramConnection);
 els.closeFrameDialogBtn.addEventListener("click", () => els.frameDialog.close());
 els.shapeToolButtons.forEach((button) => {
   button.addEventListener("click", () => setShapeTool(button.dataset.shapeTool));
