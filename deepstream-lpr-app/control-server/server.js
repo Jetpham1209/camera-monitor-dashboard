@@ -30,6 +30,7 @@ const MODEL_BUILDER_IMAGE = process.env.MODEL_BUILDER_IMAGE || "deepstream-lpr-m
 const MODEL_BUILDER_BASE_IMAGE = process.env.MODEL_BUILDER_BASE_IMAGE || "ultralytics/ultralytics:latest-jetson-jetpack6";
 const MODEL_BUILDER_DOCKERFILE = process.env.MODEL_BUILDER_DOCKERFILE || path.join(APP_ROOT, "docker", "model-builder.Dockerfile");
 const MODEL_BUILDER_AUTO_BUILD = process.env.MODEL_BUILDER_AUTO_BUILD !== "0";
+const MODEL_BUILDER_FORCE_BUILD = process.env.MODEL_BUILDER_FORCE_BUILD === "1";
 const MODEL_BUILDER_WORKDIR = "/workspace/deepstream-lpr-app";
 const CUDA_VER = process.env.CUDA_VER || "";
 const CAPTURE_TIMEOUT_MS = Number(process.env.PROBE_TIMEOUT_MS || 10000);
@@ -1305,7 +1306,7 @@ async function dockerImageExists(image) {
 }
 
 async function ensureModelBuilderImage() {
-  if (await dockerImageExists(MODEL_BUILDER_IMAGE)) {
+  if (!MODEL_BUILDER_FORCE_BUILD && await dockerImageExists(MODEL_BUILDER_IMAGE)) {
     return { output: `Image exists: ${MODEL_BUILDER_IMAGE}` };
   }
   if (!MODEL_BUILDER_AUTO_BUILD) {
@@ -1327,7 +1328,7 @@ async function ensureModelBuilderImage() {
     error.output = build.output;
     throw error;
   }
-  return { output: `Built image: ${MODEL_BUILDER_IMAGE}\nBase image: ${MODEL_BUILDER_BASE_IMAGE}\n${build.output}` };
+  return { output: `Built image: ${MODEL_BUILDER_IMAGE}\nBase image: ${MODEL_BUILDER_BASE_IMAGE}\nForce build: ${MODEL_BUILDER_FORCE_BUILD ? "yes" : "no"}\n${build.output}` };
 }
 
 async function runModelBuilder(command) {
