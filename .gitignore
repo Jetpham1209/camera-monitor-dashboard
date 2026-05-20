@@ -8,8 +8,11 @@ dist/
 .env
 company-heartbeat-server/.env
 company-heartbeat-server/data/
+deepstream-lpr-app/.env.product
+deepstream-lpr-app/.env.product.detected
 deepstream-lpr-app/runtime/
 deepstream-lpr-app/models/
+yolo-test-models/
 __pycache__/
 *.pyc
 server.*.log

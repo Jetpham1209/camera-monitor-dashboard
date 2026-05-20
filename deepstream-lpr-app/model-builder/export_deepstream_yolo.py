@@ -33,6 +33,7 @@ def main():
     parser.add_argument("--opset", type=int, default=17)
     parser.add_argument("--simplify", action="store_true")
     parser.add_argument("--dynamic", action="store_true")
+    parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--labels-output", default="")
     args = parser.parse_args()
 
@@ -74,6 +75,8 @@ def main():
         str(args.imgsz),
         "--opset",
         str(args.opset),
+        "--batch",
+        str(max(1, args.batch)),
     ]
     if args.simplify:
         command.append("--simplify")
@@ -93,7 +96,8 @@ def main():
     if args.labels_output and labels_file.exists():
         labels_output = Path(args.labels_output).resolve()
         labels_output.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(labels_file, labels_output)
+        if labels_file != labels_output:
+            shutil.copy2(labels_file, labels_output)
         print(f"Exported labels: {labels_output}")
 
 

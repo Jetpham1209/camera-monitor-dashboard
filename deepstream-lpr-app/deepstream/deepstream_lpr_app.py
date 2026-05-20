@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 import argparse
+import ctypes
 import json
+import re
+import struct
 import time
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 try:
     import gi
@@ -17,11 +21,20 @@ except Exception as exc:
     )
 
 try:
-    import cv2
     import numpy as np
 except Exception:
-    cv2 = None
     np = None
+
+try:
+    import cv2
+except Exception:
+    cv2 = None
+
+try:
+    from PIL import Image, ImageDraw
+except Exception:
+    Image = None
+    ImageDraw = None
 
 
 class LprRuntime:
@@ -31,13 +44,139 @@ class LprRuntime:
         self.runtime_dir = self.app_root / "runtime"
         self.capture_dir = self.runtime_dir / "captures"
         self.events_file = self.runtime_dir / "events.jsonl"
+        self.status_file = self.runtime_dir / "status.json"
         self.capture_dir.mkdir(parents=True, exist_ok=True)
+        self.last_capture_error = ""
         self.streams = self.normalize_streams(config)
         self.captured = {}
+        self.started_at = time.time()
+        self.fps_stats = {}
+        self.last_status_write = 0.0
+        self.labels = self.load_labels(config)
+        self.pipeline_stages = self.normalize_pipeline_stages(config)
+        self.pgie_vehicle_class_ids = self.primary_vehicle_class_ids()
+        self.component_names = {
+            int(stage.get("gieId", index + 1)): stage.get("modelGroup", f"gie_{index + 1}")
+            for index, stage in enumerate(self.pipeline_stages)
+        }
+        self.image_test_vehicle_ids = set(config.get("imageTest", {}).get("vehicleClassIds") or [2, 3, 5, 7])
+        self.test_mode = config.get("testMode", "pipeline")
+        self.image_debug_seen = set()
+        self.image_debug_final_frames = set()
+        self.ocr_postprocess = {
+            "maxChars": int(config.get("ocrPostprocess", {}).get("maxChars", 12)),
+            "minConfidence": float(config.get("ocrPostprocess", {}).get("minConfidence", 0.5)),
+            "nmsIou": float(config.get("ocrPostprocess", {}).get("nmsIou", 0.5)),
+            "minWidthRatio": float(config.get("ocrPostprocess", {}).get("minWidthRatio", 0.01)),
+            "maxWidthRatio": float(config.get("ocrPostprocess", {}).get("maxWidthRatio", 0.25)),
+            "minHeightRatio": float(config.get("ocrPostprocess", {}).get("minHeightRatio", 0.18)),
+            "maxHeightRatio": float(config.get("ocrPostprocess", {}).get("maxHeightRatio", 1.15)),
+        }
+        self.write_status("starting", "Runtime initialized.")
+
+    def primary_vehicle_class_ids(self):
+        for stage in self.pipeline_stages:
+            if int(stage.get("gieId", 0)) == 1:
+                ids = stage.get("operateOnClassIds")
+                if isinstance(ids, list):
+                    return {int(item) for item in ids if str(item).strip() != ""}
+                if isinstance(ids, str) and ids.strip():
+                    return {int(item) for item in re.split(r"[;,\\s]+", ids) if item.strip().isdigit()}
+        return set()
+
+    def now_iso(self):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    def write_status(self, state="running", message=""):
+        payload = {
+            "state": state,
+            "message": message,
+            "startedAt": self.now_iso() if state in {"starting", "playing"} else None,
+            "updatedAt": self.now_iso(),
+            "uptimeSec": round(time.time() - self.started_at, 3),
+            "sources": [
+                {
+                    "sourceId": index,
+                    "cameraId": stream.get("id", f"camera-{index + 1}"),
+                    "cameraName": stream.get("name", f"Camera {index + 1}"),
+                    "uri": stream.get("rtspUrl", ""),
+                    **self.fps_stats.get(index, {"fps": 0.0, "frameCount": 0, "lastFrameAt": None}),
+                }
+                for index, stream in enumerate(self.streams)
+            ],
+        }
+        temp_file = self.status_file.with_suffix(".json.tmp")
+        temp_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temp_file.replace(self.status_file)
+
+    def update_fps(self, frame_meta):
+        now = time.time()
+        source_id = int(frame_meta.source_id)
+        stats = self.fps_stats.setdefault(source_id, {
+            "windowStart": now,
+            "windowFrames": 0,
+            "frameCount": 0,
+            "fps": 0.0,
+            "lastFrameAt": None,
+        })
+        stats["windowFrames"] += 1
+        stats["frameCount"] += 1
+        stats["lastFrameAt"] = self.now_iso()
+        elapsed = max(1e-6, now - stats["windowStart"])
+        if elapsed >= 1.0:
+            stats["fps"] = round(stats["windowFrames"] / elapsed, 2)
+            stats["windowStart"] = now
+            stats["windowFrames"] = 0
+        if now - self.last_status_write >= 1.0:
+            self.last_status_write = now
+            self.write_status("playing", "DeepStream pipeline is running.")
+
+    def load_labels(self, config):
+        labels = {}
+        for group, model in (config.get("models") or {}).items():
+            label_path = model.get("labels")
+            if not label_path:
+                continue
+            try:
+                labels[group] = Path(label_path).read_text(encoding="utf-8").splitlines()
+            except Exception:
+                labels[group] = []
+        return labels
+
+    def normalize_pipeline_stages(self, config):
+        stages = config.get("pipelineStages") or [
+            {"id": "pgie", "name": "PGIE Vehicle", "modelGroup": "vehicle_front", "gieId": 1, "configFile": "/workspace/deepstream-lpr-app/runtime/generated/config_infer_vehicle_front.txt", "enabled": True},
+            {"id": "sgie-plate", "name": "SGIE Plate", "modelGroup": "plate_detector", "gieId": 2, "configFile": "/workspace/deepstream-lpr-app/runtime/generated/config_infer_plate_detector.txt", "enabled": True},
+            {"id": "tgie-character", "name": "TGIE Character", "modelGroup": "plate_ocr", "gieId": 3, "configFile": "/workspace/deepstream-lpr-app/runtime/generated/config_infer_plate_ocr.txt", "enabled": True},
+        ]
+        normalized = []
+        for index, stage in enumerate(stages):
+            if stage.get("enabled") is False:
+                continue
+            normalized.append({
+                "id": re.sub(r"[^a-zA-Z0-9_-]+", "_", str(stage.get("id") or f"gie-{index + 1}")),
+                "name": stage.get("name") or f"GIE {index + 1}",
+                "modelGroup": stage.get("modelGroup") or f"gie_{index + 1}",
+                "gieId": int(stage.get("gieId") or index + 1),
+                "operateOnClassIds": stage.get("operateOnClassIds") or [],
+                "configFile": stage.get("configFile") or f"/workspace/deepstream-lpr-app/runtime/generated/config_infer_{stage.get('id') or f'gie-{index + 1}'}.txt",
+                "ready": stage.get("ready", True),
+            })
+        return normalized
 
     def normalize_streams(self, config):
         if config.get("inputUri"):
             base = (config.get("streams") or [{}])[0]
+            if config.get("testMode") == "image-debug":
+                vehicle_ids = config.get("imageTest", {}).get("vehicleClassIds") or [2, 3, 5, 7]
+                return [{
+                    "id": "image-test",
+                    "name": "Image test",
+                    "rtspUrl": config["inputUri"],
+                    "roi": {"polygon": []},
+                    "frontVehicleClassIds": vehicle_ids,
+                    "captureCooldownSec": 0,
+                }]
             return [{
                 "id": base.get("id", "test-input"),
                 "name": base.get("name", "Test input"),
@@ -87,6 +226,10 @@ class LprRuntime:
         return True
 
     def extract_plate_text(self, obj_meta):
+        labels = self.extract_classifier_labels(obj_meta)
+        return "".join(labels) if labels else "UNKNOWN"
+
+    def extract_classifier_labels(self, obj_meta):
         labels = []
         classifier_meta_list = obj_meta.classifier_meta_list
         while classifier_meta_list is not None:
@@ -98,80 +241,556 @@ class LprRuntime:
                     labels.append(label_info.result_label)
                 label_info_list = label_info_list.next
             classifier_meta_list = classifier_meta_list.next
-        return "".join(labels) if labels else "UNKNOWN"
+        return labels
+
+    def extract_tensor_predictions(self, obj_meta):
+        predictions = []
+        user_meta_list = obj_meta.obj_user_meta_list
+        while user_meta_list is not None:
+            try:
+                user_meta = pyds.NvDsUserMeta.cast(user_meta_list.data)
+                if user_meta.base_meta.meta_type != pyds.NvDsMetaType.NVDSINFER_TENSOR_OUTPUT_META:
+                    user_meta_list = user_meta_list.next
+                    continue
+                tensor_meta = pyds.NvDsInferTensorMeta.cast(user_meta.user_meta_data)
+                component_id = int(tensor_meta.unique_id)
+                labels = self.labels.get(self.component_name(component_id)) or []
+                for layer_index in range(tensor_meta.num_output_layers):
+                    layer = pyds.get_nvds_LayerInfo(tensor_meta, layer_index)
+                    dims = layer.inferDims
+                    count = 1
+                    for dim_index in range(dims.numDims):
+                        count *= int(dims.d[dim_index])
+                    if count <= 0 or count > 10000:
+                        continue
+                    ptr = ctypes.cast(pyds.get_ptr(layer.buffer), ctypes.POINTER(ctypes.c_float))
+                    values = [float(ptr[index]) for index in range(count)]
+                    best_index = max(range(count), key=lambda index: values[index])
+                    predictions.append({
+                        "componentId": component_id,
+                        "component": self.component_name(component_id),
+                        "layer": layer.layerName,
+                        "index": int(best_index),
+                        "label": labels[best_index] if 0 <= best_index < len(labels) else str(best_index),
+                        "score": values[best_index],
+                    })
+            except Exception as exc:
+                predictions.append({"error": str(exc)})
+            user_meta_list = user_meta_list.next
+        return predictions
+
+    def component_name(self, component_id):
+        return self.component_names.get(component_id, f"gie_{component_id}")
+
+    def label_for(self, component_id, class_id):
+        group = self.component_name(component_id)
+        labels = self.labels.get(group) or []
+        if 0 <= class_id < len(labels):
+            return labels[class_id]
+        return str(class_id)
+
+    def parent_object_id(self, obj_meta):
+        try:
+            if obj_meta.parent:
+                parent = pyds.NvDsObjectMeta.cast(obj_meta.parent)
+                return int(parent.object_id)
+        except Exception:
+            return None
+        return None
 
     def save_event(self, event):
         with self.events_file.open("a", encoding="utf-8") as file:
             file.write(json.dumps(event, ensure_ascii=False) + "\n")
 
-    def save_frame(self, gst_buffer, frame_meta, obj_meta, event_id):
-        if cv2 is None or np is None:
+    def draw_box_rgba(self, frame, left, top, right, bottom):
+        height, width = frame.shape[:2]
+        left = max(0, min(width - 1, int(left)))
+        right = max(0, min(width - 1, int(right)))
+        top = max(0, min(height - 1, int(top)))
+        bottom = max(0, min(height - 1, int(bottom)))
+        if right <= left or bottom <= top:
+            return frame
+        color = [0, 255, 0, 255] if frame.shape[2] >= 4 else [0, 255, 0]
+        thickness = 2
+        frame[top:min(bottom + 1, top + thickness), left:right + 1] = color
+        frame[max(top, bottom - thickness + 1):bottom + 1, left:right + 1] = color
+        frame[top:bottom + 1, left:min(right + 1, left + thickness)] = color
+        frame[top:bottom + 1, max(left, right - thickness + 1):right + 1] = color
+        return frame
+
+    def write_bmp(self, path, rgb_frame):
+        height, width = rgb_frame.shape[:2]
+        row_stride = ((width * 3 + 3) // 4) * 4
+        pixel_size = row_stride * height
+        file_size = 14 + 40 + pixel_size
+        with path.open("wb") as file:
+            file.write(b"BM")
+            file.write(struct.pack("<IHHI", file_size, 0, 0, 54))
+            file.write(struct.pack("<IiiHHIIiiII", 40, width, height, 1, 24, 0, pixel_size, 2835, 2835, 0, 0))
+            padding = b"\x00" * (row_stride - width * 3)
+            bgr = rgb_frame[:, :, ::-1]
+            for row in range(height - 1, -1, -1):
+                file.write(bgr[row].astype("uint8").tobytes())
+                if padding:
+                    file.write(padding)
+
+    def save_frame(self, gst_buffer, frame_meta, obj_meta, event_id, stream_config=None):
+        self.last_capture_error = ""
+        if np is None:
+            self.last_capture_error = "numpy is not available in the DeepStream runtime image."
+            print(f"Failed to save frame: {self.last_capture_error}")
             return None
         try:
+            stream_config = stream_config or self.stream_config(int(frame_meta.source_id))
+            camera_id = re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(stream_config.get("id", f"camera-{int(frame_meta.source_id) + 1}"))).strip("-") or "camera"
+            date_dir = time.strftime("%Y-%m-%d", time.localtime())
+            target_dir = self.capture_dir / date_dir / camera_id
+            target_dir.mkdir(parents=True, exist_ok=True)
             surface = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
             frame = np.array(surface, copy=True, order="C")
-            frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
             rect = obj_meta.rect_params
             left = max(0, int(rect.left))
             top = max(0, int(rect.top))
             right = min(frame.shape[1], int(rect.left + rect.width))
             bottom = min(frame.shape[0], int(rect.top + rect.height))
-            cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-            path = self.capture_dir / f"{event_id}.jpg"
-            cv2.imwrite(str(path), frame)
+
+            if cv2 is not None:
+                path = target_dir / f"{event_id}.jpg"
+                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+                ok = cv2.imwrite(str(path), frame_bgr)
+                if not ok:
+                    self.last_capture_error = f"cv2.imwrite returned false for {path}"
+                    print(f"Failed to save frame: {self.last_capture_error}")
+                    return None
+            elif Image is not None:
+                path = target_dir / f"{event_id}.jpg"
+                image = Image.fromarray(frame[:, :, :3], "RGB")
+                image.save(path, format="JPEG", quality=90)
+            else:
+                path = target_dir / f"{event_id}.bmp"
+                self.write_bmp(path, frame[:, :, :3])
             return str(path)
         except Exception as exc:
+            self.last_capture_error = str(exc)
             print(f"Failed to save frame: {exc}")
             return None
 
-    def probe(self, pad, info):
+    def probe(self, pad, info, stage="final"):
         gst_buffer = info.get_buffer()
         if not gst_buffer:
             return Gst.PadProbeReturn.OK
         batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(gst_buffer))
+        if self.test_mode == "image-debug":
+            return self.probe_image_debug(gst_buffer, batch_meta, stage)
         frame_list = batch_meta.frame_meta_list
         while frame_list is not None:
             frame_meta = pyds.NvDsFrameMeta.cast(frame_list.data)
+            self.update_fps(frame_meta)
             source_id = int(frame_meta.source_id)
             stream_config = self.stream_config(source_id)
-            front_class_ids = set(stream_config.get("frontVehicleClassIds", [0]))
+            front_class_ids = self.pgie_vehicle_class_ids or set(stream_config.get("frontVehicleClassIds", [0]))
             roi = stream_config.get("roi", {}).get("polygon", [])
             cooldown_sec = float(stream_config.get("captureCooldownSec", 30))
             obj_list = frame_meta.obj_meta_list
+            objects = []
+            vehicle_metas = {}
             while obj_list is not None:
                 obj_meta = pyds.NvDsObjectMeta.cast(obj_list.data)
-                if obj_meta.unique_component_id == 1 and obj_meta.class_id in front_class_ids:
-                    rect = obj_meta.rect_params
-                    center_x = float(rect.left + rect.width / 2)
-                    center_y = float(rect.top + rect.height / 2)
-                    object_id = int(obj_meta.object_id)
-                    if self.point_in_polygon(roi, center_x, center_y) and self.should_capture(source_id, object_id, cooldown_sec):
-                        event_id = f"{int(time.time())}_{source_id}_{frame_meta.frame_num}_{object_id}"
-                        plate_text = self.extract_plate_text(obj_meta)
-                        image_path = self.save_frame(gst_buffer, frame_meta, obj_meta, event_id)
+                payload = self.object_payload(obj_meta, frame_meta, stage)
+                objects.append(payload)
+                if payload["componentId"] == 1 and payload["classId"] in front_class_ids:
+                    vehicle_metas[payload["objectId"]] = obj_meta
+                obj_list = obj_list.next
+
+            lpr_results, _non_vehicles, _plates, _ocr_objects = self.build_lpr_results(objects, front_class_ids)
+            for result in lpr_results:
+                vehicle = result["vehicle"]
+                object_id = int(vehicle["objectId"])
+                obj_meta = vehicle_metas.get(object_id)
+                if obj_meta is None:
+                    continue
+                roi_point = vehicle.get("footCenter") or vehicle["center"]
+                roi_x = float(roi_point["x"])
+                roi_y = float(roi_point["y"])
+                if not self.point_in_polygon(roi, roi_x, roi_y):
+                    continue
+                if not self.should_capture(source_id, object_id, cooldown_sec):
+                    continue
+
+                event_id = f"{int(time.time())}_{source_id}_{frame_meta.frame_num}_{object_id}"
+                image_path = self.save_frame(gst_buffer, frame_meta, obj_meta, event_id, stream_config)
+                image_relative_path = str(Path(image_path).relative_to(self.runtime_dir)).replace("\\", "/") if image_path else None
+                plate_summaries = self.compact_plate_results(result.get("plates", []))
+                failure = self.lpr_failure(result)
+                event = {
+                    "eventType": "vehicle_capture",
+                    "eventId": event_id,
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "sourceId": source_id,
+                    "cameraId": stream_config.get("id", f"camera-{source_id + 1}"),
+                    "cameraName": stream_config.get("name", f"Camera {source_id + 1}"),
+                    "stream": stream_config.get("rtspUrl"),
+                    "objectId": object_id,
+                    "frameNum": int(frame_meta.frame_num),
+                    "frameWidth": int(frame_meta.source_frame_width),
+                    "frameHeight": int(frame_meta.source_frame_height),
+                    "classId": int(vehicle["classId"]),
+                    "bbox": vehicle["bbox"],
+                    "center": vehicle["center"],
+                    "footCenter": vehicle.get("footCenter"),
+                    "roiPoint": roi_point,
+                    "plateText": result.get("plateText") or "UNKNOWN",
+                    "plateStatus": result.get("plateStatus"),
+                    "plates": plate_summaries,
+                    "failedStage": failure.get("stage"),
+                    "failedModel": failure.get("model"),
+                    "failureReason": failure.get("reason"),
+                    "imagePath": image_path,
+                    "imageRelativePath": image_relative_path,
+                    "imageUrl": f"/runtime/{image_relative_path}" if image_relative_path else None,
+                    "imageSaveError": None if image_path else self.last_capture_error,
+                }
+                print(json.dumps(event, ensure_ascii=False))
+                self.save_event(event)
+            frame_list = frame_list.next
+        return Gst.PadProbeReturn.OK
+
+    def object_payload(self, obj_meta, frame_meta, stage):
+        rect = obj_meta.rect_params
+        component_id = int(obj_meta.unique_component_id)
+        class_id = int(obj_meta.class_id)
+        classifier_labels = self.extract_classifier_labels(obj_meta)
+        tensor_predictions = self.extract_tensor_predictions(obj_meta)
+        tensor_labels = [
+            item["label"] for item in tensor_predictions
+            if item.get("component") == "plate_ocr" and item.get("label")
+        ]
+        plate_labels = classifier_labels + tensor_labels
+        return {
+            "stage": stage,
+            "sourceId": int(frame_meta.source_id),
+            "frameNum": int(frame_meta.frame_num),
+            "componentId": component_id,
+            "component": self.component_name(component_id),
+            "objectId": int(obj_meta.object_id),
+            "parentObjectId": self.parent_object_id(obj_meta),
+            "classId": class_id,
+            "label": self.label_for(component_id, class_id),
+            "confidence": float(obj_meta.confidence),
+            "bbox": {
+                "left": float(rect.left),
+                "top": float(rect.top),
+                "width": float(rect.width),
+                "height": float(rect.height),
+            },
+            "center": {
+                "x": float(rect.left + rect.width / 2),
+                "y": float(rect.top + rect.height / 2),
+            },
+            "footCenter": {
+                "x": float(rect.left + rect.width / 2),
+                "y": float(rect.top + rect.height),
+            },
+            "isVehicle": component_id == 1 and class_id in self.image_test_vehicle_ids,
+            "lprRequested": component_id == 1 and class_id in self.image_test_vehicle_ids,
+            "classifierLabels": classifier_labels,
+            "tensorPredictions": tensor_predictions,
+            "plateText": "".join(plate_labels) if plate_labels else "",
+        }
+
+    def image_detection_key(self, payload):
+        bbox = payload["bbox"]
+        return (
+            payload["stage"],
+            payload["frameNum"],
+            payload["componentId"],
+            payload["classId"],
+            round(bbox["left"], 1),
+            round(bbox["top"], 1),
+            round(bbox["width"], 1),
+            round(bbox["height"], 1),
+        )
+
+    def bbox_contains(self, outer, inner):
+        x = inner["center"]["x"]
+        y = inner["center"]["y"]
+        box = outer["bbox"]
+        return box["left"] <= x <= box["left"] + box["width"] and box["top"] <= y <= box["top"] + box["height"]
+
+    def sorted_character_text(self, characters):
+        if not characters:
+            return "", []
+        sorted_chars = sorted(characters, key=lambda item: item["bbox"]["top"])
+        lines = []
+        for char in sorted_chars:
+            char_anchor = abs((char["bbox"]["top"] + char["bbox"]["height"]) - char.get("plateTop", 0.0))
+            target = None
+            for line in lines:
+                if max(char_anchor, line["anchor"]) and min(char_anchor, line["anchor"]) / max(char_anchor, line["anchor"]) >= 0.8:
+                    target = line
+                    break
+            if target is None:
+                target = {"anchor": char_anchor, "chars": []}
+                lines.append(target)
+            target["chars"].append(char)
+            target["anchor"] = sum(abs((item["bbox"]["top"] + item["bbox"]["height"]) - item.get("plateTop", 0.0)) for item in target["chars"]) / len(target["chars"])
+
+        line_outputs = []
+        for line in sorted(lines, key=lambda item: item["anchor"]):
+            chars = sorted(line["chars"], key=lambda item: item["center"]["x"])
+            text = "".join(item["label"] for item in chars)
+            line_outputs.append({
+                "text": text,
+                "avgY": sum(item["center"]["y"] for item in chars) / len(chars),
+                "chars": chars,
+            })
+        return "".join(line["text"] for line in line_outputs), line_outputs
+
+    def is_valid_license_plate(self, text):
+        if not text:
+            return False
+        plate = re.sub(r"[^0-9A-Z]", "", text.upper().replace("Đ", "D"))
+        patterns = [
+            r"^\d{2}[A-Z]\d{4,5}$",
+            r"^\d{2}[A-Z]{2}\d{5}$",
+            r"^(NG|NN)\d{5}$",
+            r"^[A-Z]{2}\d{4,5}$",
+        ]
+        return any(re.match(pattern, plate) for pattern in patterns)
+
+    def bbox_iou(self, a, b):
+        ax1, ay1 = a["bbox"]["left"], a["bbox"]["top"]
+        ax2, ay2 = ax1 + a["bbox"]["width"], ay1 + a["bbox"]["height"]
+        bx1, by1 = b["bbox"]["left"], b["bbox"]["top"]
+        bx2, by2 = bx1 + b["bbox"]["width"], by1 + b["bbox"]["height"]
+        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+        iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+        inter = iw * ih
+        area_a = max(0.0, a["bbox"]["width"]) * max(0.0, a["bbox"]["height"])
+        area_b = max(0.0, b["bbox"]["width"]) * max(0.0, b["bbox"]["height"])
+        union = area_a + area_b - inter
+        return inter / union if union > 0 else 0.0
+
+    def normalize_char_confidence(self, value):
+        if value is None:
+            return 0.0
+        value = float(value)
+        if value <= 1.0:
+            return value
+        return value / (1.0 + value)
+
+    def filter_plate_characters(self, plate, characters):
+        settings = self.ocr_postprocess
+        plate_box = plate["bbox"]
+        plate_width = max(1.0, plate_box["width"])
+        plate_height = max(1.0, plate_box["height"])
+        filtered = []
+        rejected = []
+        for char in characters:
+            conf = self.normalize_char_confidence(char.get("confidence"))
+            width_ratio = char["bbox"]["width"] / plate_width
+            height_ratio = char["bbox"]["height"] / plate_height
+            reason = ""
+            if not self.bbox_contains(plate, char):
+                reason = "outside_plate"
+            elif conf < settings["minConfidence"]:
+                reason = "low_confidence"
+            elif width_ratio < settings["minWidthRatio"] or width_ratio > settings["maxWidthRatio"]:
+                reason = "bad_width"
+            elif height_ratio < settings["minHeightRatio"] or height_ratio > settings["maxHeightRatio"]:
+                reason = "bad_height"
+            if reason:
+                rejected.append({**char, "normalizedConfidence": conf, "rejectReason": reason})
+                continue
+            filtered.append({**char, "normalizedConfidence": conf, "plateTop": plate_box["top"]})
+
+        kept = []
+        for char in sorted(filtered, key=lambda item: item["normalizedConfidence"], reverse=True):
+            if all(self.bbox_iou(char, item) <= settings["nmsIou"] for item in kept):
+                kept.append(char)
+            else:
+                rejected.append({**char, "rejectReason": "nms_overlap"})
+        kept = sorted(kept, key=lambda item: item["normalizedConfidence"], reverse=True)[:settings["maxChars"]]
+        return kept, rejected
+
+    def compact_plate_results(self, plates):
+        compact = []
+        for plate in plates:
+            compact.append({
+                "objectId": plate.get("objectId"),
+                "parentObjectId": plate.get("parentObjectId"),
+                "classId": plate.get("classId"),
+                "label": plate.get("label"),
+                "confidence": plate.get("confidence"),
+                "bbox": plate.get("bbox"),
+                "rawPlateText": plate.get("rawPlateText", ""),
+                "plateText": plate.get("plateText", ""),
+                "ocrStatus": plate.get("ocrStatus", ""),
+                "rawCharCount": plate.get("rawCharCount", 0),
+                "keptCharCount": plate.get("keptCharCount", 0),
+                "rejectedCharCount": plate.get("rejectedCharCount", 0),
+                "charLines": plate.get("charLines", []),
+            })
+        return compact
+
+    def lpr_failure(self, result):
+        if result.get("plateText"):
+            return {"stage": None, "model": None, "reason": None}
+        plates = result.get("plates") or []
+        if not plates:
+            return {
+                "stage": "sgie-plate",
+                "model": "plate_detector",
+                "reason": "no_plate_detected",
+            }
+        statuses = [plate.get("ocrStatus") for plate in plates if plate.get("ocrStatus")]
+        if any(status == "no_ocr_label" for status in statuses):
+            reason = "no_character_detected"
+        elif any(status == "invalid_plate_format" for status in statuses):
+            reason = "invalid_plate_format"
+        else:
+            reason = statuses[0] if statuses else "ocr_failed"
+        return {
+            "stage": "tgie-character",
+            "model": "plate_ocr",
+            "reason": reason,
+        }
+
+    def build_lpr_results(self, objects, vehicle_class_ids=None):
+        vehicle_class_ids = set(vehicle_class_ids or self.image_test_vehicle_ids)
+        vehicles = [item for item in objects if item["componentId"] == 1 and item["classId"] in vehicle_class_ids]
+        non_vehicles = [item for item in objects if item["componentId"] == 1 and item["classId"] not in vehicle_class_ids]
+        plates = [item for item in objects if item["componentId"] == 2]
+        ocr_objects = [item for item in objects if item["componentId"] == 3]
+        results = []
+        for vehicle in vehicles:
+            vehicle_id = vehicle["objectId"]
+            vehicle_plates = [
+                plate for plate in plates
+                if plate["parentObjectId"] == vehicle_id or (plate["parentObjectId"] is None and self.bbox_contains(vehicle, plate))
+            ]
+            plate_results = []
+            for plate in vehicle_plates:
+                plate_id = plate["objectId"]
+                related_ocr = [
+                    item for item in ocr_objects
+                    if item["parentObjectId"] == plate_id or (item["parentObjectId"] is None and self.bbox_contains(plate, item))
+                ]
+                kept_chars, rejected_chars = self.filter_plate_characters(plate, related_ocr)
+                char_text, char_lines = self.sorted_character_text(kept_chars)
+                valid_plate = self.is_valid_license_plate(char_text)
+                plate_results.append({
+                    **plate,
+                    "ocrObjects": related_ocr,
+                    "charDetections": kept_chars,
+                    "rawCharDetections": related_ocr,
+                    "rejectedCharDetections": rejected_chars[:100],
+                    "rawCharCount": len(related_ocr),
+                    "keptCharCount": len(kept_chars),
+                    "rejectedCharCount": len(rejected_chars),
+                    "topRawCharDetections": sorted(
+                        [
+                            {**item, "normalizedConfidence": self.normalize_char_confidence(item.get("confidence"))}
+                            for item in related_ocr
+                        ],
+                        key=lambda item: item["normalizedConfidence"],
+                        reverse=True,
+                    )[:20],
+                    "charLines": char_lines,
+                    "rawPlateText": char_text,
+                    "plateText": char_text if valid_plate else "",
+                    "ocrStatus": "success" if valid_plate else "invalid_plate_format" if char_text else "no_ocr_label",
+                })
+            results.append({
+                "vehicle": vehicle,
+                "plates": plate_results,
+                "plateStatus": "success" if plate_results else "no_plate_detected",
+                "plateText": " ".join([plate["plateText"] for plate in plate_results if plate["plateText"]]),
+            })
+        return results, non_vehicles, plates, ocr_objects
+
+    def build_image_lpr_results(self, objects):
+        return self.build_lpr_results(objects, self.image_test_vehicle_ids)
+
+    def probe_image_debug(self, gst_buffer, batch_meta, stage):
+        frame_list = batch_meta.frame_meta_list
+        while frame_list is not None:
+            frame_meta = pyds.NvDsFrameMeta.cast(frame_list.data)
+            self.update_fps(frame_meta)
+            source_id = int(frame_meta.source_id)
+            stream_config = self.stream_config(source_id)
+            obj_list = frame_meta.obj_meta_list
+            objects = []
+            while obj_list is not None:
+                obj_meta = pyds.NvDsObjectMeta.cast(obj_list.data)
+                payload = self.object_payload(obj_meta, frame_meta, stage)
+                objects.append(payload)
+                event_key = self.image_detection_key(payload)
+                if stage == "final" and event_key in self.image_debug_seen:
+                    obj_list = obj_list.next
+                    continue
+                self.image_debug_seen.add(event_key)
+                event_id = f"image_test_{stage}_{int(time.time())}_{source_id}_{frame_meta.frame_num}_{len(objects)}"
+                image_path = self.save_frame(gst_buffer, frame_meta, obj_meta, event_id, stream_config)
+                image_relative_path = str(Path(image_path).relative_to(self.runtime_dir)).replace("\\", "/") if image_path else None
+                event = {
+                    "eventType": "image_detection",
+                    "eventId": event_id,
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    **payload,
+                    "imagePath": image_path,
+                    "imageRelativePath": image_relative_path,
+                    "imageUrl": f"/runtime/{image_relative_path}" if image_relative_path else None,
+                    "imageSaveError": None if image_path else self.last_capture_error,
+                }
+                print(json.dumps(event, ensure_ascii=False))
+                self.save_event(event)
+                obj_list = obj_list.next
+            if stage == "final":
+                final_key = (source_id, int(frame_meta.frame_num))
+                if final_key not in self.image_debug_final_frames:
+                    self.image_debug_final_frames.add(final_key)
+                    lpr_results, non_vehicles, plates, ocr_objects = self.build_image_lpr_results(objects)
+                    counts_by_component = {}
+                    for item in objects:
+                        counts_by_component[item["component"]] = counts_by_component.get(item["component"], 0) + 1
+                    summary_event = {
+                        "eventType": "image_frame_summary",
+                        "stage": stage,
+                        "sourceId": source_id,
+                        "frameNum": int(frame_meta.frame_num),
+                        "frameWidth": int(frame_meta.source_frame_width),
+                        "frameHeight": int(frame_meta.source_frame_height),
+                        "objectCount": len(objects),
+                        "countsByComponent": counts_by_component,
+                        "vehicleCount": len(lpr_results),
+                        "nonVehicleCount": len(non_vehicles),
+                        "plateCount": len(plates),
+                        "ocrObjectCount": len(ocr_objects),
+                    }
+                    print(json.dumps(summary_event, ensure_ascii=False))
+                    self.save_event(summary_event)
+                    for result_index, result in enumerate(lpr_results, start=1):
                         event = {
-                            "eventId": event_id,
+                            "eventType": "image_lpr_result",
+                            "eventId": f"image_lpr_{int(time.time())}_{source_id}_{frame_meta.frame_num}_{result_index}",
                             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                             "sourceId": source_id,
-                            "cameraId": stream_config.get("id", f"camera-{source_id + 1}"),
-                            "cameraName": stream_config.get("name", f"Camera {source_id + 1}"),
-                            "stream": stream_config.get("rtspUrl"),
-                            "objectId": object_id,
                             "frameNum": int(frame_meta.frame_num),
-                            "classId": int(obj_meta.class_id),
-                            "bbox": {
-                                "left": float(rect.left),
-                                "top": float(rect.top),
-                                "width": float(rect.width),
-                                "height": float(rect.height),
-                            },
-                            "center": {"x": center_x, "y": center_y},
-                            "plateText": plate_text,
-                            "imagePath": image_path,
+                            **result,
                         }
                         print(json.dumps(event, ensure_ascii=False))
                         self.save_event(event)
-                obj_list = obj_list.next
+                    for item in non_vehicles:
+                        event = {
+                            "eventType": "image_non_vehicle_detection",
+                            "eventId": f"image_non_vehicle_{int(time.time())}_{source_id}_{frame_meta.frame_num}_{item['objectId']}",
+                            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            **item,
+                        }
+                        print(json.dumps(event, ensure_ascii=False))
+                        self.save_event(event)
             frame_list = frame_list.next
         return Gst.PadProbeReturn.OK
 
@@ -183,15 +802,68 @@ def make_element(factory, name):
     return element
 
 
+def link_pad_to_streammux(src_pad, streammux, sink_index):
+    sink_pad = streammux.request_pad_simple(f"sink_{sink_index}")
+    if not sink_pad:
+        raise RuntimeError("Could not get streammux sink pad")
+    if src_pad.link(sink_pad) != Gst.PadLinkReturn.OK:
+        raise RuntimeError("Failed to link source to streammux")
+
+
 def on_decodebin_pad_added(_decodebin, pad, streammux, sink_index):
     caps = pad.get_current_caps()
     if caps and "video" not in caps.to_string():
         return
-    sink_pad = streammux.request_pad_simple(f"sink_{sink_index}")
-    if not sink_pad:
-        raise RuntimeError("Could not get streammux sink pad")
-    if pad.link(sink_pad) != Gst.PadLinkReturn.OK:
-        raise RuntimeError("Failed to link decodebin to streammux")
+    link_pad_to_streammux(pad, streammux, sink_index)
+
+
+def file_uri_path(input_uri):
+    parsed = urlparse(input_uri)
+    if parsed.scheme != "file":
+        return None
+    return Path(unquote(parsed.path))
+
+
+def is_jpeg_uri(input_uri):
+    path = file_uri_path(input_uri)
+    return path is not None and path.suffix.lower() in {".jpg", ".jpeg"}
+
+
+def create_uri_source(input_uri, index):
+    source = make_element("uridecodebin", f"input-source-{index}")
+    source.set_property("uri", input_uri)
+    return [source], source, "dynamic"
+
+
+def create_jpeg_source(input_uri, index):
+    path = file_uri_path(input_uri)
+    if not path:
+        raise RuntimeError(f"Invalid JPEG test URI: {input_uri}")
+    source = make_element("filesrc", f"jpeg-source-{index}")
+    decoder = make_element("jpegdec", f"jpeg-decoder-{index}")
+    convert = make_element("videoconvert", f"jpeg-convert-{index}")
+    nvconvert = make_element("nvvideoconvert", f"jpeg-nvconvert-{index}")
+    capsfilter = make_element("capsfilter", f"jpeg-caps-{index}")
+    source.set_property("location", str(path))
+    capsfilter.set_property("caps", Gst.Caps.from_string("video/x-raw(memory:NVMM),format=NV12"))
+    return [source, decoder, convert, nvconvert, capsfilter], capsfilter, "static"
+
+
+def model_ready(config, group):
+    model = config.get("models", {}).get(group, {})
+    return bool(model.get("engine") or model.get("onnx"))
+
+
+def runtime_stages(config):
+    stages = config.get("pipelineStages") or [
+        {"id": "pgie", "name": "vehicle-front-detector", "modelGroup": "vehicle_front", "gieId": 1, "configFile": "/workspace/deepstream-lpr-app/runtime/generated/config_infer_vehicle_front.txt", "enabled": True},
+        {"id": "sgie-plate", "name": "plate-detector", "modelGroup": "plate_detector", "gieId": 2, "configFile": "/workspace/deepstream-lpr-app/runtime/generated/config_infer_plate_detector.txt", "enabled": True},
+        {"id": "tgie-character", "name": "plate-ocr", "modelGroup": "plate_ocr", "gieId": 3, "configFile": "/workspace/deepstream-lpr-app/runtime/generated/config_infer_plate_ocr.txt", "enabled": True},
+    ]
+    return [
+        stage for stage in stages
+        if stage.get("enabled", True) and stage.get("ready", True) and model_ready(config, stage.get("modelGroup", ""))
+    ]
 
 
 def build_pipeline(runtime):
@@ -199,19 +871,25 @@ def build_pipeline(runtime):
     input_uris = [item.get("rtspUrl") for item in runtime.streams if item.get("rtspUrl")]
     if not input_uris:
         raise RuntimeError("No input streams configured")
+    stages = runtime_stages(config)
+    if not stages:
+        raise RuntimeError("No runnable inference stage is configured")
+    use_tracker = runtime.test_mode != "image-debug"
+
     Gst.init(None)
     pipeline = Gst.Pipeline.new("deepstream-lpr-pipeline")
-    sources = []
+    source_chains = []
     for index, input_uri in enumerate(input_uris):
-        source = make_element("uridecodebin", f"input-source-{index}")
-        source.set_property("uri", input_uri)
-        sources.append(source)
+        source_chains.append(create_jpeg_source(input_uri, index) if is_jpeg_uri(input_uri) else create_uri_source(input_uri, index))
     streammux = make_element("nvstreammux", "streammux")
-    pgie = make_element("nvinfer", "vehicle-front-detector")
-    tracker = make_element("nvtracker", "tracker")
-    plate_sgie = make_element("nvinfer", "plate-detector")
-    ocr_sgie = make_element("nvinfer", "plate-ocr")
+    infer_elements = []
+    for index, stage in enumerate(stages):
+        element = make_element("nvinfer", re.sub(r"[^a-zA-Z0-9_-]+", "-", stage.get("id", f"gie-{index + 1}")))
+        element.set_property("config-file-path", str(stage.get("configFile") or runtime.runtime_dir / "generated" / f"config_infer_{stage.get('id', f'gie-{index + 1}')}.txt"))
+        infer_elements.append(element)
+    tracker = make_element("nvtracker", "tracker") if use_tracker else None
     conv = make_element("nvvideoconvert", "converter")
+    capsfilter = make_element("capsfilter", "rgba-caps")
     osd = make_element("nvdsosd", "onscreendisplay")
     sink = make_element("fakesink", "sink")
 
@@ -220,21 +898,51 @@ def build_pipeline(runtime):
     streammux.set_property("height", int(config.get("streamHeight", 1080)))
     streammux.set_property("live-source", 1 if any(uri.lower().startswith("rtsp://") for uri in input_uris) else 0)
     streammux.set_property("batched-push-timeout", 40000)
-    pgie.set_property("config-file-path", str(runtime.runtime_dir / "generated" / "config_infer_vehicle_front.txt"))
-    tracker.set_property("ll-lib-file", config.get("trackerLib", "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so"))
-    tracker.set_property("ll-config-file", str(runtime.runtime_dir / "generated" / "tracker_config.yml"))
-    plate_sgie.set_property("config-file-path", str(runtime.runtime_dir / "generated" / "config_infer_plate_detector.txt"))
-    ocr_sgie.set_property("config-file-path", str(runtime.runtime_dir / "generated" / "config_infer_plate_ocr.txt"))
+    if tracker:
+        tracker.set_property("ll-lib-file", config.get("trackerLib", "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so"))
+        tracker.set_property("ll-config-file", str(runtime.runtime_dir / "generated" / "tracker_config.yml"))
+    capsfilter.set_property("caps", Gst.Caps.from_string("video/x-raw(memory:NVMM),format=RGBA"))
     sink.set_property("sync", False)
 
-    for element in [*sources, streammux, pgie, tracker, plate_sgie, ocr_sgie, conv, osd, sink]:
+    source_elements = [element for chain, _last, _mode in source_chains for element in chain]
+    elements = [*source_elements, streammux]
+    if infer_elements:
+        elements.append(infer_elements[0])
+    if tracker:
+        elements.append(tracker)
+    elements.extend(infer_elements[1:])
+    elements.extend([conv, capsfilter, osd, sink])
+
+    for element in elements:
         pipeline.add(element)
-    for index, source in enumerate(sources):
-        source.connect("pad-added", on_decodebin_pad_added, streammux, index)
-    for left, right in [(streammux, pgie), (pgie, tracker), (tracker, plate_sgie), (plate_sgie, ocr_sgie), (ocr_sgie, conv), (conv, osd), (osd, sink)]:
+    for index, (chain, last, mode) in enumerate(source_chains):
+        if len(chain) > 1:
+            for left, right in zip(chain, chain[1:]):
+                if not left.link(right):
+                    raise RuntimeError(f"Could not link {left.name} -> {right.name}")
+        if mode == "dynamic":
+            chain[0].connect("pad-added", on_decodebin_pad_added, streammux, index)
+        else:
+            src_pad = last.get_static_pad("src")
+            if not src_pad:
+                raise RuntimeError(f"Could not get src pad for {last.name}")
+            link_pad_to_streammux(src_pad, streammux, index)
+
+    chain = [streammux]
+    if infer_elements:
+        chain.append(infer_elements[0])
+    if tracker:
+        chain.append(tracker)
+    chain.extend(infer_elements[1:])
+    chain.extend([conv, capsfilter, osd, sink])
+
+    for left, right in zip(chain, chain[1:]):
         if not left.link(right):
             raise RuntimeError(f"Could not link {left.name} -> {right.name}")
+    if runtime.test_mode == "image-debug" and infer_elements:
+        infer_elements[0].get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, runtime.probe, "vehicle-detect")
     osd.get_static_pad("sink").add_probe(Gst.PadProbeType.BUFFER, runtime.probe)
+    print(f"Pipeline mode: {len(infer_elements)} inference stage(s)")
     return pipeline
 
 
@@ -252,21 +960,33 @@ def main():
     loop = GLib.MainLoop()
     bus = pipeline.get_bus()
     bus.add_signal_watch()
+    had_error = {"value": False}
 
     def on_message(_bus, message):
         if message.type == Gst.MessageType.ERROR:
             err, debug = message.parse_error()
             print(f"ERROR: {err}: {debug}")
+            runtime.write_status("error", f"{err}: {debug}")
+            had_error["value"] = True
             loop.quit()
         elif message.type == Gst.MessageType.EOS:
+            runtime.write_status("eos", "Pipeline reached EOS.")
             loop.quit()
 
     bus.connect("message", on_message)
-    pipeline.set_state(Gst.State.PLAYING)
+    result = pipeline.set_state(Gst.State.PLAYING)
+    if result == Gst.StateChangeReturn.FAILURE:
+        runtime.write_status("error", "Failed to set pipeline to PLAYING.")
+        raise SystemExit(1)
+    runtime.write_status("playing", "DeepStream pipeline started.")
     try:
         loop.run()
     finally:
         pipeline.set_state(Gst.State.NULL)
+        if not had_error["value"]:
+            runtime.write_status("stopped", "Pipeline stopped.")
+    if had_error["value"]:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

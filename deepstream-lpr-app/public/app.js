@@ -1,71 +1,205 @@
-const slots = [
-  "vehicle_front_onnx",
-  "vehicle_front_engine",
-  "vehicle_front_labels",
-  "vehicle_front_custom_lib",
-  "plate_detector_onnx",
-  "plate_detector_engine",
-  "plate_detector_labels",
-  "plate_detector_custom_lib",
-  "plate_ocr_onnx",
-  "plate_ocr_engine",
-  "plate_ocr_labels",
-  "plate_ocr_custom_lib"
-];
-
 const modelBuilderGroups = [
   {
     group: "vehicle_front",
     title: "Vehicle Front Detector",
     subtitle: "Model phat hien dau xe trong ROI.",
+    stageLabel: "PGIE Vehicle",
     defaultTask: "detect",
     defaultClasses: 1,
-    defaultParser: true
+    defaultImgsz: 640,
+    defaultParser: true,
+    defaultGieId: 1,
+    defaultNetworkType: 0,
+    defaultOperateOnGieId: "",
+    defaultOperateOnClassIds: ""
   },
   {
     group: "plate_detector",
     title: "Plate Detector",
     subtitle: "Model phat hien bien so tren dau xe.",
+    stageLabel: "SGIE Plate",
     defaultTask: "detect",
     defaultClasses: 1,
-    defaultParser: true
+    defaultImgsz: 640,
+    defaultParser: true,
+    defaultGieId: 2,
+    defaultNetworkType: 0,
+    defaultOperateOnGieId: 1,
+    defaultOperateOnClassIds: "0"
   },
   {
     group: "plate_ocr",
-    title: "Plate OCR",
-    subtitle: "Model doc ky tu bien so hoac classifier OCR.",
-    defaultTask: "classify",
+    title: "Plate Character Detector",
+    subtitle: "YOLO detect tung ky tu tren bien so, sau do sort theo toa do.",
+    stageLabel: "TGIE Character",
+    defaultTask: "detect",
     defaultClasses: 36,
-    defaultParser: false
+    defaultImgsz: 224,
+    defaultParser: true,
+    defaultGieId: 3,
+    defaultNetworkType: 0,
+    defaultOperateOnGieId: 2,
+    defaultOperateOnClassIds: "0"
   }
 ];
+
+const modelRoleByGroup = Object.fromEntries(modelBuilderGroups.map((item) => [item.group, item]));
 
 const els = {
   streamWidth: document.querySelector("#streamWidth"),
   streamHeight: document.querySelector("#streamHeight"),
   deepstreamImage: document.querySelector("#deepstreamImage"),
+  cameraSettingsTitle: document.querySelector("#cameraSettingsTitle"),
+  cameraSettingId: document.querySelector("#cameraSettingId"),
+  cameraSettingName: document.querySelector("#cameraSettingName"),
+  cameraSettingCooldown: document.querySelector("#cameraSettingCooldown"),
+  cameraSettingRtsp: document.querySelector("#cameraSettingRtsp"),
+  cameraSettingClassIds: document.querySelector("#cameraSettingClassIds"),
+  cameraSettingEnabled: document.querySelector("#cameraSettingEnabled"),
+  cameraSettingRoi: document.querySelector("#cameraSettingRoi"),
+  cameraEditingIndex: document.querySelector("#cameraEditingIndex"),
+  cameraSettingConnection: document.querySelector("#cameraSettingConnection"),
+  cameraSettingRoiSummary: document.querySelector("#cameraSettingRoiSummary"),
+  cameraSettingFrameSize: document.querySelector("#cameraSettingFrameSize"),
+  cameraSettingRoiSlot: document.querySelector("#cameraSettingRoiSlot"),
+  checkCameraSettingBtn: document.querySelector("#checkCameraSettingBtn"),
+  openCameraSettingRoiBtn: document.querySelector("#openCameraSettingRoiBtn"),
+  newCameraBtn: document.querySelector("#newCameraBtn"),
   cameraList: document.querySelector("#cameraList"),
   addCameraBtn: document.querySelector("#addCameraBtn"),
-  uploads: document.querySelector("#uploads"),
+  roiToolHome: document.querySelector("#roiToolHome"),
+  roiToolPanel: document.querySelector("#roiToolPanel"),
+  roiToolTitle: document.querySelector("#roiToolTitle"),
+  closeRoiToolBtn: document.querySelector("#closeRoiToolBtn"),
+  roiCameraSelect: document.querySelector("#roiCameraSelect"),
+  roiImageFile: document.querySelector("#roiImageFile"),
+  captureRoiFrameBtn: document.querySelector("#captureRoiFrameBtn"),
+  roiImageSize: document.querySelector("#roiImageSize"),
+  roiCanvas: document.querySelector("#roiCanvas"),
+  roiCanvasEmpty: document.querySelector("#roiCanvasEmpty"),
+  roiPolygonOutput: document.querySelector("#roiPolygonOutput"),
+  undoRoiPointBtn: document.querySelector("#undoRoiPointBtn"),
+  clearRoiBtn: document.querySelector("#clearRoiBtn"),
+  applyRoiBtn: document.querySelector("#applyRoiBtn"),
+  removeRoiBtn: document.querySelector("#removeRoiBtn"),
+  deployAppList: document.querySelector("#deployAppList"),
+  addDeployAppBtn: document.querySelector("#addDeployAppBtn"),
+  refreshDeployPreviewBtn: document.querySelector("#refreshDeployPreviewBtn"),
   modelBuilders: document.querySelector("#modelBuilders"),
+  globalStatus: document.querySelector("#globalStatus"),
   checkpointList: document.querySelector("#checkpointList"),
   output: document.querySelector("#output"),
   saveBtn: document.querySelector("#saveBtn"),
   deployBtn: document.querySelector("#deployBtn"),
   stopBtn: document.querySelector("#stopBtn"),
   eventsBtn: document.querySelector("#eventsBtn"),
+  refreshDeployStatusBtn: document.querySelector("#refreshDeployStatusBtn"),
+  deployStatusCards: document.querySelector("#deployStatusCards"),
   testImageFile: document.querySelector("#testImageFile"),
   testVideoFile: document.querySelector("#testVideoFile"),
   uploadTestImageBtn: document.querySelector("#uploadTestImageBtn"),
   uploadTestVideoBtn: document.querySelector("#uploadTestVideoBtn"),
   runTestImageBtn: document.querySelector("#runTestImageBtn"),
-  runTestVideoBtn: document.querySelector("#runTestVideoBtn")
+  runTestVideoBtn: document.querySelector("#runTestVideoBtn"),
+  testPipelineStages: document.querySelector("#testPipelineStages"),
+  addTestStageBtn: document.querySelector("#addTestStageBtn"),
+  confirmTestFlowBtn: document.querySelector("#confirmTestFlowBtn"),
+  testFlowSummary: document.querySelector("#testFlowSummary"),
+  testResults: document.querySelector("#testResults"),
+  copyOutputBtn: document.querySelector("#copyOutputBtn"),
+  toggleOutputBtn: document.querySelector("#toggleOutputBtn"),
+  ocrMaxChars: document.querySelector("#ocrMaxChars"),
+  ocrMinConfidence: document.querySelector("#ocrMinConfidence"),
+  ocrNmsIou: document.querySelector("#ocrNmsIou"),
+  ocrMinWidthRatio: document.querySelector("#ocrMinWidthRatio"),
+  ocrMaxWidthRatio: document.querySelector("#ocrMaxWidthRatio"),
+  ocrMinHeightRatio: document.querySelector("#ocrMinHeightRatio"),
+  ocrMaxHeightRatio: document.querySelector("#ocrMaxHeightRatio")
 };
 
 let cameraDrafts = [];
+let deployApps = [];
+let deployCaptures = [];
+let confirmedTestPipelineStages = [];
+const roiTool = {
+  image: null,
+  source: "",
+  points: []
+};
+const tasks = new Map();
+const modelFiles = new Map();
+let deployStatusPollTimer = null;
+let deployStatusPollInFlight = false;
 
 function print(value) {
   els.output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+}
+
+async function copyOutput() {
+  await navigator.clipboard.writeText(els.output.textContent || "");
+  setTaskStatus("output", "success", "Output copied.");
+}
+
+function toggleOutput() {
+  const collapsed = els.output.classList.toggle("collapsed");
+  els.toggleOutputBtn.textContent = collapsed ? "Expand" : "Collapse";
+}
+
+function setTaskStatus(id, status, message) {
+  tasks.set(id, { status, message, updatedAt: new Date() });
+  const node = document.querySelector(`[data-task-status="${id}"]`);
+  if (node) {
+    node.className = `task-status ${status}`;
+    node.innerHTML = statusMarkup(status, message);
+  }
+  updateGlobalStatus(id, status, message);
+}
+
+function statusMarkup(status, message) {
+  const label = status === "running" ? "Running"
+    : status === "success" ? "Success"
+    : status === "failed" ? "Failed"
+    : "Idle";
+  return `
+    <span class="status-dot"></span>
+    <strong>${label}</strong>
+    <span>${escapeHtml(message || "Ready.")}</span>
+  `;
+}
+
+function updateGlobalStatus(id, status, message) {
+  if (!els.globalStatus) return;
+  els.globalStatus.className = `task-status ${status}`;
+  els.globalStatus.innerHTML = statusMarkup(status, `${id}: ${message || "Ready."}`);
+}
+
+function setButtonBusy(button, busy, label) {
+  if (!button) return;
+  if (busy) {
+    button.dataset.originalText = button.textContent;
+    button.textContent = label || "Working...";
+    button.disabled = true;
+    button.classList.add("is-busy");
+    return;
+  }
+  button.textContent = button.dataset.originalText || button.textContent;
+  button.disabled = false;
+  button.classList.remove("is-busy");
+}
+
+async function withTask(id, button, busyLabel, action) {
+  setTaskStatus(id, "running", busyLabel || "Working...");
+  setButtonBusy(button, true, busyLabel);
+  try {
+    const result = await action();
+    setTaskStatus(id, "success", "Done.");
+    return result;
+  } catch (error) {
+    setTaskStatus(id, "failed", error.message);
+    throw error;
+  } finally {
+    setButtonBusy(button, false);
+  }
 }
 
 function escapeHtml(value) {
@@ -98,32 +232,83 @@ async function apiText(path) {
   return body;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function formConfig() {
+  const cameras = readCameraCards();
+  const deployProfiles = readDeployApps(cameras);
+  const activeDeployApp = deployProfiles.find((app) => app.active) || deployProfiles[0] || defaultDeployApp(0, cameras);
+  const selectedCameraIds = new Set(activeDeployApp.cameraIds || []);
   return {
-    streams: readCameraCards(),
+    streams: cameras.map((camera) => ({
+      ...camera,
+      enabled: camera.enabled !== false && selectedCameraIds.has(camera.id)
+    })),
     streamWidth: Number(els.streamWidth.value),
     streamHeight: Number(els.streamHeight.value),
-    deepstreamImage: els.deepstreamImage.value.trim()
+    deepstreamImage: els.deepstreamImage.value.trim(),
+    pipelineStages: normalizePipelineStages(activeDeployApp.pipelineStages),
+    selectedModels: selectedModelsFromStages(activeDeployApp.pipelineStages),
+    deployApps: deployProfiles,
+    activeDeployAppId: activeDeployApp.id,
+    ocrPostprocess: readOcrPostprocess()
   };
+}
+
+function readOcrPostprocess() {
+  return {
+    maxChars: Number(els.ocrMaxChars?.value || 12),
+    minConfidence: Number(els.ocrMinConfidence?.value || 0.5),
+    nmsIou: Number(els.ocrNmsIou?.value || 0.5),
+    minWidthRatio: Number(els.ocrMinWidthRatio?.value || 0.01),
+    maxWidthRatio: Number(els.ocrMaxWidthRatio?.value || 0.25),
+    minHeightRatio: Number(els.ocrMinHeightRatio?.value || 0.18),
+    maxHeightRatio: Number(els.ocrMaxHeightRatio?.value || 1.15)
+  };
+}
+
+function selectedModels() {
+  return selectedModelsFromStages(readTestPipelineStages());
+}
+
+function selectedModelsFromStages(stages = []) {
+  return normalizePipelineStages(stages).reduce((acc, stage) => {
+    if (stage.enabled && stage.modelGroup && stage.selectedModel) acc[stage.modelGroup] = stage.selectedModel;
+    return acc;
+  }, {});
+}
+
+function firstStageClassIds(stages = [], modelGroup = "vehicle_front") {
+  const stage = normalizePipelineStages(stages).find((item) => item.enabled && item.modelGroup === modelGroup);
+  return stage?.operateOnClassIds || "";
 }
 
 function builderControl(group, key) {
   return document.querySelector(`[data-builder="${group}"][data-key="${key}"]`);
 }
 
-function buildOptions(group) {
+function buildOptions(group, overrides = {}) {
+  const controlGroup = builderControl(group, "imgsz") ? group : "factory";
   return {
-    imgsz: Number(builderControl(group, "imgsz").value),
-    opset: Number(builderControl(group, "opset").value),
-    task: builderControl(group, "task").value,
-    yoloVersion: builderControl(group, "yoloVersion").value,
-    workspaceMb: Number(builderControl(group, "workspaceMb").value),
-    numClasses: Number(builderControl(group, "numClasses").value),
-    fp16: builderControl(group, "fp16").checked,
-    simplify: builderControl(group, "simplify").checked,
-    dynamic: builderControl(group, "dynamic").checked,
-    buildEngine: builderControl(group, "buildEngine").checked,
-    buildParser: builderControl(group, "buildParser").checked
+    imgsz: Number(builderControl(controlGroup, "imgsz").value),
+    opset: Number(builderControl(controlGroup, "opset").value),
+    task: builderControl(controlGroup, "task").value,
+    yoloVersion: builderControl(controlGroup, "yoloVersion").value,
+    workspaceMb: Number(builderControl(controlGroup, "workspaceMb").value),
+    batchSize: Number(builderControl(controlGroup, "batchSize")?.value || 1),
+    fp16: builderControl(controlGroup, "fp16").checked,
+    simplify: builderControl(controlGroup, "simplify").checked,
+    dynamic: builderControl(controlGroup, "dynamic").checked,
+    buildEngine: builderControl(controlGroup, "buildEngine").checked,
+    engineBuildMethod: builderControl(controlGroup, "engineBuildMethod")?.value || "auto",
+    buildParser: builderControl(controlGroup, "buildParser").checked,
+    forceRebuild: builderControl(controlGroup, "forceRebuild").checked,
+    sourcePath: builderControl(controlGroup, "sourceSelect")?.value || "",
+    modelName: builderControl(controlGroup, "modelName")?.value || "",
+    description: builderControl(controlGroup, "description")?.value || "",
+    ...overrides
   };
 }
 
@@ -133,71 +318,761 @@ function defaultCamera(index = 0) {
     name: `Camera ${index + 1}`,
     rtspUrl: "",
     enabled: true,
-    roi: { polygon: [[100, 100], [900, 100], [900, 700], [100, 700]] },
+    roi: { polygon: [] },
     frontVehicleClassIds: [0],
     captureCooldownSec: 30
   };
 }
 
-function readCameraCards() {
-  return [...document.querySelectorAll("[data-camera-card]")].map((card, index) => ({
-    id: card.querySelector("[data-camera-field='id']").value.trim() || `camera-${index + 1}`,
-    name: card.querySelector("[data-camera-field='name']").value.trim() || `Camera ${index + 1}`,
-    rtspUrl: card.querySelector("[data-camera-field='rtspUrl']").value.trim(),
-    enabled: card.querySelector("[data-camera-field='enabled']").checked,
-    roi: { polygon: JSON.parse(card.querySelector("[data-camera-field='roi']").value) },
-    frontVehicleClassIds: card.querySelector("[data-camera-field='frontVehicleClassIds']").value,
-    captureCooldownSec: Number(card.querySelector("[data-camera-field='captureCooldownSec']").value)
+function parseRoiValue(value) {
+  try {
+    const polygon = JSON.parse(value || "[]");
+    return Array.isArray(polygon) ? polygon : [];
+  } catch {
+    return [];
+  }
+}
+
+function cameraPolygon(camera, index = 0) {
+  const polygon = camera?.roi?.polygon ?? defaultCamera(index).roi.polygon;
+  return Array.isArray(polygon) ? polygon : [];
+}
+
+function roiSummary(polygon = []) {
+  return polygon.length >= 3 ? `${polygon.length} points saved` : "No polygon, full frame";
+}
+
+function frameSizeSummary(cameraId) {
+  const capture = latestCaptureForCamera(cameraId);
+  return capture?.width && capture?.height ? `${capture.width} x ${capture.height}` : "Unknown";
+}
+
+function defaultPipelineStages() {
+  return modelBuilderGroups.map((item, index) => ({
+    id: index === 0 ? "pgie" : index === 1 ? "sgie-plate" : "tgie-character",
+    name: item.stageLabel,
+    modelGroup: item.group,
+    selectedModel: "",
+    enabled: true,
+    gieId: item.defaultGieId,
+    networkType: item.defaultNetworkType,
+    operateOnGieId: item.defaultOperateOnGieId,
+    operateOnClassIds: item.defaultOperateOnClassIds,
+    role: item.group
   }));
 }
 
+function normalizePipelineStages(stages = []) {
+  const input = Array.isArray(stages) && stages.length ? stages : defaultPipelineStages();
+  return input.map((stage, index) => {
+    const role = modelRoleByGroup[stage.modelGroup] || modelBuilderGroups[index] || modelBuilderGroups[0];
+    return {
+      id: String(stage.id || `gie-${index + 1}`).trim() || `gie-${index + 1}`,
+      name: String(stage.name || role.stageLabel || `GIE ${index + 1}`).trim(),
+      modelGroup: String(stage.modelGroup || role.group).trim(),
+      selectedModel: String(stage.selectedModel || "").trim(),
+      enabled: stage.enabled !== false,
+      gieId: Math.max(1, Number(stage.gieId || role.defaultGieId || index + 1)),
+      networkType: Number(stage.networkType ?? role.defaultNetworkType ?? 0),
+      operateOnGieId: stage.operateOnGieId === "" || stage.operateOnGieId === null || stage.operateOnGieId === undefined
+        ? ""
+        : Number(stage.operateOnGieId),
+      operateOnClassIds: String(stage.operateOnClassIds ?? role.defaultOperateOnClassIds ?? ""),
+      role: String(stage.role || stage.modelGroup || role.group)
+    };
+  });
+}
+
+function defaultDeployApp(index = 0, cameras = []) {
+  return {
+    id: `lpr-app-${index + 1}`,
+    name: `LPR App ${index + 1}`,
+    active: index === 0,
+    cameraIds: cameras.filter((camera) => camera.enabled !== false).map((camera) => camera.id),
+    pipelineStages: defaultPipelineStages(),
+    selectedModels: {}
+  };
+}
+
+function readCameraCards() {
+  return cameraDrafts.length ? cameraDrafts.map((camera) => ({
+    ...camera,
+    roi: { polygon: cameraPolygon(camera) }
+  })) : [];
+}
+
+function readCameraSetting() {
+  const editingIndex = els.cameraEditingIndex.value === "" ? "" : Number(els.cameraEditingIndex.value);
+  return {
+    id: els.cameraSettingId.value.trim() || `camera-${cameraDrafts.length + 1}`,
+    name: els.cameraSettingName.value.trim() || `Camera ${cameraDrafts.length + 1}`,
+    rtspUrl: els.cameraSettingRtsp.value.trim(),
+    enabled: els.cameraSettingEnabled.checked,
+    roi: { polygon: parseRoiValue(els.cameraSettingRoi.value) },
+    frontVehicleClassIds: els.cameraSettingClassIds.value,
+    captureCooldownSec: Number(els.cameraSettingCooldown.value || 30),
+    editingIndex
+  };
+}
+
+function fillCameraSetting(camera = defaultCamera(cameraDrafts.length), index = "") {
+  const polygon = cameraPolygon(camera);
+  els.cameraEditingIndex.value = index === "" ? "" : String(index);
+  els.cameraSettingsTitle.textContent = index === "" ? "Add camera" : `Change setting - ${camera.name || camera.id}`;
+  els.addCameraBtn.textContent = index === "" ? "Add camera" : "Update camera";
+  els.cameraSettingId.value = camera.id || `camera-${cameraDrafts.length + 1}`;
+  els.cameraSettingName.value = camera.name || `Camera ${cameraDrafts.length + 1}`;
+  els.cameraSettingRtsp.value = camera.rtspUrl || "";
+  els.cameraSettingEnabled.checked = camera.enabled !== false;
+  els.cameraSettingCooldown.value = camera.captureCooldownSec || 30;
+  els.cameraSettingClassIds.value = Array.isArray(camera.frontVehicleClassIds)
+    ? camera.frontVehicleClassIds.join(",")
+    : camera.frontVehicleClassIds || "0";
+  els.cameraSettingRoi.value = JSON.stringify(polygon);
+  updateCameraSettingStatus();
+}
+
+function resetCameraSetting() {
+  fillCameraSetting(defaultCamera(cameraDrafts.length), "");
+  setCameraSettingConnection("idle", "Not checked");
+  closeRoiTool();
+}
+
+function updateCameraSettingStatus() {
+  const camera = readCameraSetting();
+  els.cameraSettingRoiSummary.innerHTML = `<b>ROI setting</b> ${escapeHtml(roiSummary(camera.roi.polygon))}`;
+  els.cameraSettingFrameSize.innerHTML = `<b>Frame size</b> ${escapeHtml(frameSizeSummary(camera.id))}`;
+}
+
+function setCameraSettingConnection(state, message) {
+  els.cameraSettingConnection.className = `camera-status ${state || ""}`.trim();
+  els.cameraSettingConnection.innerHTML = `<b>Check connection</b> ${escapeHtml(message)}`;
+}
+
+function syncEditedCameraDraft() {
+  const camera = readCameraSetting();
+  const index = camera.editingIndex;
+  delete camera.editingIndex;
+  if (index !== "" && cameraDrafts[index]) cameraDrafts[index] = camera;
+  return camera;
+}
+
 function renderCameras(streams = []) {
-  cameraDrafts = streams.length ? streams : [defaultCamera(0)];
+  if (els.roiToolHome && els.roiToolPanel && els.roiToolPanel.parentElement !== els.roiToolHome) {
+    els.roiToolHome.appendChild(els.roiToolPanel);
+    els.roiToolPanel.classList.add("hidden");
+  }
+  cameraDrafts = streams.length ? streams : [];
+  if (els.cameraEditingIndex.value === "" && cameraDrafts.length && !els.cameraSettingRtsp.value) {
+    fillCameraSetting(defaultCamera(cameraDrafts.length), "");
+  }
   els.cameraList.innerHTML = cameraDrafts.map((camera, index) => `
-    <article class="camera-card" data-camera-card data-camera-index="${index}">
-      <div class="camera-head">
+    <article class="camera-card camera-list-card" data-camera-card data-camera-index="${index}">
+      <div class="model-file-row camera-list-row">
         <div>
-          <h3>${escapeHtml(camera.name || `Camera ${index + 1}`)}</h3>
-          <p>${escapeHtml(camera.id || `camera-${index + 1}`)}</p>
+          <strong>${escapeHtml(camera.name || `Camera ${index + 1}`)}</strong>
+          <span>${escapeHtml(camera.id || `camera-${index + 1}`)} - ${escapeHtml(camera.rtspUrl || "No RTSP URL")}</span>
+          <small>
+            <b class="${camera.enabled !== false ? "built" : "not-built"}">${camera.enabled !== false ? "enabled" : "disabled"}</b>
+            <b>${escapeHtml(camera.captureCooldownSec || 30)}s cooldown</b>
+          </small>
         </div>
-        <label class="inline-check"><input data-camera-field="enabled" type="checkbox" ${camera.enabled !== false ? "checked" : ""} /> Enabled</label>
+        <div class="model-file-actions">
+          <button type="button" data-check-camera="${index}">Check connection</button>
+          <button type="button" class="model-use-button" data-edit-camera="${index}">Change setting</button>
+          <button type="button" data-remove-camera="${index}">Remove</button>
+        </div>
       </div>
-      <div class="grid">
-        <label>Camera ID <input data-camera-field="id" value="${escapeHtml(camera.id || `camera-${index + 1}`)}" /></label>
-        <label>Camera name <input data-camera-field="name" value="${escapeHtml(camera.name || `Camera ${index + 1}`)}" /></label>
-        <label>Cooldown moi xe (giay) <input data-camera-field="captureCooldownSec" type="number" value="${camera.captureCooldownSec || 30}" /></label>
-      </div>
-      <label>RTSP URL <input data-camera-field="rtspUrl" placeholder="rtsp://user:pass@host:554/stream1" value="${escapeHtml(camera.rtspUrl || "")}" /></label>
-      <div class="grid one">
-        <label>ROI polygon JSON <textarea data-camera-field="roi">${escapeHtml(JSON.stringify(camera.roi?.polygon || defaultCamera(index).roi.polygon, null, 2))}</textarea></label>
-      </div>
-      <label>Front vehicle class IDs <input data-camera-field="frontVehicleClassIds" value="${escapeHtml((camera.frontVehicleClassIds || [0]).join(","))}" /></label>
-      <div class="actions inline-actions">
-        <button type="button" data-remove-camera="${index}">Remove camera</button>
+      <div class="camera-meta">
+        <span class="camera-status" data-camera-status="${escapeHtml(camera.id || `camera-${index + 1}`)}"><b>Check connection</b> Not checked</span>
+        <span class="roi-state" data-roi-summary="${escapeHtml(camera.id || `camera-${index + 1}`)}"><b>ROI setting</b> ${escapeHtml(roiSummary(cameraPolygon(camera, index)))}</span>
+        <span class="frame-size-state" data-frame-size="${escapeHtml(camera.id || `camera-${index + 1}`)}"><b>Frame size</b> ${escapeHtml(frameSizeSummary(camera.id || `camera-${index + 1}`))}</span>
       </div>
     </article>
   `).join("");
+  document.querySelectorAll("[data-edit-camera]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const index = Number(button.dataset.editCamera);
+      fillCameraSetting(cameraDrafts[index], index);
+      document.querySelector("#cameraSettingsPanel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
+  document.querySelectorAll("[data-check-camera]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const index = Number(button.dataset.checkCamera);
+      checkSavedCameraConnection(index, button).catch((error) => print(error.message));
+    });
+  });
   document.querySelectorAll("[data-remove-camera]").forEach((button) => {
     button.addEventListener("click", () => {
       const index = Number(button.dataset.removeCamera);
       const current = readCameraCards();
       current.splice(index, 1);
-      renderCameras(current.length ? current : [defaultCamera(0)]);
+      const editingIndex = els.cameraEditingIndex.value === "" ? "" : Number(els.cameraEditingIndex.value);
+      renderCameras(current);
+      renderDeployApps(readDeployApps(current), current);
+      if (editingIndex === index) resetCameraSetting();
+      else if (editingIndex !== "" && editingIndex > index) els.cameraEditingIndex.value = String(editingIndex - 1);
+      persistConfigAfterCameraChange("Camera removed and saved.", button).catch((error) => print(error.message));
     });
   });
+  syncRoiCameraSelect();
 }
 
 function addCamera() {
   const current = readCameraCards();
-  current.push(defaultCamera(current.length));
+  const camera = readCameraSetting();
+  const index = camera.editingIndex;
+  delete camera.editingIndex;
+  if (index === "") current.push(camera);
+  else current[index] = camera;
   renderCameras(current);
+  resetCameraSetting();
+  renderDeployApps(deployApps, current);
+}
+
+async function persistConfigAfterCameraChange(message, button = null) {
+  const result = await withTask("config", button, "Saving...", async () => {
+    return await api("/api/config", { method: "PUT", body: JSON.stringify(formConfig()) });
+  });
+  setTaskStatus("config", "success", message);
+  print({ message, streams: result.streams || [] });
+  return result;
+}
+
+function readDeployApps(cameras = readCameraCards()) {
+  const cameraIds = new Set(cameras.map((camera) => camera.id));
+  const cards = [...document.querySelectorAll("[data-deploy-app-card]")];
+  if (!cards.length) return [defaultDeployApp(0, cameras)];
+  let apps = cards.map((card, index) => {
+    const id = card.dataset.deployAppId || `lpr-app-${index + 1}`;
+    const cameraSelections = [...card.querySelectorAll("[data-deploy-camera]:checked")]
+      .map((input) => input.value)
+      .filter((cameraId) => cameraIds.has(cameraId));
+    const pipelineStages = readPipelineStages(card.querySelector("[data-deploy-stage-list]"));
+    return {
+      id,
+      name: card.querySelector("[data-deploy-field='name']").value.trim() || `LPR App ${index + 1}`,
+      active: card.querySelector("[data-deploy-active]")?.checked || false,
+      cameraIds: cameraSelections,
+      pipelineStages,
+      selectedModels: selectedModelsFromStages(pipelineStages)
+    };
+  });
+  if (!apps.some((app) => app.active)) apps[0].active = true;
+  apps = apps.map((app, index) => ({ ...app, active: index === apps.findIndex((item) => item.active) }));
+  return apps;
+}
+
+function renderDeployApps(apps = [], cameras = readCameraCards()) {
+  if (!els.deployAppList) return;
+  const normalizedCameras = cameras;
+  const existing = apps.length ? apps : deployApps;
+  deployApps = (existing.length ? existing : [defaultDeployApp(0, normalizedCameras)]).map((app, index) => ({
+    ...defaultDeployApp(index, normalizedCameras),
+    ...app,
+    active: app.active || (!existing.some((item) => item.active) && index === 0),
+    cameraIds: Array.isArray(app.cameraIds) && app.cameraIds.length ? app.cameraIds : defaultDeployApp(index, normalizedCameras).cameraIds,
+    pipelineStages: normalizePipelineStages(app.pipelineStages || stagesFromSelectedModels(app.selectedModels)),
+    selectedModels: selectedModelsFromStages(app.pipelineStages || stagesFromSelectedModels(app.selectedModels))
+  }));
+  if (!deployApps.some((app) => app.active)) deployApps[0].active = true;
+  const activeIndex = deployApps.findIndex((app) => app.active);
+  deployApps = deployApps.map((app, index) => ({ ...app, active: index === activeIndex }));
+
+  els.deployAppList.innerHTML = deployApps.map((app, index) => renderDeployAppCard(app, index, normalizedCameras)).join("");
+  hydrateStageControls(els.deployAppList);
+  updateModelSelects();
+  attachDeployAppHandlers();
+  attachDeployPreviewImageHandlers();
+  bindStageActions(els.deployAppList, () => renderDeployApps(readDeployApps(), readCameraCards()));
+}
+
+function renderDeployAppCard(app, index, cameras) {
+  const selectedCameraIds = new Set(app.cameraIds || []);
+  const selectedCameras = cameras.filter((camera) => selectedCameraIds.has(camera.id));
+  return `
+    <article class="deploy-app-card" data-deploy-app-card data-deploy-app-id="${escapeHtml(app.id)}">
+      <div class="deploy-app-head">
+        <label class="inline-check">
+          <input data-deploy-active type="radio" name="activeDeployApp" ${app.active ? "checked" : ""} />
+          Active
+        </label>
+        <label>App name <input data-deploy-field="name" value="${escapeHtml(app.name || `LPR App ${index + 1}`)}" /></label>
+        <div class="actions inline-actions">
+          <button type="button" data-remove-deploy-app="${index}" ${deployApps.length <= 1 ? "disabled" : ""}>Remove app</button>
+        </div>
+      </div>
+      <div class="stage-section-head">
+        <strong>Inference stages</strong>
+        <button type="button" class="secondary" data-add-deploy-stage="${index}">Add stage</button>
+      </div>
+      <div class="pipeline-stage-list" data-deploy-stage-list data-deploy-stage-owner="${index}">
+        ${stageRowsMarkup(app.pipelineStages)}
+      </div>
+      <div class="deploy-camera-picker">
+        ${cameras.map((camera) => `
+          <label class="inline-check deploy-camera-option">
+            <input data-deploy-camera type="checkbox" value="${escapeHtml(camera.id)}" ${selectedCameraIds.has(camera.id) ? "checked" : ""} />
+            ${escapeHtml(camera.name || camera.id)}
+          </label>
+        `).join("")}
+      </div>
+      <div class="deploy-preview-grid">
+        ${selectedCameras.length ? selectedCameras.map((camera) => renderDeployCameraPreview(camera)).join("") : '<div class="empty">Chon it nhat mot camera cho app nay.</div>'}
+      </div>
+    </article>
+  `;
+}
+
+function latestCaptureForCamera(cameraId) {
+  return deployCaptures.find((capture) => capture.cameraId === cameraId);
+}
+
+function renderDeployCameraPreview(camera) {
+  const polygon = Array.isArray(camera.roi?.polygon) ? camera.roi.polygon : [];
+  const capture = latestCaptureForCamera(camera.id);
+  const points = polygon.map((point) => point.join(",")).join(" ");
+  return `
+    <article class="deploy-camera-preview" data-deploy-preview-camera="${escapeHtml(camera.id)}">
+      <div class="deploy-preview-head">
+        <strong>${escapeHtml(camera.name || camera.id)}</strong>
+        <button type="button" data-capture-deploy-sample="${escapeHtml(camera.id)}">Capture sample</button>
+      </div>
+      ${capture ? `
+        <div class="deploy-preview-image">
+          <img src="${escapeHtml(capture.url)}" alt="${escapeHtml(camera.name || camera.id)} sample" data-preview-image />
+          <svg data-preview-svg preserveAspectRatio="none">
+            ${polygon.length >= 3 ? `<polygon points="${escapeHtml(points)}"></polygon>` : ""}
+          </svg>
+        </div>
+        <small>${escapeHtml(new Date(capture.updatedAt || capture.createdAt).toLocaleString())} - ${escapeHtml(roiSummary(polygon))}</small>
+      ` : `<div class="empty">Chua co frame mau. Bam Capture sample de lay anh tu camera.</div>`}
+    </article>
+  `;
+}
+
+function stagesFromSelectedModels(selectedModels = {}) {
+  const stages = defaultPipelineStages();
+  return stages.map((stage) => ({
+    ...stage,
+    selectedModel: selectedModels?.[stage.modelGroup] || stage.selectedModel || ""
+  }));
+}
+
+function stageRowsMarkup(stages = []) {
+  return normalizePipelineStages(stages).map((stage, index) => `
+    <article class="pipeline-stage-row" data-stage-row>
+      <div class="grid">
+        <label>Stage name <input data-stage-field="name" value="${escapeHtml(stage.name)}" /></label>
+        <label>
+          Model role
+          <select data-stage-field="modelGroup" data-selected-value="${escapeHtml(stage.modelGroup)}">
+            ${modelBuilderGroups.map((item) => `<option value="${escapeHtml(item.group)}">${escapeHtml(item.stageLabel)}</option>`).join("")}
+          </select>
+        </label>
+        <label>
+          Source model
+          <select data-stage-field="selectedModel" data-selected-value="${escapeHtml(stage.selectedModel)}"></select>
+        </label>
+      </div>
+      <div class="grid">
+        <label>GIE ID <input data-stage-field="gieId" type="number" value="${escapeHtml(stage.gieId)}" /></label>
+        <label>Operate on GIE ID <input data-stage-field="operateOnGieId" value="${escapeHtml(stage.operateOnGieId)}" placeholder="blank for PGIE" /></label>
+        <label>Selected class IDs <input data-stage-field="operateOnClassIdsText" value="${escapeHtml(stage.operateOnClassIds)}" placeholder="0;1 or blank" /></label>
+      </div>
+      <input data-stage-field="operateOnClassIds" type="hidden" value="${escapeHtml(stage.operateOnClassIds)}" />
+      <div class="stage-label-picker" data-stage-label-picker>
+        <small>Select a source model to load labels.</small>
+      </div>
+      <div class="model-file-actions stage-actions">
+        <label class="inline-check"><input data-stage-field="enabled" type="checkbox" ${stage.enabled ? "checked" : ""} /> Enabled</label>
+        <input data-stage-field="id" type="hidden" value="${escapeHtml(stage.id)}" />
+        <input data-stage-field="role" type="hidden" value="${escapeHtml(stage.role)}" />
+        <input data-stage-field="networkType" type="hidden" value="${escapeHtml(stage.networkType)}" />
+        <button type="button" data-remove-stage="${index}">Remove stage</button>
+      </div>
+    </article>
+  `).join("");
+}
+
+function hydrateStageControls(root = document) {
+  root.querySelectorAll("[data-stage-field='modelGroup']").forEach((select) => {
+    const selected = select.dataset.selectedValue || select.value;
+    select.value = modelBuilderGroups.some((item) => item.group === selected) ? selected : modelBuilderGroups[0].group;
+  });
+  root.querySelectorAll("[data-stage-field='selectedModel']").forEach((select) => {
+    const row = select.closest("[data-stage-row]");
+    const group = row?.querySelector("[data-stage-field='modelGroup']")?.value || modelBuilderGroups[0].group;
+    const current = select.dataset.selectedValue || select.value || "";
+    const files = (modelFiles.get(group) || []).filter((file) => file.built);
+    const hasCurrent = files.some((file) => file.sourceKey === current);
+    select.innerHTML = [
+      '<option value="">Current active model</option>',
+      current && !hasCurrent ? `<option value="${escapeHtml(current)}">${escapeHtml(current)} - loading labels...</option>` : "",
+      ...files.map((file) => `<option value="${escapeHtml(file.sourceKey)}">${escapeHtml(file.displayName || file.name)} - ${escapeHtml(file.task || "detect")}</option>`)
+    ].join("");
+    if (current) select.value = current;
+    select.dataset.selectedValue = current || select.value || "";
+  });
+  hydrateStageLabelPickers(root);
+}
+
+function selectedStageModelFile(row) {
+  const group = row?.querySelector("[data-stage-field='modelGroup']")?.value || "";
+  const select = row?.querySelector("[data-stage-field='selectedModel']");
+  const sourceKey = select?.value || select?.dataset.selectedValue || "";
+  return (modelFiles.get(group) || []).find((file) => file.sourceKey === sourceKey) || null;
+}
+
+function stageRowsIn(root = document) {
+  const rows = [...root.querySelectorAll("[data-stage-row]")];
+  if (root.matches?.("[data-stage-row]")) rows.unshift(root);
+  return rows;
+}
+
+function hydrateStageLabelPickers(root = document) {
+  stageRowsIn(root).forEach((row) => {
+    const picker = row.querySelector("[data-stage-label-picker]");
+    const hidden = row.querySelector("[data-stage-field='operateOnClassIds']");
+    const textInput = row.querySelector("[data-stage-field='operateOnClassIdsText']");
+    if (!picker || !hidden || !textInput) return;
+    const selected = new Set(String(hidden.value || textInput.value || "").split(/[;,]/).map((item) => item.trim()).filter(Boolean));
+    const file = selectedStageModelFile(row);
+    const labels = file?.labels || [];
+    if (!labels.length) {
+      const select = row.querySelector("[data-stage-field='selectedModel']");
+      const sourceKey = select?.value || select?.dataset.selectedValue || "";
+      picker.innerHTML = sourceKey
+        ? '<small>Labels are still loading or missing for this model. Use the class ID input above if needed.</small>'
+        : '<small>Select a source model to load labels.</small>';
+      hidden.value = textInput.value;
+      return;
+    }
+    picker.innerHTML = `
+      <div class="stage-label-head">
+        <strong>Class IDs</strong>
+        <div class="stage-label-tools">
+          <small>${escapeHtml(file.displayName || file.name)} - ${labels.length} labels</small>
+          <button type="button" class="secondary" data-select-all-stage-labels>Select all</button>
+        </div>
+      </div>
+      <div class="stage-label-options">
+        ${labels.map((label, index) => `
+          <label class="class-chip">
+            <input data-stage-class-option type="checkbox" value="${index}" ${selected.has(String(index)) ? "checked" : ""} />
+            <span>${index}: ${escapeHtml(label)}</span>
+          </label>
+        `).join("")}
+      </div>
+    `;
+    picker.querySelectorAll("[data-stage-class-option]").forEach((checkbox) => {
+      checkbox.addEventListener("change", () => {
+        const values = [...picker.querySelectorAll("[data-stage-class-option]:checked")].map((item) => item.value);
+        hidden.value = values.join(";");
+        textInput.value = hidden.value;
+      });
+    });
+    picker.querySelector("[data-select-all-stage-labels]")?.addEventListener("click", () => {
+      picker.querySelectorAll("[data-stage-class-option]").forEach((checkbox) => {
+        checkbox.checked = true;
+      });
+      const values = labels.map((_label, index) => String(index));
+      hidden.value = values.join(";");
+      textInput.value = hidden.value;
+    });
+  });
+}
+
+function readPipelineStages(container) {
+  syncStageClassInputs(container);
+  if (!container) return defaultPipelineStages();
+  const rows = [...container.querySelectorAll("[data-stage-row]")];
+  if (!rows.length) return defaultPipelineStages();
+  return normalizePipelineStages(rows.map((row, index) => {
+    const field = (key) => row.querySelector(`[data-stage-field="${key}"]`);
+    const group = field("modelGroup")?.value || modelBuilderGroups[index]?.group || modelBuilderGroups[0].group;
+    return {
+      id: field("id")?.value || `${group}-${index + 1}`,
+      name: field("name")?.value || modelRoleByGroup[group]?.stageLabel || `GIE ${index + 1}`,
+      modelGroup: group,
+      selectedModel: field("selectedModel")?.value || "",
+      enabled: field("enabled")?.checked !== false,
+      gieId: field("gieId")?.value || index + 1,
+      networkType: field("networkType")?.value || modelRoleByGroup[group]?.defaultNetworkType || 0,
+      operateOnGieId: field("operateOnGieId")?.value || "",
+      operateOnClassIds: field("operateOnClassIds")?.value || "",
+      role: field("role")?.value || group
+    };
+  }));
+}
+
+function syncStageClassInputs(root = document) {
+  stageRowsIn(root).forEach((row) => {
+    const hidden = row.querySelector("[data-stage-field='operateOnClassIds']");
+    const textInput = row.querySelector("[data-stage-field='operateOnClassIdsText']");
+    if (!hidden || !textInput) return;
+    const checked = [...row.querySelectorAll("[data-stage-class-option]:checked")].map((item) => item.value);
+    if (checked.length) {
+      hidden.value = checked.join(";");
+      textInput.value = hidden.value;
+    } else if (textInput.value !== hidden.value) {
+      hidden.value = textInput.value;
+    }
+  });
+}
+
+function addStageRow(list) {
+  if (!list) return;
+  const stages = readPipelineStages(list);
+  const nextIndex = stages.length;
+  stages.push({
+    ...defaultPipelineStages()[Math.min(nextIndex, defaultPipelineStages().length - 1)],
+    id: `gie-${nextIndex + 1}`,
+    name: `GIE ${nextIndex + 1}`,
+    gieId: nextIndex + 1,
+    selectedModel: ""
+  });
+  list.innerHTML = stageRowsMarkup(stages);
+  hydrateStageControls(list);
+}
+
+function renderTestPipelineStages(stages = defaultPipelineStages()) {
+  if (!els.testPipelineStages) return;
+  els.testPipelineStages.innerHTML = stageRowsMarkup(stages);
+  hydrateStageControls(els.testPipelineStages);
+  bindStageActions(els.testPipelineStages);
+}
+
+function readTestPipelineStages() {
+  return readPipelineStages(els.testPipelineStages);
+}
+
+function confirmTestFlow() {
+  confirmedTestPipelineStages = readTestPipelineStages();
+  renderConfirmedTestFlow();
+  setTaskStatus("test-flow", "success", "Test flow confirmed.");
+}
+
+function confirmedOrCurrentTestStages() {
+  if (!confirmedTestPipelineStages.length) confirmTestFlow();
+  return confirmedTestPipelineStages;
+}
+
+function renderConfirmedTestFlow() {
+  if (!els.testFlowSummary) return;
+  if (!confirmedTestPipelineStages.length) {
+    els.testFlowSummary.innerHTML = '<div class="empty">No confirmed test flow yet.</div>';
+    return;
+  }
+  els.testFlowSummary.innerHTML = `
+    <div class="confirmed-flow-head">
+      <strong>Confirmed flow</strong>
+      <small>Image test va video test se dung flow nay.</small>
+    </div>
+    <div class="confirmed-flow-list">
+      ${confirmedTestPipelineStages.map((stage, index) => {
+        const file = (modelFiles.get(stage.modelGroup) || []).find((item) => item.sourceKey === stage.selectedModel);
+        return `
+          <div class="confirmed-flow-step">
+            <b>${index + 1}. ${escapeHtml(stage.name)}</b>
+            <span>${escapeHtml(stage.modelGroup)} / GIE ${escapeHtml(stage.gieId)} / ${escapeHtml(file?.displayName || stage.selectedModel || "current active model")}</span>
+            <small>Operate on GIE: ${escapeHtml(stage.operateOnGieId || "none")} - Classes: ${escapeHtml(stage.operateOnClassIds || "all")}</small>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function bindStageActions(root = document, onChange = null) {
+  root.querySelectorAll("[data-stage-field='modelGroup']").forEach((select) => {
+    select.addEventListener("change", () => {
+      const row = select.closest("[data-stage-row]");
+      const role = modelRoleByGroup[select.value] || modelBuilderGroups[0];
+      const selectedModel = row?.querySelector("[data-stage-field='selectedModel']");
+      const networkType = row?.querySelector("[data-stage-field='networkType']");
+      if (selectedModel) selectedModel.dataset.selectedValue = "";
+      if (networkType) networkType.value = role.defaultNetworkType;
+      hydrateStageControls(row || root);
+      if (onChange) onChange();
+    });
+  });
+  root.querySelectorAll("[data-stage-field='selectedModel']").forEach((select) => {
+    select.addEventListener("change", () => {
+      select.dataset.selectedValue = select.value;
+      const row = select.closest("[data-stage-row]");
+      const hidden = row?.querySelector("[data-stage-field='operateOnClassIds']");
+      const textInput = row?.querySelector("[data-stage-field='operateOnClassIdsText']");
+      if (hidden && textInput && selectedStageModelFile(row)?.labels?.length) {
+        hidden.value = "";
+        textInput.value = "";
+      }
+      hydrateStageLabelPickers(row || root);
+    });
+  });
+  root.querySelectorAll("[data-stage-field='selectedModel']").forEach((select) => {
+    select.addEventListener("input", () => {
+      select.dataset.selectedValue = select.value;
+      hydrateStageLabelPickers(select.closest("[data-stage-row]") || root);
+    });
+  });
+  root.querySelectorAll("[data-stage-field='operateOnClassIdsText']").forEach((input) => {
+    input.addEventListener("input", () => {
+      const hidden = input.closest("[data-stage-row]")?.querySelector("[data-stage-field='operateOnClassIds']");
+      if (hidden) hidden.value = input.value;
+      if (onChange) onChange();
+    });
+  });
+  root.querySelectorAll("[data-remove-stage]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const list = button.closest(".pipeline-stage-list");
+      const stages = readPipelineStages(list);
+      stages.splice(Number(button.dataset.removeStage), 1);
+      list.innerHTML = stageRowsMarkup(stages.length ? stages : defaultPipelineStages());
+      hydrateStageControls(list);
+      bindStageActions(list, onChange);
+      if (onChange) onChange();
+    });
+  });
+}
+
+function attachDeployAppHandlers() {
+  document.querySelectorAll("[data-remove-deploy-app]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const current = readDeployApps();
+      current.splice(Number(button.dataset.removeDeployApp), 1);
+      renderDeployApps(current.length ? current : [defaultDeployApp(0, readCameraCards())]);
+    });
+  });
+  document.querySelectorAll("[data-capture-deploy-sample]").forEach((button) => {
+    button.addEventListener("click", () => captureDeploySample(button.dataset.captureDeploySample, button).catch((error) => print(error.message)));
+  });
+  document.querySelectorAll("[data-add-deploy-stage]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const list = button.closest("[data-deploy-app-card]")?.querySelector("[data-deploy-stage-list]");
+      addStageRow(list);
+      renderDeployApps(readDeployApps(), readCameraCards());
+    });
+  });
+}
+
+function attachDeployPreviewImageHandlers() {
+  document.querySelectorAll("[data-preview-image]").forEach((image) => {
+    const svg = image.parentElement.querySelector("[data-preview-svg]");
+    const updateViewBox = () => {
+      if (!svg || !image.naturalWidth || !image.naturalHeight) return;
+      svg.setAttribute("viewBox", `0 0 ${image.naturalWidth} ${image.naturalHeight}`);
+    };
+    image.addEventListener("load", updateViewBox, { once: true });
+    updateViewBox();
+  });
+}
+
+async function loadDeployCaptures(button = null) {
+  const captures = await withTask("deploy-previews", button, "Loading preview frames...", async () => {
+    return await api("/api/monitor-captures");
+  });
+  deployCaptures = captures || [];
+  updateCameraFrameStatuses();
+  renderDeployApps(readDeployApps(), readCameraCards());
+  return deployCaptures;
+}
+
+async function captureDeploySample(cameraId, button = null) {
+  const camera = readCameraCards().find((item) => item.id === cameraId);
+  if (!camera) return print("Khong tim thay camera de capture sample.");
+  if (!/^rtsps?:\/\//i.test(camera.rtspUrl)) return print("RTSP URL phai bat dau bang rtsp:// hoac rtsps://.");
+  const result = await withTask(`deploy-capture-${cameraId}`, button, "Capturing deploy sample...", async () => {
+    return await api("/api/cameras/capture", {
+      method: "POST",
+      body: JSON.stringify({ rtspUrl: camera.rtspUrl, cameraId: camera.id, cameraName: camera.name })
+    });
+  });
+  deployCaptures = [result.frame, ...deployCaptures.filter((capture) => capture.url !== result.frame.url)];
+  updateCameraFrameStatuses();
+  renderDeployApps(readDeployApps(), readCameraCards());
+  print(result);
+}
+
+function cameraListStatus(cameraId) {
+  return [...document.querySelectorAll("[data-camera-status]")]
+    .find((node) => node.dataset.cameraStatus === cameraId);
+}
+
+function setCameraStatus(cameraId, state, message) {
+  const status = cameraListStatus(cameraId);
+  if (!status) return;
+  status.className = `camera-status ${state || ""}`.trim();
+  status.innerHTML = `<b>Check connection</b> ${escapeHtml(message)}`;
+}
+
+function updateCameraRoiSummary(cameraId, polygon = []) {
+  const summary = [...document.querySelectorAll("[data-roi-summary]")]
+    .find((node) => node.dataset.roiSummary === cameraId);
+  if (summary) summary.innerHTML = `<b>ROI setting</b> ${escapeHtml(roiSummary(polygon))}`;
+}
+
+function updateCameraFrameStatuses() {
+  document.querySelectorAll("[data-frame-size]").forEach((node) => {
+    node.innerHTML = `<b>Frame size</b> ${escapeHtml(frameSizeSummary(node.dataset.frameSize))}`;
+  });
+  updateCameraSettingStatus();
+}
+
+async function checkCameraSettingConnection(button = null) {
+  const camera = readCameraSetting();
+  if (!/^rtsps?:\/\//i.test(camera.rtspUrl)) return print("RTSP URL phai bat dau bang rtsp:// hoac rtsps://.");
+  setCameraSettingConnection("running", "Checking...");
+  setCameraStatus(camera.id, "running", "Checking...");
+  const result = await withTask(`camera-${camera.id}`, button, "Checking camera...", async () => {
+    return await api("/api/cameras/check", {
+      method: "POST",
+      body: JSON.stringify({ rtspUrl: camera.rtspUrl, cameraId: camera.id })
+    });
+  });
+  const state = result.ok === false ? "failed" : "success";
+  const message = result.message || (result.ok === false ? "Offline" : "Online");
+  setCameraSettingConnection(state, message);
+  setCameraStatus(camera.id, state, message);
+  print(result);
+}
+
+async function checkSavedCameraConnection(index, button = null) {
+  const camera = cameraDrafts[index];
+  if (!camera) return print("Khong tim thay camera trong danh sach.");
+  if (!/^rtsps?:\/\//i.test(camera.rtspUrl || "")) return print("RTSP URL phai bat dau bang rtsp:// hoac rtsps://.");
+  setCameraStatus(camera.id, "running", "Checking...");
+  const result = await withTask(`camera-list-${camera.id}`, button, "Checking...", async () => {
+    return await api("/api/cameras/check", {
+      method: "POST",
+      body: JSON.stringify({ rtspUrl: camera.rtspUrl, cameraId: camera.id })
+    });
+  });
+  const state = result.ok === false ? "failed" : "success";
+  const message = result.message || (result.ok === false ? "Offline" : "Online");
+  setCameraStatus(camera.id, state, message);
+  if (readCameraSetting().id === camera.id) setCameraSettingConnection(state, message);
+  print(result);
 }
 
 function renderConfig(config) {
   renderCameras(config.streams || []);
+  renderDeployApps(config.deployApps || [], config.streams || []);
+  confirmedTestPipelineStages = normalizePipelineStages(config.pipelineStages || config.deployApps?.find((app) => app.active)?.pipelineStages || stagesFromSelectedModels(config.selectedModels));
+  renderTestPipelineStages(confirmedTestPipelineStages);
+  renderConfirmedTestFlow();
   els.streamWidth.value = config.streamWidth || 1920;
   els.streamHeight.value = config.streamHeight || 1080;
-  els.deepstreamImage.value = config.deepstreamImage || "nvcr.io/nvidia/deepstream-l4t:7.1-samples";
+  els.deepstreamImage.value = config.deepstreamImage || "camera-monitor-deepstream-runtime:local";
+  const ocr = config.ocrPostprocess || {};
+  if (els.ocrMaxChars) els.ocrMaxChars.value = ocr.maxChars ?? 12;
+  if (els.ocrMinConfidence) els.ocrMinConfidence.value = ocr.minConfidence ?? 0.5;
+  if (els.ocrNmsIou) els.ocrNmsIou.value = ocr.nmsIou ?? 0.5;
+  if (els.ocrMinWidthRatio) els.ocrMinWidthRatio.value = ocr.minWidthRatio ?? 0.01;
+  if (els.ocrMaxWidthRatio) els.ocrMaxWidthRatio.value = ocr.maxWidthRatio ?? 0.25;
+  if (els.ocrMinHeightRatio) els.ocrMinHeightRatio.value = ocr.minHeightRatio ?? 0.18;
+  if (els.ocrMaxHeightRatio) els.ocrMaxHeightRatio.value = ocr.maxHeightRatio ?? 1.15;
   print(config);
 }
 
@@ -220,19 +1095,6 @@ function renderCheckpoints(checkpoints = []) {
   `).join("");
 }
 
-function renderUploads() {
-  els.uploads.innerHTML = slots.map((slot) => `
-    <div class="upload-card">
-      <strong>${slot}</strong>
-      <input type="file" data-slot="${slot}" />
-      <button type="button" data-upload="${slot}">Upload</button>
-    </div>
-  `).join("");
-  document.querySelectorAll("[data-upload]").forEach((button) => {
-    button.addEventListener("click", () => uploadSlot(button.dataset.upload));
-  });
-}
-
 function renderModelBuilders() {
   const taskOptions = ["detect", "auto", "classify", "segment", "pose", "obb"];
   const versionOptions = [
@@ -243,117 +1105,712 @@ function renderModelBuilders() {
     ["yolov12", "YOLOv12"],
     ["yolov13", "YOLOv13"]
   ];
-  els.modelBuilders.innerHTML = modelBuilderGroups.map((item) => `
+  const defaultRole = modelBuilderGroups[0];
+  els.modelBuilders.innerHTML = `
     <article class="model-builder-card">
       <div class="model-builder-head">
         <div>
-          <h3>${escapeHtml(item.title)}</h3>
-          <p>${escapeHtml(item.subtitle)}</p>
+          <h3>Model Builder Factory</h3>
+          <p>Upload source model, dien metadata va build thanh artifact DeepStream co the chon trong flow test/deploy.</p>
         </div>
-        <code>${escapeHtml(item.group)}</code>
+        <code>factory</code>
       </div>
       <div class="grid">
-        <label>Image size <input data-builder="${item.group}" data-key="imgsz" type="number" value="640" /></label>
-        <label>ONNX opset <input data-builder="${item.group}" data-key="opset" type="number" value="17" /></label>
-        <label>TensorRT workspace MB <input data-builder="${item.group}" data-key="workspaceMb" type="number" value="2048" /></label>
+        <label>
+          Model artifact type
+          <select data-builder="factory" data-key="group">
+            ${modelBuilderGroups.map((item) => `<option value="${escapeHtml(item.group)}">${escapeHtml(item.title)} - ${escapeHtml(item.group)}</option>`).join("")}
+          </select>
+        </label>
+        <label>Model name <input data-builder="factory" data-key="modelName" placeholder="vd: yolov8n_vehicle_front_v1" /></label>
+        <label>Description <input data-builder="factory" data-key="description" placeholder="Nguon data, version, ghi chu..." /></label>
+      </div>
+      <div class="grid">
+        <label>Image size <input data-builder="factory" data-key="imgsz" type="number" value="${defaultRole.defaultImgsz || 640}" /></label>
+        <label>ONNX opset <input data-builder="factory" data-key="opset" type="number" value="17" /></label>
+        <label>Build batch size <input data-builder="factory" data-key="batchSize" type="number" value="1" min="1" /></label>
+        <label>TensorRT workspace MB <input data-builder="factory" data-key="workspaceMb" type="number" value="2048" /></label>
       </div>
       <div class="grid">
         <label>
           YOLO task
-          <select data-builder="${item.group}" data-key="task">
-            ${taskOptions.map((task) => `<option value="${task}" ${task === item.defaultTask ? "selected" : ""}>${task}</option>`).join("")}
+          <select data-builder="factory" data-key="task">
+            ${taskOptions.map((task) => `<option value="${task}" ${task === defaultRole.defaultTask ? "selected" : ""}>${task}</option>`).join("")}
           </select>
         </label>
         <label>
           YOLO version
-          <select data-builder="${item.group}" data-key="yoloVersion">
+          <select data-builder="factory" data-key="yoloVersion">
             ${versionOptions.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}
           </select>
         </label>
-        <label>Number of classes <input data-builder="${item.group}" data-key="numClasses" type="number" value="${item.defaultClasses}" min="1" /></label>
+        <label>
+          Engine build
+          <select data-builder="factory" data-key="engineBuildMethod">
+            <option value="auto" selected>Auto</option>
+            <option value="deepstream-runtime">DeepStream runtime</option>
+            <option value="trtexec">trtexec</option>
+            <option value="skip">Skip engine</option>
+          </select>
+        </label>
       </div>
       <div class="grid one">
-        <label>Source .pt/.onnx <input data-builder="${item.group}" data-key="source" type="file" accept=".pt,.onnx" /></label>
+        <label>Source .pt/.onnx <input data-builder="factory" data-key="source" type="file" accept=".pt,.onnx" /></label>
       </div>
+      <label>Source to build <select data-builder="factory" data-key="sourceSelect"></select></label>
       <div class="checks">
-        <label><input data-builder="${item.group}" data-key="fp16" type="checkbox" checked /> FP16 engine</label>
-        <label><input data-builder="${item.group}" data-key="simplify" type="checkbox" checked /> Simplify ONNX</label>
-        <label><input data-builder="${item.group}" data-key="dynamic" type="checkbox" /> Dynamic shape</label>
-        <label><input data-builder="${item.group}" data-key="buildEngine" type="checkbox" checked /> Build TensorRT engine</label>
-        <label><input data-builder="${item.group}" data-key="buildParser" type="checkbox" ${item.defaultParser ? "checked" : ""} /> Build DeepStream-Yolo parser</label>
+        <label><input data-builder="factory" data-key="fp16" type="checkbox" checked /> FP16 engine</label>
+        <label><input data-builder="factory" data-key="simplify" type="checkbox" checked /> Simplify ONNX</label>
+        <label><input data-builder="factory" data-key="dynamic" type="checkbox" /> Dynamic shape</label>
+        <label><input data-builder="factory" data-key="buildEngine" type="checkbox" checked /> Build TensorRT engine</label>
+        <label><input data-builder="factory" data-key="buildParser" type="checkbox" ${defaultRole.defaultParser ? "checked" : ""} /> Build DeepStream-Yolo parser</label>
+        <label><input data-builder="factory" data-key="forceRebuild" type="checkbox" /> Force rebuild</label>
       </div>
       <div class="actions inline-actions">
-        <button type="button" data-upload-source="${item.group}">Upload ${escapeHtml(item.group)}</button>
-        <button type="button" data-build-model="${item.group}">Build ${escapeHtml(item.group)}</button>
-        <button type="button" data-build-log="${item.group}">View log</button>
+        <button type="button" data-upload-factory-source>Upload source</button>
+        <button type="button" data-build-factory-source>Build selected source</button>
+        <button type="button" data-build-log="factory">View selected role log</button>
+        <button type="button" data-refresh-model-files="all">Refresh library</button>
+      </div>
+      <div class="task-status idle" data-task-status="model-factory">
+        ${statusMarkup("idle", "Ready.")}
+      </div>
+      <div class="model-file-list model-library" data-model-library>
+        ${modelBuilderGroups.map((item) => `
+          <section class="model-library-group">
+            <div class="model-library-head">
+              <strong>${escapeHtml(item.title)}</strong>
+              <small>${escapeHtml(item.group)}</small>
+            </div>
+            <div class="model-file-list" data-model-files="${item.group}">
+              <div class="empty">No files loaded.</div>
+            </div>
+          </section>
+        `).join("")}
       </div>
     </article>
-  `).join("");
-  document.querySelectorAll("[data-upload-source]").forEach((button) => {
-    button.addEventListener("click", () => uploadSource(button.dataset.uploadSource).catch((error) => print(error.message)));
+  `;
+  document.querySelector("[data-upload-factory-source]")?.addEventListener("click", (event) => {
+    const group = builderControl("factory", "group").value;
+    uploadSource(group, event.currentTarget).catch((error) => print(error.message));
   });
-  document.querySelectorAll("[data-build-model]").forEach((button) => {
-    button.addEventListener("click", () => buildModel(button.dataset.buildModel).catch((error) => {
+  document.querySelector("[data-build-factory-source]")?.addEventListener("click", (event) => {
+    const group = builderControl("factory", "group").value;
+    buildModel(group, event.currentTarget).catch((error) => {
+      renderCheckpoints(error.body?.checkpoints || []);
+      print(error.message);
+    });
+  });
+  builderControl("factory", "group")?.addEventListener("change", () => {
+    const role = modelRoleByGroup[builderControl("factory", "group").value] || modelBuilderGroups[0];
+    builderControl("factory", "imgsz").value = role.defaultImgsz || 640;
+    builderControl("factory", "task").value = role.defaultTask || "detect";
+    builderControl("factory", "buildParser").checked = Boolean(role.defaultParser);
+    updateModelSelects();
+  });
+  document.querySelectorAll("[data-build-log]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const group = button.dataset.buildLog === "factory" ? builderControl("factory", "group").value : button.dataset.buildLog;
+      viewBuildLog(group).catch((error) => print(error.message));
+    });
+  });
+  document.querySelectorAll("[data-refresh-model-files]").forEach((button) => {
+    button.addEventListener("click", () => loadAllModelFiles(button).catch((error) => print(error.message)));
+  });
+  modelBuilderGroups.forEach((item) => renderModelFiles(item.group, modelFiles.get(item.group) || []));
+  updateModelSelects();
+}
+
+async function uploadSource(group, button = null) {
+  const controlGroup = builderControl(group, "source") ? group : "factory";
+  const sourceInput = builderControl(controlGroup, "source");
+  if (!sourceInput.files.length) return print(`Chon file .pt hoac .onnx cho ${group} truoc khi upload.`);
+  const fileName = sourceInput.files[0].name;
+  const result = await withTask(`model-${group}`, button, `Uploading ${group}...`, async () => {
+    const form = new FormData();
+    form.append("file", sourceInput.files[0]);
+    form.append("modelName", builderControl(controlGroup, "modelName")?.value || "");
+    form.append("description", builderControl(controlGroup, "description")?.value || "");
+    return await api(`/api/model-source/${group}`, { method: "POST", body: form });
+  });
+  setTaskStatus(`model-${group}`, "success", `Uploaded ${fileName}.`);
+  await loadModelFiles(group);
+  const select = builderControl(controlGroup, "sourceSelect");
+  if (select && result.model?.source) select.value = result.model.source;
+  print(result);
+}
+
+function formatBytes(bytes = 0) {
+  const value = Number(bytes) || 0;
+  if (value >= 1024 * 1024 * 1024) return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(2)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${value} B`;
+}
+
+function formatDateTime(value) {
+  if (!value) return "";
+  return new Date(value).toLocaleString();
+}
+
+function renderModelFiles(group, files = []) {
+  const container = document.querySelector(`[data-model-files="${group}"]`);
+  updateModelSelects();
+  if (!container) return;
+  if (!files.length) {
+    container.innerHTML = '<div class="empty">No source model yet.</div>';
+    return;
+  }
+  container.innerHTML = files.map((file) => `
+    <div class="model-file-row">
+      <div>
+        <strong>${escapeHtml(file.displayName || file.name)}</strong>
+        <span>${escapeHtml(formatBytes(file.size))} - ${escapeHtml(formatDateTime(file.updatedAt))}</span>
+        ${file.description ? `<span>${escapeHtml(file.description)}</span>` : ""}
+        <small>
+          <b class="${file.built ? "built" : "not-built"}">${file.built ? "built" : "not built"}</b>
+          ${file.buildStatus ? `<b>${escapeHtml(file.buildStatus)}</b>` : ""}
+          ${file.engineBuildMethod ? `<b>${escapeHtml(file.engineBuildMethod)}</b>` : ""}
+          ${file.deepstreamYoloRef ? `<b>parser ${escapeHtml(file.deepstreamYoloRef.slice(0, 8))}</b>` : ""}
+          ${file.name.toLowerCase().endsWith(".onnx") ? `<b class="${file.labelsUploaded ? "built" : "not-built"}">${file.labelsUploaded ? "labels ok" : "needs labels"}</b>` : ""}
+          ${file.task ? `<b>${escapeHtml(file.task)}</b>` : ""}
+          ${file.roles?.length ? file.roles.map((role) => `<b>${escapeHtml(role)}</b>`).join(" ") : ""}
+        </small>
+      </div>
+      <div class="model-file-actions">
+        ${file.url ? `<a href="${escapeHtml(file.url)}" target="_blank" rel="noreferrer">Source</a>` : ""}
+        ${file.name.toLowerCase().endsWith(".onnx") ? `
+          <label class="inline-file-label">
+            labels.txt
+            <input data-label-file="${escapeHtml(group)}" data-source-key="${escapeHtml(file.sourceKey)}" type="file" accept=".txt" />
+          </label>
+          <button class="model-use-button" type="button" data-upload-labels="${escapeHtml(group)}" data-source-key="${escapeHtml(file.sourceKey)}">
+            Upload labels
+          </button>
+        ` : ""}
+        <button class="model-use-button" type="button" data-select-build-source="${escapeHtml(group)}" data-source-path="${escapeHtml(file.path)}">
+          Use
+        </button>
+        <button class="model-build-button" type="button" data-build-source="${escapeHtml(group)}" data-source-path="${escapeHtml(file.path)}" data-source-name="${escapeHtml(file.name)}" data-built="${file.built ? "1" : "0"}">
+          ${file.built ? "Built" : "Build"}
+        </button>
+        <button type="button" data-delete-model-file="${escapeHtml(group)}" data-file-id="${escapeHtml(file.id)}">
+          Delete
+        </button>
+      </div>
+    </div>
+  `).join("");
+  container.querySelectorAll("[data-select-build-source]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const group = button.dataset.selectBuildSource;
+      const groupSelect = builderControl("factory", "group");
+      if (groupSelect) groupSelect.value = group;
+      updateModelSelects();
+      const select = builderControl("factory", "sourceSelect") || builderControl(group, "sourceSelect");
+      if (select) select.value = button.dataset.sourcePath;
+      setTaskStatus("model-factory", "success", "Source selected.");
+    });
+  });
+  container.querySelectorAll("[data-upload-labels]").forEach((button) => {
+    button.addEventListener("click", () => uploadSourceLabels(button.dataset.uploadLabels, button.dataset.sourceKey, button).catch((error) => print(error.message)));
+  });
+  container.querySelectorAll("[data-build-source]").forEach((button) => {
+    button.addEventListener("click", () => buildModelSource(
+      button.dataset.buildSource,
+      button.dataset.sourcePath,
+      button.dataset.sourceName,
+      button.dataset.built === "1",
+      button
+    ).catch((error) => {
       renderCheckpoints(error.body?.checkpoints || []);
       print(error.message);
     }));
   });
-  document.querySelectorAll("[data-build-log]").forEach((button) => {
-    button.addEventListener("click", () => viewBuildLog(button.dataset.buildLog).catch((error) => print(error.message)));
+  container.querySelectorAll("[data-delete-model-file]").forEach((button) => {
+    button.addEventListener("click", () => deleteModelFile(button.dataset.deleteModelFile, button.dataset.fileId, button).catch((error) => print(error.message)));
+  });
+  updateModelSelects();
+}
+
+async function uploadSourceLabels(group, sourceKey, button = null) {
+  const input = document.querySelector(`[data-label-file="${group}"][data-source-key="${sourceKey}"]`);
+  if (!input?.files?.length) return print("Chon labels.txt truoc khi upload.");
+  const result = await withTask(`model-${group}`, button, `Uploading labels for ${group}...`, async () => {
+    const form = new FormData();
+    form.append("file", input.files[0]);
+    return await api(`/api/model-source/${group}/${encodeURIComponent(sourceKey)}/labels`, { method: "POST", body: form });
+  });
+  modelFiles.set(group, result.files || []);
+  renderModelFiles(group, result.files || []);
+  setTaskStatus(`model-${group}`, "success", `Uploaded ${result.labelCount} labels.`);
+  print(result);
+}
+
+function updateModelSelects() {
+  const byGroup = Object.fromEntries(modelBuilderGroups.map((item) => [item.group, modelFiles.get(item.group) || []]));
+  const factoryGroup = builderControl("factory", "group")?.value || modelBuilderGroups[0].group;
+  const builderSelect = builderControl("factory", "sourceSelect");
+  if (builderSelect) {
+    const current = builderSelect.value;
+    const files = byGroup[factoryGroup] || [];
+    builderSelect.innerHTML = [
+      '<option value="">Select source...</option>',
+      ...files.map((file) => `<option value="${escapeHtml(file.path)}">${escapeHtml(file.displayName || file.name)} - ${file.built ? "built" : "not built"}</option>`)
+    ].join("");
+    if (files.some((file) => file.path === current)) builderSelect.value = current;
+  }
+  hydrateStageControls(document);
+}
+
+async function loadModelFiles(group, button = null) {
+  const result = await withTask(`model-${group}`, button, `Loading ${group} files...`, async () => {
+    return await api(`/api/models/${group}/files`);
+  });
+  modelFiles.set(group, result.files || []);
+  renderModelFiles(group, result.files || []);
+  hydrateStageControls(document);
+  renderConfirmedTestFlow();
+  setTaskStatus(`model-${group}`, "success", `Loaded ${(result.files || []).length} files.`);
+  return result;
+}
+
+async function loadAllModelFiles(button = null) {
+  setButtonBusy(button, true, "Refreshing...");
+  try {
+    await Promise.all(modelBuilderGroups.map((item) => loadModelFiles(item.group).catch((error) => {
+      setTaskStatus(`model-${item.group}`, "failed", error.message);
+    })));
+    setTaskStatus("model-factory", "success", "Library refreshed.");
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+async function deleteModelFile(group, fileId, button = null) {
+  if (!confirm(`Delete selected file from ${group}?`)) return;
+  const result = await withTask(`model-${group}`, button, `Deleting ${group} file...`, async () => {
+    return await api(`/api/models/${group}/files/${encodeURIComponent(fileId)}`, { method: "DELETE" });
+  });
+  modelFiles.set(group, result.files || []);
+  renderModelFiles(group, result.files || []);
+  setTaskStatus(`model-${group}`, "success", "File deleted.");
+  print(result);
+}
+
+function syncRoiCameraSelect() {
+  const camera = readCameraSetting();
+  els.roiCameraSelect.innerHTML = `<option value="setting">${escapeHtml(camera.name)} (${escapeHtml(camera.id)})</option>`;
+  els.roiCameraSelect.value = "setting";
+}
+
+function selectedCameraPolygon() {
+  return parseRoiValue(els.cameraSettingRoi.value || "[]");
+}
+
+function openRoiTool() {
+  syncRoiCameraSelect();
+  const camera = readCameraSetting();
+  if (els.cameraSettingRoiSlot && els.roiToolPanel.parentElement !== els.cameraSettingRoiSlot) {
+    els.cameraSettingRoiSlot.appendChild(els.roiToolPanel);
+  }
+  els.roiToolPanel.classList.remove("hidden");
+  els.roiToolTitle.textContent = `ROI setting - ${camera.name}`;
+  roiTool.points = selectedCameraPolygon();
+  drawRoiTool();
+  updateRoiOutput();
+  els.roiToolPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function closeRoiTool() {
+  els.roiToolPanel.classList.add("hidden");
+}
+
+function getRoiCanvasPoint(event) {
+  const rect = els.roiCanvas.getBoundingClientRect();
+  const scaleX = els.roiCanvas.width / rect.width;
+  const scaleY = els.roiCanvas.height / rect.height;
+  return [
+    clamp(Math.round((event.clientX - rect.left) * scaleX), 0, els.roiCanvas.width),
+    clamp(Math.round((event.clientY - rect.top) * scaleY), 0, els.roiCanvas.height)
+  ];
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function loadRoiImage() {
+  const file = els.roiImageFile.files[0];
+  if (!file) return;
+  const objectUrl = URL.createObjectURL(file);
+  loadRoiImageFromUrl(objectUrl, file.name, true, selectedCameraPolygon());
+}
+
+function loadRoiImageFromUrl(url, label, shouldRevoke = false, initialPoints = []) {
+  const image = new Image();
+  image.onload = () => {
+    if (shouldRevoke) URL.revokeObjectURL(url);
+    roiTool.image = image;
+    roiTool.source = label || url;
+    roiTool.points = Array.isArray(initialPoints) ? initialPoints : [];
+    els.roiCanvas.width = image.naturalWidth;
+    els.roiCanvas.height = image.naturalHeight;
+    els.roiImageSize.value = `${image.naturalWidth} x ${image.naturalHeight}`;
+    drawRoiTool();
+    updateRoiOutput();
+  };
+  image.onerror = () => {
+    print("Khong tai duoc anh ROI.");
+    if (shouldRevoke) URL.revokeObjectURL(url);
+  };
+  image.src = url;
+}
+
+async function captureRoiFrame(button = null) {
+  const camera = readCameraSetting();
+  if (!/^rtsps?:\/\//i.test(camera.rtspUrl)) return print("RTSP URL phai bat dau bang rtsp:// hoac rtsps://.");
+  const result = await withTask("roi-capture", button, "Capturing ROI frame...", async () => {
+    return await api("/api/cameras/capture", {
+      method: "POST",
+      body: JSON.stringify({ rtspUrl: camera.rtspUrl, cameraId: camera.id, cameraName: camera.name })
+    });
+  });
+  const frame = result.frame;
+  deployCaptures = [frame, ...deployCaptures.filter((capture) => capture.url !== frame.url)];
+  updateCameraFrameStatuses();
+  renderDeployApps(readDeployApps(), readCameraCards());
+  loadRoiImageFromUrl(frame.url, `${camera.name} - ${new Date(frame.createdAt).toLocaleString()}`, false, selectedCameraPolygon());
+  print(result);
+}
+
+function drawRoiTool() {
+  const canvas = els.roiCanvas;
+  const context = canvas.getContext("2d");
+  if (!context) return;
+
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  els.roiCanvasEmpty.classList.toggle("hidden", Boolean(roiTool.image));
+  if (!roiTool.image) return;
+
+  context.drawImage(roiTool.image, 0, 0, canvas.width, canvas.height);
+  if (!roiTool.points.length) return;
+
+  context.save();
+  context.strokeStyle = "#22c55e";
+  context.fillStyle = "#22c55e";
+  context.lineWidth = Math.max(2, Math.round(canvas.width / 640));
+  context.beginPath();
+  roiTool.points.forEach(([x, y], index) => {
+    if (index === 0) context.moveTo(x, y);
+    else context.lineTo(x, y);
+  });
+  if (roiTool.points.length >= 3) context.closePath();
+  context.stroke();
+
+  roiTool.points.forEach(([x, y], index) => {
+    context.beginPath();
+    context.arc(x, y, Math.max(4, Math.round(canvas.width / 320)), 0, Math.PI * 2);
+    context.fill();
+    drawRoiPointLabel(context, index + 1, x, y);
+  });
+  context.restore();
+}
+
+function drawRoiPointLabel(context, label, x, y) {
+  const size = Math.max(13, Math.round(els.roiCanvas.width / 90));
+  context.font = `${size}px sans-serif`;
+  const text = String(label);
+  const metrics = context.measureText(text);
+  context.fillStyle = "#22c55e";
+  context.fillRect(x + 7, y + 7, metrics.width + 10, size + 6);
+  context.fillStyle = "#ffffff";
+  context.fillText(text, x + 12, y + size + 7);
+}
+
+function updateRoiOutput() {
+  els.roiPolygonOutput.value = JSON.stringify(roiTool.points, null, 2);
+}
+
+function addRoiPoint(event) {
+  if (!roiTool.image) return print("Capture frame hoac upload anh ROI truoc khi ve polygon.");
+  roiTool.points.push(getRoiCanvasPoint(event));
+  drawRoiTool();
+  updateRoiOutput();
+}
+
+function undoRoiPoint() {
+  roiTool.points.pop();
+  drawRoiTool();
+  updateRoiOutput();
+}
+
+function clearRoiPolygon() {
+  roiTool.points = [];
+  drawRoiTool();
+  updateRoiOutput();
+}
+
+async function saveRoiConfig(message) {
+  const result = await api("/api/config", { method: "PUT", body: JSON.stringify(formConfig()) });
+  renderConfig(result);
+  print(message);
+}
+
+async function applyRoiToCamera() {
+  if (roiTool.points.length < 3) return print("ROI polygon can it nhat 3 diem.");
+  els.cameraSettingRoi.value = JSON.stringify(roiTool.points);
+  const camera = syncEditedCameraDraft();
+  updateCameraSettingStatus();
+  updateCameraRoiSummary(camera.id, roiTool.points);
+  print({
+    message: "Da apply ROI polygon vao camera setting. Bam Add/Update camera de luu vao danh sach.",
+    cameraId: camera.id,
+    cameraName: camera.name,
+    source: roiTool.source,
+    polygon: roiTool.points
   });
 }
 
-async function uploadSlot(slot) {
-  const input = document.querySelector(`[data-slot="${slot}"]`);
-  if (!input.files.length) return print("Chon file truoc khi upload.");
-  const form = new FormData();
-  form.append("file", input.files[0]);
-  const result = await api(`/api/upload/${slot}`, { method: "POST", body: form });
-  print(result);
+async function removeRoiFromCamera() {
+  els.cameraSettingRoi.value = "[]";
+  const camera = syncEditedCameraDraft();
+  roiTool.points = [];
+  updateCameraSettingStatus();
+  updateCameraRoiSummary(camera.id, []);
+  drawRoiTool();
+  updateRoiOutput();
+  print({
+    message: "Da remove ROI polygon khoi camera setting. Bam Add/Update camera de luu vao danh sach.",
+    cameraId: camera.id,
+    cameraName: camera.name,
+    polygon: []
+  });
 }
 
-async function uploadSource(group) {
-  const sourceInput = builderControl(group, "source");
-  if (!sourceInput.files.length) return print(`Chon file .pt hoac .onnx cho ${group} truoc khi upload.`);
-  const form = new FormData();
-  form.append("file", sourceInput.files[0]);
-  const result = await api(`/api/model-source/${group}`, { method: "POST", body: form });
-  print(result);
-}
-
-async function uploadTestMedia(kind) {
+async function uploadTestMedia(kind, button = null) {
   const input = kind === "image" ? els.testImageFile : els.testVideoFile;
   if (!input.files.length) return print(`Chon ${kind} file truoc khi upload.`);
-  const form = new FormData();
-  form.append("file", input.files[0]);
-  const result = await api(`/api/test-media/${kind}`, { method: "POST", body: form });
+  const result = await withTask(`test-${kind}`, button, `Uploading ${kind}...`, async () => {
+    const form = new FormData();
+    form.append("file", input.files[0]);
+    return await api(`/api/test-media/${kind}`, { method: "POST", body: form });
+  });
   print(result);
 }
 
-async function runTestMedia(kind) {
+async function runTestMedia(kind, button = null) {
   renderCheckpoints([
     { order: 1, label: `${kind} test requested`, status: "running", message: `Running ${kind} test...`, durationMs: null }
   ]);
   print(`Running ${kind} test...`);
-  const result = await api(`/api/test/${kind}`, {
-    method: "POST",
-    body: JSON.stringify(formConfig())
+  const result = await withTask(`test-${kind}`, button, `Running ${kind} test...`, async () => {
+    const body = formConfig();
+    body.pipelineStages = confirmedOrCurrentTestStages();
+    body.selectedModels = selectedModelsFromStages(body.pipelineStages);
+    if (kind === "image") {
+      body.testMode = "image-debug";
+      const vehicleClassIds = firstStageClassIds(body.pipelineStages, "vehicle_front");
+      if (vehicleClassIds) body.imageTest = { vehicleClassIds };
+    }
+    return await api(`/api/test/${kind}`, {
+      method: "POST",
+      body: JSON.stringify(body)
+    });
   });
   renderCheckpoints(result.checkpoints || []);
+  renderTestResults(kind, result);
   print(result);
 }
 
-async function buildModel(group) {
+function bboxStyle(bbox, imageWidth, imageHeight) {
+  if (!bbox || !imageWidth || !imageHeight) return "";
+  const left = Math.max(0, Math.min(100, (bbox.left / imageWidth) * 100));
+  const top = Math.max(0, Math.min(100, (bbox.top / imageHeight) * 100));
+  const width = Math.max(0, Math.min(100 - left, (bbox.width / imageWidth) * 100));
+  const height = Math.max(0, Math.min(100 - top, (bbox.height / imageHeight) * 100));
+  return [
+    `left:${left}%`,
+    `top:${top}%`,
+    `width:${width}%`,
+    `height:${height}%`
+  ].join(";");
+}
+
+function bboxId(item) {
+  const bbox = item?.bbox || {};
+  return [
+    item?.component || "",
+    item?.label || "",
+    Number(bbox.left || 0).toFixed(1),
+    Number(bbox.top || 0).toFixed(1),
+    Number(bbox.width || 0).toFixed(1),
+    Number(bbox.height || 0).toFixed(1)
+  ].join("|");
+}
+
+function imageOverlayDetections(events) {
+  const overlays = [];
+  const seen = new Set();
+  function add(item, component = item.component, extra = {}) {
+    if (!item?.bbox) return;
+    const overlay = { ...item, ...extra, component: component || item.component };
+    const id = bboxId(overlay);
+    if (seen.has(id)) return;
+    seen.add(id);
+    overlays.push(overlay);
+  }
+
+  events
+    .filter((event) => event.eventType === "image_detection" && event.stage === "final")
+    .forEach((event) => add(event));
+  events
+    .filter((event) => event.eventType === "image_lpr_result")
+    .forEach((event) => {
+      add(event.vehicle, "vehicle_front");
+      (event.plates || []).forEach((plate) => {
+        add(plate, "plate_detector");
+        (plate.charDetections || plate.ocrObjects || []).forEach((char) => add(char, "plate_ocr"));
+      });
+    });
+  return overlays;
+}
+
+function renderTestResults(kind, result) {
+  const events = result.events || [];
+  if (!els.testResults) return;
+  if (kind === "image") {
+    const summary = [...events].reverse().find((event) => event.eventType === "image_frame_summary") || {};
+    const lprResults = events.filter((event) => event.eventType === "image_lpr_result");
+    const detections = imageOverlayDetections(events);
+    const imageUrl = result.mediaUrl || "/runtime/test-media/image/test_image.jpg";
+    const width = Number(result.mediaWidth || summary.frameWidth || 1920);
+    const height = Number(result.mediaHeight || summary.frameHeight || 1080);
+    els.testResults.innerHTML = `
+      <div class="image-result-layout">
+        <div class="image-preview" data-frame-width="${width}" data-frame-height="${height}">
+          <img src="${escapeHtml(imageUrl)}?t=${Date.now()}" alt="test image" />
+          ${detections
+            .sort((a, b) => (b.bbox?.width || 0) * (b.bbox?.height || 0) - (a.bbox?.width || 0) * (a.bbox?.height || 0))
+            .map((event) => `
+            <div class="bbox ${event.component}" style="${bboxStyle(event.bbox, width, height)}">
+              <span>${escapeHtml(event.label || event.component)} ${(Number(event.confidence || 0) * 100).toFixed(1)}%</span>
+            </div>
+          `).join("")}
+        </div>
+        <div class="result-list">
+          <div class="metric-row">
+            <strong>${summary.vehicleCount || 0}</strong><span>vehicles</span>
+            <strong>${summary.plateCount || 0}</strong><span>plates</span>
+            <strong>${summary.ocrObjectCount || 0}</strong><span>chars</span>
+          </div>
+          ${lprResults.map((event) => `
+            <article class="result-card">
+              <h3>${escapeHtml(event.vehicle?.label || "vehicle")}</h3>
+              <p>Plate status: ${escapeHtml(event.plateStatus || "unknown")}</p>
+              <strong>${escapeHtml(event.plateText || "No plate text")}</strong>
+              ${(event.plates || []).map((plate) => `
+                <small>${escapeHtml(plate.label)} ${(Number(plate.confidence || 0) * 100).toFixed(1)}% ${escapeHtml(plate.plateText || "")} (${plate.keptCharCount || 0}/${plate.rawCharCount || 0} chars kept)</small>
+                <small>Kept: ${escapeHtml((plate.charDetections || []).map((char) => `${char.label}:${Number(char.normalizedConfidence || char.confidence || 0).toFixed(2)}`).join(" "))}</small>
+                <small>Top raw: ${escapeHtml((plate.topRawCharDetections || []).slice(0, 10).map((char) => `${char.label}:${Number(char.normalizedConfidence || char.confidence || 0).toFixed(2)}`).join(" "))}</small>
+              `).join("")}
+            </article>
+          `).join("") || '<div class="empty">No LPR result.</div>'}
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  const vehicleEvents = events.filter((event) => event.eventType === "vehicle_capture" || event.plateText || event.objectId !== undefined);
+  els.testResults.innerHTML = `
+    <div class="result-list">
+      <div class="metric-row">
+        <strong>${vehicleEvents.length}</strong><span>vehicle events</span>
+      </div>
+      ${vehicleEvents.map((event) => `
+        <article class="result-card">
+          <h3>${escapeHtml(event.cameraName || event.cameraId || "video")}</h3>
+          <p>Frame ${escapeHtml(event.frameNum ?? "")} - Object ${escapeHtml(event.objectId ?? "")}</p>
+          <strong>${escapeHtml(event.plateText || "No plate text")}</strong>
+          ${event.imagePath ? `<small>${escapeHtml(event.imagePath)}</small>` : ""}
+        </article>
+      `).join("") || '<div class="empty">No vehicle event detected.</div>'}
+    </div>
+  `;
+}
+
+async function buildModelSource(group, sourcePath, sourceName = "", alreadyBuilt = false, button = null) {
+  const forceRebuild = builderControl(group, "forceRebuild")?.checked || builderControl("factory", "forceRebuild")?.checked || false;
+  if (alreadyBuilt && !forceRebuild) {
+    const message = `${sourceName || "Selected model"} da build roi. Bat Force rebuild neu muon build lai.`;
+    setTaskStatus(`model-${group}`, "success", message);
+    print(message);
+    return;
+  }
+  const groupSelect = builderControl("factory", "group");
+  if (groupSelect) groupSelect.value = group;
+  updateModelSelects();
+  const select = builderControl(group, "sourceSelect") || builderControl("factory", "sourceSelect");
+  if (select) select.value = sourcePath;
+  await buildModel(group, button, { sourcePath, forceRebuild });
+}
+
+async function buildModel(group, button = null, overrides = {}) {
+  const sourcePath = overrides.sourcePath || builderControl(group, "sourceSelect")?.value || builderControl("factory", "sourceSelect")?.value || "";
+  if (!sourcePath) {
+    const message = `Chon source model trong danh sach ${group} truoc khi build.`;
+    setTaskStatus(`model-${group}`, "failed", message);
+    print(message);
+    return;
+  }
+  const matched = (modelFiles.get(group) || []).find((file) => file.path === sourcePath);
+  const forceRebuild = overrides.forceRebuild ?? (builderControl(group, "forceRebuild")?.checked || builderControl("factory", "forceRebuild")?.checked || false);
+  if (matched?.built && !forceRebuild) {
+    const message = `${matched.name} da build roi. Bat Force rebuild neu muon build lai.`;
+    setTaskStatus(`model-${group}`, "success", message);
+    print(message);
+    return;
+  }
   renderCheckpoints([
     { order: 1, label: "Build requested", status: "running", message: `Building ${group}...`, durationMs: null }
   ]);
-  print(`Building ${group}. Viec nay co the mat vai phut tren Jetson...`);
-  const result = await api(`/api/build/${group}`, {
-    method: "POST",
-    body: JSON.stringify(buildOptions(group))
+  print(`Building ${matched?.name || group}. Viec nay co the mat vai phut tren Jetson...`);
+  const result = await withTask(`model-${group}`, button, `Building ${group}...`, async () => {
+    const job = await api(`/api/build/${group}`, {
+      method: "POST",
+      body: JSON.stringify(buildOptions(group, { ...overrides, sourcePath, forceRebuild }))
+    });
+    setTaskStatus(`model-${group}`, "running", `Job ${job.id} started.`);
+    return await pollBuildJob(group, job.id);
   });
-  renderCheckpoints(result.checkpoints || []);
+  renderCheckpoints(result.result?.checkpoints || result.checkpoints || []);
+  setTaskStatus(`model-${group}`, "success", `Build completed for ${group}.`);
   print(result);
+  await loadModelFiles(group);
+}
+
+async function pollBuildJob(group, jobId) {
+  while (true) {
+    await sleep(1000);
+    const job = await api(`/api/jobs/${jobId}`);
+    renderCheckpoints(job.checkpoints || []);
+    if (job.status === "running" || job.status === "queued") {
+      setTaskStatus(`model-${group}`, "running", job.message || `Job ${jobId} is running...`);
+      print({
+        jobId,
+        status: job.status,
+        message: job.message,
+        checkpoints: job.checkpoints
+      });
+      continue;
+    }
+    if (job.status === "failed") {
+      const error = new Error(job.error?.message || job.message || "Build failed.");
+      error.body = { checkpoints: job.checkpoints || [] };
+      throw error;
+    }
+    return job;
+  }
 }
 
 async function viewBuildLog(group) {
@@ -361,7 +1818,9 @@ async function viewBuildLog(group) {
 }
 
 async function saveConfig() {
-  const result = await api("/api/config", { method: "PUT", body: JSON.stringify(formConfig()) });
+  const result = await withTask("config", els.saveBtn, "Saving...", async () => {
+    return await api("/api/config", { method: "PUT", body: JSON.stringify(formConfig()) });
+  });
   renderConfig(result);
 }
 
@@ -370,25 +1829,98 @@ async function deploy() {
     { order: 1, label: "Deploy requested", status: "running", message: "Starting deploy...", durationMs: null }
   ]);
   print("Deploying...");
-  const result = await api("/api/deploy", { method: "POST", body: JSON.stringify(formConfig()) });
+  const result = await withTask("deploy", els.deployBtn, "Deploying...", async () => {
+    return await api("/api/deploy", { method: "POST", body: JSON.stringify(formConfig()) });
+  });
   renderCheckpoints(result.checkpoints || []);
+  await refreshDeployStatus().catch(() => {});
   print(result);
 }
 
 async function stop() {
-  const result = await api("/api/stop", { method: "POST" });
+  const result = await withTask("stop", els.stopBtn, "Stopping...", async () => {
+    return await api("/api/stop", { method: "POST" });
+  });
+  await refreshDeployStatus().catch(() => {});
   print(result);
 }
 
 async function loadEvents() {
-  print(await api("/api/events"));
+  const result = await withTask("events", els.eventsBtn, "Loading events...", async () => {
+    return await api("/api/events");
+  });
+  print(result);
+}
+
+function renderDeployStatus(status = {}) {
+  if (!els.deployStatusCards) return;
+  const container = status.container || {};
+  const deepstream = status.deepstream || {};
+  const sources = deepstream.sources || [];
+  els.deployStatusCards.innerHTML = `
+    <article class="deploy-status-card ${container.running ? "success" : "failed"}">
+      <span>Container</span>
+      <strong>${container.running ? "Running" : container.exists ? "Stopped" : "Missing"}</strong>
+      <small>${escapeHtml(container.name || "deepstream-lpr")} ${escapeHtml(container.status || "")}</small>
+    </article>
+    <article class="deploy-status-card ${deepstream.started ? "success" : "failed"}">
+      <span>DeepStream</span>
+      <strong>${deepstream.started ? "Started" : escapeHtml(deepstream.state || "Unknown")}</strong>
+      <small>${escapeHtml(deepstream.message || "No status file yet.")}</small>
+    </article>
+    ${sources.length ? sources.map((source) => `
+      <article class="deploy-status-card">
+        <span>${escapeHtml(source.cameraName || source.cameraId || `Source ${source.sourceId}`)}</span>
+        <strong>${Number(source.fps || 0).toFixed(2)} FPS</strong>
+        <small>${escapeHtml(source.cameraId || "")} - ${Number(source.frameCount || 0)} frames</small>
+      </article>
+    `).join("") : `
+      <article class="deploy-status-card">
+        <span>Sources</span>
+        <strong>0.00 FPS</strong>
+        <small>No source status yet.</small>
+      </article>
+    `}
+  `;
+}
+
+async function refreshDeployStatus(button = null) {
+  const result = await withTask("deploy-monitor", button, "Refreshing deploy status...", async () => {
+    return await api("/api/deploy/status");
+  });
+  renderDeployStatus(result);
+  print(result);
+  return result;
+}
+
+async function pollDeployStatus() {
+  if (deployStatusPollInFlight || document.hidden) return;
+  deployStatusPollInFlight = true;
+  try {
+    const result = await api("/api/deploy/status");
+    renderDeployStatus(result);
+  } catch {
+    // Keep polling quiet; manual refresh still prints detailed errors.
+  } finally {
+    deployStatusPollInFlight = false;
+  }
+}
+
+function startDeployStatusPolling() {
+  if (deployStatusPollTimer) clearInterval(deployStatusPollTimer);
+  deployStatusPollTimer = setInterval(pollDeployStatus, 1000);
 }
 
 async function init() {
-  renderUploads();
   renderModelBuilders();
   renderCheckpoints();
-  renderConfig(await api("/api/config"));
+  updateRoiOutput();
+  const config = await api("/api/config");
+  await loadAllModelFiles().catch((error) => setTaskStatus("model-factory", "failed", error.message));
+  renderConfig(config);
+  await loadDeployCaptures().catch((error) => setTaskStatus("deploy-previews", "failed", error.message));
+  await refreshDeployStatus().catch(() => {});
+  startDeployStatusPolling();
 }
 
 els.saveBtn.addEventListener("click", () => saveConfig().catch((error) => print(error.message)));
@@ -398,6 +1930,7 @@ els.deployBtn.addEventListener("click", () => deploy().catch((error) => {
 }));
 els.stopBtn.addEventListener("click", () => stop().catch((error) => print(error.message)));
 els.eventsBtn.addEventListener("click", () => loadEvents().catch((error) => print(error.message)));
+els.refreshDeployStatusBtn?.addEventListener("click", () => refreshDeployStatus(els.refreshDeployStatusBtn).catch((error) => print(error.message)));
 els.addCameraBtn.addEventListener("click", () => {
   try {
     addCamera();
@@ -405,14 +1938,65 @@ els.addCameraBtn.addEventListener("click", () => {
     print(error.message);
   }
 });
-els.uploadTestImageBtn.addEventListener("click", () => uploadTestMedia("image").catch((error) => print(error.message)));
-els.uploadTestVideoBtn.addEventListener("click", () => uploadTestMedia("video").catch((error) => print(error.message)));
-els.runTestImageBtn.addEventListener("click", () => runTestMedia("image").catch((error) => {
+els.newCameraBtn.addEventListener("click", resetCameraSetting);
+els.checkCameraSettingBtn.addEventListener("click", () => checkCameraSettingConnection(els.checkCameraSettingBtn).catch((error) => {
+  setCameraSettingConnection("failed", error.message);
+  print(error.message);
+}));
+els.openCameraSettingRoiBtn.addEventListener("click", openRoiTool);
+[
+  els.cameraSettingId,
+  els.cameraSettingName,
+  els.cameraSettingCooldown,
+  els.cameraSettingRtsp,
+  els.cameraSettingClassIds,
+  els.cameraSettingEnabled
+].forEach((input) => input.addEventListener("input", updateCameraSettingStatus));
+els.cameraList.addEventListener("input", syncRoiCameraSelect);
+els.cameraList.addEventListener("change", () => renderDeployApps(readDeployApps(), readCameraCards()));
+els.addDeployAppBtn.addEventListener("click", () => {
+  const current = readDeployApps();
+  current.push(defaultDeployApp(current.length, readCameraCards()));
+  renderDeployApps(current, readCameraCards());
+});
+els.addTestStageBtn.addEventListener("click", () => {
+  addStageRow(els.testPipelineStages);
+  bindStageActions(els.testPipelineStages);
+});
+els.confirmTestFlowBtn.addEventListener("click", confirmTestFlow);
+els.testPipelineStages.addEventListener("change", (event) => {
+  if (!event.target?.matches?.("[data-stage-field='selectedModel']")) return;
+  event.target.dataset.selectedValue = event.target.value;
+  hydrateStageLabelPickers(event.target.closest("[data-stage-row]") || els.testPipelineStages);
+});
+els.refreshDeployPreviewBtn.addEventListener("click", () => loadDeployCaptures(els.refreshDeployPreviewBtn).catch((error) => print(error.message)));
+els.deployAppList.addEventListener("change", (event) => {
+  if (event.target?.matches?.("[data-stage-field='selectedModel']")) {
+    event.target.dataset.selectedValue = event.target.value;
+    hydrateStageLabelPickers(event.target.closest("[data-stage-row]") || els.deployAppList);
+    return;
+  }
+  renderDeployApps(readDeployApps(), readCameraCards());
+});
+els.roiImageFile.addEventListener("change", loadRoiImage);
+els.roiCameraSelect.addEventListener("change", openRoiTool);
+els.captureRoiFrameBtn.addEventListener("click", () => captureRoiFrame(els.captureRoiFrameBtn).catch((error) => print(error.message)));
+els.closeRoiToolBtn.addEventListener("click", closeRoiTool);
+els.roiCanvas.addEventListener("click", addRoiPoint);
+els.undoRoiPointBtn.addEventListener("click", undoRoiPoint);
+els.clearRoiBtn.addEventListener("click", clearRoiPolygon);
+els.applyRoiBtn.addEventListener("click", () => applyRoiToCamera().catch((error) => print(error.message)));
+els.removeRoiBtn.addEventListener("click", () => removeRoiFromCamera().catch((error) => print(error.message)));
+els.uploadTestImageBtn.addEventListener("click", () => uploadTestMedia("image", els.uploadTestImageBtn).catch((error) => print(error.message)));
+els.uploadTestVideoBtn.addEventListener("click", () => uploadTestMedia("video", els.uploadTestVideoBtn).catch((error) => print(error.message)));
+els.runTestImageBtn.addEventListener("click", () => runTestMedia("image", els.runTestImageBtn).catch((error) => {
   renderCheckpoints(error.body?.checkpoints || []);
   print(error.message);
 }));
-els.runTestVideoBtn.addEventListener("click", () => runTestMedia("video").catch((error) => {
+els.runTestVideoBtn.addEventListener("click", () => runTestMedia("video", els.runTestVideoBtn).catch((error) => {
   renderCheckpoints(error.body?.checkpoints || []);
   print(error.message);
 }));
+els.copyOutputBtn.addEventListener("click", () => copyOutput().catch((error) => print(error.message)));
+els.toggleOutputBtn.addEventListener("click", toggleOutput);
 init().catch((error) => print(error.message));

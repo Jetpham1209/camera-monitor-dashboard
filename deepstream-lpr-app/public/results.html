@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DeepStream Results</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell results-page">
+      <header class="results-page-header">
+        <div>
+          <p>DeepStream LPR</p>
+          <h1>DeepStream Results</h1>
+        </div>
+        <a class="button-link secondary" href="/">Back to dashboard</a>
+      </header>
+
+      <section class="panel results-filter-panel">
+        <div class="panel-toolbar">
+          <div>
+            <h2>Result Filters</h2>
+            <p>Chon ngay va source de xem anh capture cua DeepStream runtime.</p>
+          </div>
+          <button id="loadResultsBtn" type="button">Load results</button>
+        </div>
+        <div class="grid">
+          <label>Result date <input id="resultDateFilter" type="date" /></label>
+          <label>Result source <select id="resultSourceFilter"><option value="">All sources</option></select></label>
+          <label>Limit <input id="resultLimit" type="number" min="1" max="500" value="100" /></label>
+        </div>
+        <div id="resultSummary" class="task-status idle">
+          <span class="status-dot"></span><div><strong>Idle</strong> Choose filters and load results.</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div id="deployResults" class="deploy-results-grid">
+          <div class="empty">No runtime results loaded.</div>
+        </div>
+      </section>
+    </main>
+    <script src="/results.js"></script>
+  </body>
+</html>

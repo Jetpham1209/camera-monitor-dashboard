@@ -7,12 +7,12 @@ services:
     privileged: true
     runtime: nvidia
     environment:
-      - DISPLAY=${DISPLAY}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
+      - CUDA_VER=${CUDA_VER}
+      - DEEPSTREAM_VERSION=${DEEPSTREAM_VERSION}
     volumes:
       - ${APP_ROOT}:/workspace/deepstream-lpr-app
-      - /tmp/.X11-unix:/tmp/.X11-unix
     working_dir: /workspace/deepstream-lpr-app
     command: python3 deepstream/deepstream_lpr_app.py --config runtime/config.json
     restart: unless-stopped

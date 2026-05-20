@@ -15,24 +15,113 @@
 
       <section class="panel">
         <h2>Cameras & ROI</h2>
+        <div id="cameraSettingsPanel" class="camera-settings-panel">
+          <div class="panel-toolbar">
+            <div>
+              <h3 id="cameraSettingsTitle">Add camera</h3>
+              <p>Nhap thong tin camera, sau do bam Add camera de dua vao danh sach.</p>
+            </div>
+            <button id="newCameraBtn" type="button" class="secondary">New camera</button>
+          </div>
+          <div class="grid">
+            <label>Camera ID <input id="cameraSettingId" value="camera-1" /></label>
+            <label>Camera name <input id="cameraSettingName" value="Camera 1" /></label>
+            <label>Cooldown moi xe (giay) <input id="cameraSettingCooldown" type="number" value="30" /></label>
+          </div>
+          <label>RTSP URL <input id="cameraSettingRtsp" placeholder="rtsp://user:pass@host:554/stream1" /></label>
+          <div class="grid">
+            <label>Front vehicle class IDs <input id="cameraSettingClassIds" value="0" /></label>
+            <label class="inline-check camera-enabled-setting"><input id="cameraSettingEnabled" type="checkbox" checked /> Enabled</label>
+          </div>
+          <input id="cameraSettingRoi" type="hidden" value="[]" />
+          <input id="cameraEditingIndex" type="hidden" value="" />
+          <div class="camera-meta">
+            <span class="camera-status" id="cameraSettingConnection"><b>Check connection</b> Not checked</span>
+            <span class="roi-state" id="cameraSettingRoiSummary"><b>ROI setting</b> No polygon, full frame</span>
+            <span class="frame-size-state" id="cameraSettingFrameSize"><b>Frame size</b> Unknown</span>
+          </div>
+          <div class="actions inline-actions">
+            <button id="checkCameraSettingBtn" type="button">Check connection</button>
+            <button id="openCameraSettingRoiBtn" type="button">ROI polygon</button>
+            <button id="addCameraBtn" type="button">Add camera</button>
+          </div>
+          <div class="camera-roi-slot" id="cameraSettingRoiSlot"></div>
+        </div>
         <div id="cameraList" class="camera-list"></div>
-        <div class="actions inline-actions">
-          <button id="addCameraBtn" type="button">Add camera</button>
+        <div id="roiToolHome">
+          <div id="roiToolPanel" class="roi-tool-panel hidden">
+            <div class="panel-toolbar">
+              <div>
+                <h3 id="roiToolTitle">ROI setting</h3>
+                <p>Capture mot frame mau cua camera nay, click len anh de tao polygon.</p>
+              </div>
+              <button id="closeRoiToolBtn" type="button" class="secondary">Close</button>
+            </div>
+            <div class="roi-tool-grid">
+              <div>
+                <div class="grid">
+                  <label class="hidden-control">Target camera <select id="roiCameraSelect"></select></label>
+                  <label>Reference image <input id="roiImageFile" type="file" accept=".jpg,.jpeg,.png,.bmp,.webp" /></label>
+                  <label>Image size <input id="roiImageSize" readonly value="No image loaded" /></label>
+                </div>
+                <div class="actions inline-actions roi-source-actions">
+                  <button id="captureRoiFrameBtn" type="button">Capture frame</button>
+                  <button id="undoRoiPointBtn" type="button">Undo point</button>
+                  <button id="clearRoiBtn" type="button">Clear drawing</button>
+                </div>
+                <div class="roi-canvas-wrap">
+                  <canvas id="roiCanvas"></canvas>
+                  <div id="roiCanvasEmpty" class="roi-canvas-empty">Capture frame tu camera hoac upload anh mau de ve ROI polygon.</div>
+                </div>
+              </div>
+              <div class="roi-output-panel">
+                <label>Polygon coordinates JSON <textarea id="roiPolygonOutput" readonly></textarea></label>
+                <div class="actions inline-actions">
+                  <button id="applyRoiBtn" type="button">Apply polygon</button>
+                  <button id="removeRoiBtn" type="button" class="danger">Remove polygon</button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
       <section class="panel">
-        <h2>Runtime Settings</h2>
+        <div class="panel-toolbar">
+          <div>
+            <h2>Deploy Settings</h2>
+            <p>Chon camera, model va app instance se duoc kich hoat khi bam Deploy.</p>
+          </div>
+          <div class="actions inline-actions">
+            <button id="addDeployAppBtn" type="button">Add DeepStream app</button>
+            <button id="refreshDeployPreviewBtn" type="button" class="secondary">Refresh previews</button>
+          </div>
+        </div>
         <div class="grid">
-          <label>Width <input id="streamWidth" type="number" value="1920" /></label>
-          <label>Height <input id="streamHeight" type="number" value="1080" /></label>
+          <label>Runtime width <input id="streamWidth" type="number" value="1920" /></label>
+          <label>Runtime height <input id="streamHeight" type="number" value="1080" /></label>
+          <label>DeepStream Docker image <input id="deepstreamImage" value="camera-monitor-deepstream-runtime:local" /></label>
         </div>
-        <label>DeepStream Docker image <input id="deepstreamImage" value="nvcr.io/nvidia/deepstream-l4t:7.1-samples" /></label>
-      </section>
-
-      <section class="panel">
-        <h2>Model Upload Placeholders</h2>
-        <div id="uploads" class="uploads"></div>
+        <div id="deployAppList" class="deploy-app-list"></div>
+        <div class="actions inline-actions deploy-actions">
+          <button id="saveBtn">Save config</button>
+          <button id="deployBtn">Deploy / Update active app</button>
+          <button id="stopBtn">Stop</button>
+          <button id="eventsBtn">Load events</button>
+        </div>
+        <div class="deploy-monitor">
+          <div class="panel-toolbar">
+            <div>
+              <h3>Deploy Monitor</h3>
+              <p>Theo doi container, trang thai DeepStream, FPS tung source va ket qua capture.</p>
+            </div>
+            <div class="actions inline-actions">
+              <button id="refreshDeployStatusBtn" type="button" class="secondary">Refresh status</button>
+              <a class="button-link secondary" href="/results">View results</a>
+            </div>
+          </div>
+          <div id="deployStatusCards" class="deploy-status-grid"></div>
+        </div>
       </section>
 
       <section class="panel">
@@ -42,10 +131,36 @@
 
       <section class="panel">
         <h2>Test Flows</h2>
+        <div class="panel-toolbar">
+          <div>
+            <h3>Inference stages for test</h3>
+            <p>Chon model cho PGIE, SGIE, TGIE hoac them stage moi neu can debug pipeline khac.</p>
+          </div>
+          <div class="actions inline-actions">
+            <button id="addTestStageBtn" type="button" class="secondary">Add stage</button>
+            <button id="confirmTestFlowBtn" type="button">Confirm flow</button>
+          </div>
+        </div>
+        <div id="testPipelineStages" class="pipeline-stage-list"></div>
+        <div id="testFlowSummary" class="confirmed-flow-summary">
+          <div class="empty">No confirmed test flow yet.</div>
+        </div>
+        <details class="advanced-settings">
+          <summary>OCR post-process</summary>
+          <div class="grid">
+            <label>Max chars <input id="ocrMaxChars" type="number" value="12" /></label>
+            <label>Min confidence <input id="ocrMinConfidence" type="number" step="0.01" value="0.5" /></label>
+            <label>NMS IoU <input id="ocrNmsIou" type="number" step="0.01" value="0.5" /></label>
+            <label>Min width ratio <input id="ocrMinWidthRatio" type="number" step="0.01" value="0.01" /></label>
+            <label>Max width ratio <input id="ocrMaxWidthRatio" type="number" step="0.01" value="0.25" /></label>
+            <label>Min height ratio <input id="ocrMinHeightRatio" type="number" step="0.01" value="0.18" /></label>
+            <label>Max height ratio <input id="ocrMaxHeightRatio" type="number" step="0.01" value="1.15" /></label>
+          </div>
+        </details>
         <div class="test-flows">
           <article class="test-card">
             <h3>Test by Image</h3>
-            <p>Upload mot anh bien so/dau xe va chay pipeline mot lan.</p>
+            <p>Upload mot anh de debug detection; object xe se di tiep qua plate/OCR.</p>
             <label>Image file <input id="testImageFile" type="file" accept=".jpg,.jpeg,.png,.bmp,.webp" /></label>
             <div class="actions inline-actions">
               <button id="uploadTestImageBtn" type="button">Upload image</button>
@@ -64,11 +179,20 @@
         </div>
       </section>
 
-      <section class="actions">
-        <button id="saveBtn">Save config</button>
-        <button id="deployBtn">Deploy / Update</button>
-        <button id="stopBtn">Stop</button>
-        <button id="eventsBtn">Load events</button>
+      <section class="panel">
+        <h2>Test Results</h2>
+        <div id="testResults" class="test-results">
+          <div class="empty">No test result yet.</div>
+        </div>
+      </section>
+
+      <section class="panel status-panel">
+        <h2>Task Status</h2>
+        <div id="globalStatus" class="task-status idle">
+          <span class="status-dot"></span>
+          <strong>Idle</strong>
+          <span>Ready.</span>
+        </div>
       </section>
 
       <section class="panel">
@@ -77,8 +201,14 @@
       </section>
 
       <section class="panel">
-        <h2>Output</h2>
-        <pre id="output"></pre>
+        <div class="panel-toolbar">
+          <h2>Output</h2>
+          <div class="actions inline-actions">
+            <button id="copyOutputBtn" type="button">Copy</button>
+            <button id="toggleOutputBtn" type="button">Collapse</button>
+          </div>
+        </div>
+        <pre id="output" class="output-box"></pre>
       </section>
     </main>
 

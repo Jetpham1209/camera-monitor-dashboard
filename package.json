@@ -16,6 +16,13 @@
     "company:pm2:restart": "pm2 restart company-heartbeat-server --update-env",
     "company:pm2:logs": "pm2 logs company-heartbeat-server",
     "lpr:control": "node deepstream-lpr-app/control-server/server.js",
+    "lpr:pm2:start": "pm2 start npm --name deepstream-lpr-control -- run lpr:control",
+    "lpr:pm2:restart": "pm2 restart deepstream-lpr-control --update-env",
+    "lpr:pm2:stop": "pm2 stop deepstream-lpr-control",
+    "lpr:pm2:logs": "pm2 logs deepstream-lpr-control",
+    "lpr:product:install": "bash deepstream-lpr-app/install.sh",
+    "lpr:product:update": "bash deepstream-lpr-app/update-product.sh",
+    "lpr:product:preflight": "bash deepstream-lpr-app/scripts/jetson-preflight.sh",
     "package": "powershell -ExecutionPolicy Bypass -File scripts/package.ps1",
     "package:with-data": "powershell -ExecutionPolicy Bypass -File scripts/package.ps1 -IncludeRuntimeData",
     "package:offline-windows": "powershell -ExecutionPolicy Bypass -File scripts/package.ps1 -IncludeRuntimeData -IncludeNodeModules"

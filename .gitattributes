@@ -1,0 +1,5 @@
+*.sh text eol=lf
+deepstream-lpr-app/.env.product.example text eol=lf
+deepstream-lpr-app/docker-compose.product.yml text eol=lf
+deepstream-lpr-app/templates/*.yml text eol=lf
+deepstream-lpr-app/docker/*.Dockerfile text eol=lf
