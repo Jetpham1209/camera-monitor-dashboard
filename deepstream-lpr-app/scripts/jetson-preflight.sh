@@ -97,7 +97,7 @@ case "$L4T_VERSION" in
     TENSORRT_VERSION="10.3"
     DEEPSTREAM_VERSION="7.1"
     DEEPSTREAM_BASE_IMAGE="nvcr.io/nvidia/deepstream:7.1-triton-multiarch"
-    PYDS_WHEEL_URL="https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.2.0/pyds-1.2.0-py3-none-linux_aarch64.whl"
+    PYDS_WHEEL_URL="https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.2.0/pyds-1.2.0-cp310-cp310-linux_aarch64.whl"
     ;;
   36.3*)
     DEEPSTREAM_PROFILE="jp60-ds70"
