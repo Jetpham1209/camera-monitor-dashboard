@@ -28,13 +28,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN python3 -m pip install --timeout 1000 --retries 20 --prefer-binary \
     onnx \
+    onnxscript \
     onnxsim \
     onnxslim \
     ultralytics-thop
 
 RUN python3 - <<'PY'
 import importlib
-required = ["torch", "ultralytics", "onnx", "onnxsim", "onnxslim", "cv2"]
+required = ["torch", "ultralytics", "onnx", "onnxscript", "onnxsim", "onnxslim", "cv2"]
 missing = []
 for name in required:
     try:
