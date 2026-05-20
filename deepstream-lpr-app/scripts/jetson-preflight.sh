@@ -149,6 +149,22 @@ if [ "$CHECK_DOCKER" = "1" ]; then
     if ! $DOCKER_BIN info 2>/dev/null | grep -qi "nvidia"; then
       warn "Docker info does not list an NVIDIA runtime. Install nvidia-container or nvidia-container-toolkit if DeepStream containers cannot access GPU."
     fi
+    if ! $DOCKER_BIN manifest inspect "$DEEPSTREAM_BASE_IMAGE" >/dev/null 2>&1; then
+      fail "Cannot access DeepStream base image: $DEEPSTREAM_BASE_IMAGE
+
+Docker usually needs NVIDIA NGC authentication before it can pull DeepStream images.
+Create an NGC API key, then run:
+
+  docker login nvcr.io -u '\$oauthtoken'
+
+Paste the NGC API key as the password. If this machine only runs Docker through sudo, use:
+
+  sudo docker login nvcr.io -u '\$oauthtoken'
+
+After login succeeds, rerun:
+
+  bash deepstream-lpr-app/install.sh"
+    fi
   fi
 fi
 
