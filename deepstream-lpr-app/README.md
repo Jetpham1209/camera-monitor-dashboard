@@ -1,6 +1,6 @@
-# DeepStream LPR App
+# DeepStream Jetson App
 
-Scaffold deploy tren Jetson cho bai toan nhan dien dau xe va doc bien so trong ROI.
+Scaffold deploy tren Jetson cho DeepStream detection app co the chay LPR processor hoac generic detection flow trong ROI.
 
 ## Muc tieu
 
@@ -137,15 +137,20 @@ data/captures/
 
 Bam `Refresh captures`, chon anh trong `Monitor capture`, roi ve ROI truc tiep tren anh da capture.
 
+## Processor modes
+
+Dashboard tach model flow va business logic thanh 2 lop:
+
+- `LPR`: bat buoc flow co du chuoi `PGIE GIE ID 1 -> SGIE GIE ID 2 -> TGIE GIE ID 3`. Runtime moi chay logic xe -> bien so -> ky tu, sort ky tu va tra `plateText`.
+- `Generic Detection`: chay cac GIE stage user config. Runtime tra detection/capture theo label, class id, ROI va cooldown; khong ap logic bien so rieng.
+
+Moi Deploy App va Test Flow deu co processor rieng. Neu chon `LPR` nhung flow chua du 3 stage san sang, buoc validate se fail truoc khi start DeepStream container.
+
 ## YOLO model builder
 
-Neu model cua ban den tu YOLO family, control UI co them vung **LPR Model Builders** voi 3 card rieng:
+Neu model cua ban den tu YOLO family, control UI co **Model Builder Factory**. User nhap model name/description, upload source `.pt` hoac `.onnx`, build artifact, roi chon artifact do cho PGIE/SGIE/TGIE trong test hoac deploy flow. Cung factory nay co the build model xe, bien so, nguoi, vat the khac.
 
-- `vehicle_front`: upload/build model phat hien dau xe.
-- `plate_detector`: upload/build model phat hien bien so.
-- `plate_ocr`: upload/build model doc bien so/OCR.
-
-Moi card co source model `.pt/.onnx`, `imgsz`, `opset`, `task`, YOLO version, class count, TensorRT/parser toggles, nut upload, nut build, va nut xem log rieng. Vi vay build loi model nao thi checkpoint/log cua model do se hien rieng, khong bi lan voi model khac.
+Factory co `imgsz`, `opset`, `task`, YOLO version, TensorRT/parser toggles, nut upload, nut build va log/checkpoint rieng theo model source.
 
 Pipeline hien tai:
 

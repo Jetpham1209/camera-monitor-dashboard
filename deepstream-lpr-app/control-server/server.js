@@ -190,6 +190,10 @@ async function listRuntimeResults({ date = "", source = "", limit = 200 } = {}) 
         createdAt: stat.mtime.toISOString(),
         eventType: event.eventType || "",
         eventId: event.eventId || path.basename(entry.name, path.extname(entry.name)),
+        processorType: event.processorType || "",
+        component: event.component || "",
+        label: event.label || "",
+        confidence: event.confidence ?? null,
         plateText: event.plateText || "",
         plateStatus: event.plateStatus || "",
         failedStage: event.failedStage || "",
@@ -407,6 +411,8 @@ function defaultConfig() {
     deepstreamImage: DEFAULT_DEEPSTREAM_IMAGE,
     trackerLib: "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so",
     models: {},
+    processor: { type: "lpr" },
+    testProcessorType: "lpr",
     pipelineStages: defaultPipelineStages(),
     deploy: {
       lastStatus: "not_deployed",
@@ -420,6 +426,7 @@ function defaultConfig() {
         name: "DeepStream App 1",
         active: true,
         cameraIds: ["camera-1"],
+        processorType: "lpr",
         selectedModels: {},
         pipelineStages: defaultPipelineStages()
       }
@@ -460,10 +467,28 @@ function mergeConfig(base, patch) {
   }
   output.deploy = { ...base.deploy, ...(patch.deploy || {}) };
   output.deployApps = Array.isArray(patch.deployApps) ? patch.deployApps : base.deployApps;
+  output.processor = normalizeProcessor(patch.processor || patch.processorType || base.processor);
+  output.testProcessorType = normalizeProcessorType(patch.testProcessorType || base.testProcessorType);
   output.pipelineStages = Array.isArray(patch.pipelineStages) ? patch.pipelineStages : (base.pipelineStages || defaultPipelineStages());
   output.ocrPostprocess = { ...base.ocrPostprocess, ...(patch.ocrPostprocess || {}) };
   output.testMedia = { ...base.testMedia, ...(patch.testMedia || {}) };
   return output;
+}
+
+const PROCESSOR_TYPES = new Set(["lpr", "generic_detection"]);
+
+function normalizeProcessorType(value) {
+  const requested = typeof value === "object" && value !== null ? value.type : value;
+  const normalized = String(requested || "").trim().toLowerCase();
+  return PROCESSOR_TYPES.has(normalized) ? normalized : "lpr";
+}
+
+function normalizeProcessor(value) {
+  return { type: normalizeProcessorType(value) };
+}
+
+function processorType(config) {
+  return normalizeProcessorType(config?.processor || config?.processorType);
 }
 
 function sanitizeSlot(value) {
@@ -780,8 +805,44 @@ function normalizeMultiCameraConfig(input, existing, requireRtsp = true) {
   config.streamWidth = Math.max(320, Number(config.streamWidth || 1920));
   config.streamHeight = Math.max(240, Number(config.streamHeight || 1080));
   config.captureCooldownSec = Math.max(1, Number(config.captureCooldownSec || firstStream?.captureCooldownSec || 30));
+  config.processor = normalizeProcessor(config.processor);
+  config.testProcessorType = normalizeProcessorType(config.testProcessorType);
   config.appRoot = "/workspace/deepstream-lpr-app";
   return config;
+}
+
+function stageHasRunnableModel(config, stage) {
+  const model = config.models?.[stage.modelGroup] || {};
+  return Boolean(stage.modelGroup && (model.engine || model.onnx));
+}
+
+function validateProcessorFlow(config, context = "runtime") {
+  const type = processorType(config);
+  const stages = normalizePipelineStages(config).filter((stage) => stage.enabled);
+  const runnable = stages.filter((stage) => stageHasRunnableModel(config, stage));
+  if (!runnable.length) {
+    throw new Error(`${context}: Can it nhat 1 GIE stage co model da chon va artifact ONNX/engine san sang.`);
+  }
+  if (type === "generic_detection") {
+    return {
+      type,
+      output: `Processor: Generic Detection\nRunnable stages: ${runnable.map((stage) => `${stage.gieType || "GIE"}#${stage.gieId} ${stage.modelGroup}`).join(", ")}`
+    };
+  }
+
+  const pgie = runnable.find((stage) => Number(stage.gieId) === 1 && !stage.operateOnGieId);
+  const sgie = runnable.find((stage) => Number(stage.gieId) === 2 && Number(stage.operateOnGieId) === 1);
+  const tgie = runnable.find((stage) => Number(stage.gieId) === 3 && Number(stage.operateOnGieId) === 2);
+  if (!pgie || !sgie || !tgie) {
+    throw new Error(
+      `${context}: LPR can du 3 stage san sang theo chuoi PGIE GIE ID 1 -> SGIE GIE ID 2 -> TGIE GIE ID 3. `
+      + "Chuyen sang Generic Detection neu chi muon detect theo flow user config."
+    );
+  }
+  return {
+    type,
+    output: `Processor: LPR\nLPR chain: ${pgie.modelGroup} -> ${sgie.modelGroup} -> ${tgie.modelGroup}`
+  };
 }
 
 function modelConfig(slot, model, gieId, networkType, operateOnGieId = null, batchSize = 1, operateOnClassIds = []) {
@@ -1911,6 +1972,7 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
 
 async function generateRuntime(config) {
   await fsp.mkdir(GENERATED_DIR, { recursive: true });
+  const runtimeProcessorType = processorType(config);
   const sourceBatchSize = Math.max(1, enabledRtspStreams(config).length || (config.streams || []).length || 1);
   const imageTestVehicleIds = normalizeClassIds(config.imageTest?.vehicleClassIds);
   const stages = normalizePipelineStages(config).filter((stage) => stage.enabled);
@@ -1925,13 +1987,13 @@ async function generateRuntime(config) {
   config.pipelineStages = stages.map((stage) => {
     const model = config.models[stage.modelGroup] || {};
     let networkType = Number(stage.networkType ?? 0);
-    if (stage.modelGroup === "plate_ocr") {
+    if (runtimeProcessorType === "lpr" && stage.modelGroup === "plate_ocr") {
       const task = model.build?.task || model.task || "classify";
       const isDetector = task === "detect" || task === "auto" || model.ocrMode === "char_detector";
       networkType = isDetector ? 0 : 1;
     }
     let operateClassIds = normalizeClassIds(stage.operateOnClassIds);
-    if (stage.modelGroup === "plate_detector" && Number(stage.operateOnGieId) === 1 && primaryVehicleClassIds.length) {
+    if (runtimeProcessorType === "lpr" && stage.modelGroup === "plate_detector" && Number(stage.operateOnGieId) === 1 && primaryVehicleClassIds.length) {
       operateClassIds = primaryVehicleClassIds;
     }
     const configFile = path.join(GENERATED_DIR, `config_infer_${stage.id}.txt`);
@@ -2099,7 +2161,10 @@ async function deploy(config) {
         throw new Error("RTSP URL is required and must start with rtsp:// or rtsps://.");
       }
       const streams = enabledRtspStreams(config);
-      return { output: `App: ${config.activeDeployAppId || "default"}\nStreams: ${streams.map((stream) => `${stream.name} (${stream.id})`).join(", ")}` };
+      const processor = validateProcessorFlow(config, "Deploy");
+      return {
+        output: `App: ${config.activeDeployAppId || "default"}\nStreams: ${streams.map((stream) => `${stream.name} (${stream.id})`).join(", ")}\n${processor.output}`
+      };
     }, "Deploy config looks valid.");
 
     await runCheckpoint(checkpoints, "generate_runtime", async () => {
@@ -2168,9 +2233,13 @@ async function runTestMedia(kind, config) {
       : { width: 0, height: 0 };
     if (kind === "image") {
       config.testMode = "image-debug";
-      config.imageTest = config.imageTest || {};
-      const imageVehicleIds = normalizeClassIds(config.imageTest.vehicleClassIds);
-      config.imageTest.vehicleClassIds = imageVehicleIds.length ? imageVehicleIds : [2, 3, 5, 7];
+      if (processorType(config) === "lpr") {
+        config.imageTest = config.imageTest || {};
+        const imageVehicleIds = normalizeClassIds(config.imageTest.vehicleClassIds);
+        config.imageTest.vehicleClassIds = imageVehicleIds.length ? imageVehicleIds : [2, 3, 5, 7];
+      } else {
+        delete config.imageTest;
+      }
       if (mediaDimensions.width && mediaDimensions.height) {
         config.streamWidth = mediaDimensions.width;
         config.streamHeight = mediaDimensions.height;
@@ -2183,7 +2252,8 @@ async function runTestMedia(kind, config) {
       if (!mediaPath || !fs.existsSync(mediaPath)) {
         throw new Error(`No uploaded test ${kind}. Upload a ${kind} first.`);
       }
-      return { output: `Media: ${mediaPath}` };
+      const processor = validateProcessorFlow(config, `${kind} test`);
+      return { output: `Media: ${mediaPath}\n${processor.output}` };
     }, `Test ${kind} exists.`);
 
     await runCheckpoint(checkpoints, "generate_runtime", async () => {
@@ -2248,6 +2318,7 @@ async function runTestMedia(kind, config) {
       status: "success",
       checkpoints,
       output: commandOutput.slice(-8000),
+      processorType: processorType(config),
       events: events.events || [],
       media: workspacePath(mediaPath),
       mediaUrl: publicUrlFromWorkspace(workspacePath(mediaPath)),

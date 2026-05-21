@@ -28,6 +28,19 @@ const gieStageTypes = [
   }
 ];
 
+const processorTypes = [
+  {
+    value: "lpr",
+    label: "LPR",
+    description: "Requires PGIE -> SGIE -> TGIE for vehicle, plate and character logic."
+  },
+  {
+    value: "generic_detection",
+    label: "Generic Detection",
+    description: "Runs configured GIE detections and labels without app-specific post-process."
+  }
+];
+
 const els = {
   workspaceTitle: document.querySelector("#workspaceTitle"),
   dashboardOverview: document.querySelector("#dashboardOverview"),
@@ -87,6 +100,7 @@ const els = {
   runTestImageBtn: document.querySelector("#runTestImageBtn"),
   runTestVideoBtn: document.querySelector("#runTestVideoBtn"),
   testPipelineStages: document.querySelector("#testPipelineStages"),
+  testProcessorType: document.querySelector("#testProcessorType"),
   addTestStageBtn: document.querySelector("#addTestStageBtn"),
   confirmTestFlowBtn: document.querySelector("#confirmTestFlowBtn"),
   testFlowSummary: document.querySelector("#testFlowSummary"),
@@ -106,6 +120,7 @@ let cameraDrafts = [];
 let deployApps = [];
 let deployCaptures = [];
 let confirmedTestPipelineStages = [];
+let confirmedTestProcessorType = "lpr";
 let latestDeployStatus = {};
 const roiTool = {
   image: null,
@@ -332,6 +347,7 @@ function renderMainDashboard() {
             <div class="dashboard-tags">
               ${dashboardTag(running ? "container running" : "container stopped", running ? "success" : "warning")}
               ${dashboardTag(started ? "DeepStream started" : "DeepStream not started", started ? "success" : "warning")}
+              ${dashboardTag(processorLabel(deploy.app?.processorType))}
               ${dashboardTag(`${selectedDeployCameras.size} camera(s)`)}
               ${dashboardTag(`${deployStageCount} stage(s)`)}
             </div>
@@ -436,12 +452,29 @@ function formConfig() {
     streamWidth: Number(els.streamWidth.value),
     streamHeight: Number(els.streamHeight.value),
     deepstreamImage: els.deepstreamImage.value.trim(),
+    processor: { type: normalizeProcessorType(activeDeployApp.processorType) },
+    testProcessorType: normalizeProcessorType(els.testProcessorType?.value || confirmedTestProcessorType),
     pipelineStages: normalizePipelineStages(activeDeployApp.pipelineStages),
     selectedModels: selectedModelsFromStages(activeDeployApp.pipelineStages),
     deployApps: deployProfiles,
     activeDeployAppId: activeDeployApp.id,
     ocrPostprocess: readOcrPostprocess()
   };
+}
+
+function normalizeProcessorType(value = "") {
+  return processorTypes.some((item) => item.value === value) ? value : "lpr";
+}
+
+function processorOptionMarkup(selected = "lpr") {
+  const value = normalizeProcessorType(selected);
+  return processorTypes.map((item) => `
+    <option value="${escapeHtml(item.value)}" ${item.value === value ? "selected" : ""}>${escapeHtml(item.label)}</option>
+  `).join("");
+}
+
+function processorLabel(value = "") {
+  return processorTypes.find((item) => item.value === normalizeProcessorType(value))?.label || "LPR";
 }
 
 function readOcrPostprocess() {
@@ -636,6 +669,7 @@ function defaultDeployApp(index = 0, cameras = []) {
     name: `DeepStream App ${index + 1}`,
     active: index === 0,
     cameraIds: cameras.filter((camera) => camera.enabled !== false).map((camera) => camera.id),
+    processorType: "lpr",
     pipelineStages: defaultPipelineStages(),
     selectedModels: {}
   };
@@ -803,6 +837,7 @@ function readDeployApps(cameras = readCameraCards()) {
       name: card.querySelector("[data-deploy-field='name']").value.trim() || `DeepStream App ${index + 1}`,
       active: card.querySelector("[data-deploy-active]")?.checked || false,
       cameraIds: cameraSelections,
+      processorType: normalizeProcessorType(card.querySelector("[data-deploy-field='processorType']")?.value),
       pipelineStages,
       selectedModels: selectedModelsFromStages(pipelineStages)
     };
@@ -848,6 +883,12 @@ function renderDeployAppCard(app, index, cameras) {
           Active
         </label>
         <label>App name <input data-deploy-field="name" value="${escapeHtml(app.name || `DeepStream App ${index + 1}`)}" /></label>
+        <label>
+          Processor
+          <select data-deploy-field="processorType">
+            ${processorOptionMarkup(app.processorType)}
+          </select>
+        </label>
         <div class="actions inline-actions">
           <button type="button" data-remove-deploy-app="${index}" ${deployApps.length <= 1 ? "disabled" : ""}>Remove app</button>
         </div>
@@ -1117,8 +1158,9 @@ function readTestPipelineStages() {
 
 function confirmTestFlow() {
   confirmedTestPipelineStages = readTestPipelineStages();
+  confirmedTestProcessorType = normalizeProcessorType(els.testProcessorType?.value || confirmedTestProcessorType);
   renderConfirmedTestFlow();
-  setTaskStatus("test-flow", "success", "Test flow confirmed.");
+  setTaskStatus("test-flow", "success", `${processorLabel(confirmedTestProcessorType)} test flow confirmed.`);
 }
 
 function confirmedOrCurrentTestStages() {
@@ -1135,7 +1177,7 @@ function renderConfirmedTestFlow() {
   }
   els.testFlowSummary.innerHTML = `
     <div class="confirmed-flow-head">
-      <strong>Confirmed flow</strong>
+      <strong>Confirmed ${escapeHtml(processorLabel(confirmedTestProcessorType))} flow</strong>
       <small>Image test va video test se dung flow nay.</small>
     </div>
     <div class="confirmed-flow-list">
@@ -1332,6 +1374,8 @@ async function checkSavedCameraConnection(index, button = null) {
 function renderConfig(config) {
   renderCameras(config.streams || []);
   renderDeployApps(config.deployApps || [], config.streams || []);
+  confirmedTestProcessorType = normalizeProcessorType(config.testProcessorType || config.processor?.type);
+  if (els.testProcessorType) els.testProcessorType.value = confirmedTestProcessorType;
   confirmedTestPipelineStages = normalizePipelineStages(config.pipelineStages || config.deployApps?.find((app) => app.active)?.pipelineStages || stagesFromSelectedModels(config.selectedModels));
   renderTestPipelineStages(confirmedTestPipelineStages);
   renderConfirmedTestFlow();
@@ -1900,10 +1944,14 @@ async function runTestMedia(kind, button = null) {
     const body = formConfig();
     body.pipelineStages = confirmedOrCurrentTestStages();
     body.selectedModels = selectedModelsFromStages(body.pipelineStages);
+    body.processor = { type: normalizeProcessorType(confirmedTestProcessorType) };
+    body.testProcessorType = normalizeProcessorType(confirmedTestProcessorType);
     if (kind === "image") {
       body.testMode = "image-debug";
-      const vehicleClassIds = firstStageClassIds(body.pipelineStages);
-      if (vehicleClassIds) body.imageTest = { vehicleClassIds };
+      if (body.processor.type === "lpr") {
+        const vehicleClassIds = firstStageClassIds(body.pipelineStages);
+        if (vehicleClassIds) body.imageTest = { vehicleClassIds };
+      }
     }
     return await api(`/api/test/${kind}`, {
       method: "POST",
@@ -1975,6 +2023,7 @@ function renderTestResults(kind, result) {
     const summary = [...events].reverse().find((event) => event.eventType === "image_frame_summary") || {};
     const lprResults = events.filter((event) => event.eventType === "image_lpr_result");
     const detections = imageOverlayDetections(events);
+    const generic = normalizeProcessorType(result.processorType || summary.processorType) === "generic_detection";
     const imageUrl = result.mediaUrl || "/runtime/test-media/image/test_image.jpg";
     const width = Number(result.mediaWidth || summary.frameWidth || 1920);
     const height = Number(result.mediaHeight || summary.frameHeight || 1080);
@@ -1991,12 +2040,25 @@ function renderTestResults(kind, result) {
           `).join("")}
         </div>
         <div class="result-list">
-          <div class="metric-row">
-            <strong>${summary.vehicleCount || 0}</strong><span>vehicles</span>
-            <strong>${summary.plateCount || 0}</strong><span>plates</span>
-            <strong>${summary.ocrObjectCount || 0}</strong><span>chars</span>
-          </div>
-          ${lprResults.map((event) => `
+          ${generic ? `
+            <div class="metric-row">
+              <strong>${summary.detectionCount || detections.length || 0}</strong><span>detections</span>
+              <strong>${Object.keys(summary.countsByComponent || {}).length}</strong><span>components</span>
+            </div>
+            ${detections.map((event) => `
+              <article class="result-card">
+                <h3>${escapeHtml(event.label || event.component || "detection")}</h3>
+                <p>${escapeHtml(event.component || "GIE")} - class ${escapeHtml(event.classId ?? "")}</p>
+                <strong>${(Number(event.confidence || 0) * 100).toFixed(1)}%</strong>
+              </article>
+            `).join("") || '<div class="empty">No detection found.</div>'}
+          ` : `
+            <div class="metric-row">
+              <strong>${summary.vehicleCount || 0}</strong><span>vehicles</span>
+              <strong>${summary.plateCount || 0}</strong><span>plates</span>
+              <strong>${summary.ocrObjectCount || 0}</strong><span>chars</span>
+            </div>
+            ${lprResults.map((event) => `
             <article class="result-card">
               <h3>${escapeHtml(event.vehicle?.label || "vehicle")}</h3>
               <p>Plate status: ${escapeHtml(event.plateStatus || "unknown")}</p>
@@ -2007,27 +2069,31 @@ function renderTestResults(kind, result) {
                 <small>Top raw: ${escapeHtml((plate.topRawCharDetections || []).slice(0, 10).map((char) => `${char.label}:${Number(char.normalizedConfidence || char.confidence || 0).toFixed(2)}`).join(" "))}</small>
               `).join("")}
             </article>
-          `).join("") || '<div class="empty">No LPR result.</div>'}
+            `).join("") || '<div class="empty">No LPR result.</div>'}
+          `}
         </div>
       </div>
     `;
     return;
   }
 
-  const vehicleEvents = events.filter((event) => event.eventType === "vehicle_capture" || event.plateText || event.objectId !== undefined);
+  const generic = normalizeProcessorType(result.processorType || events.find((event) => event.processorType)?.processorType) === "generic_detection";
+  const videoEvents = events.filter((event) => generic
+    ? event.eventType === "detection_capture"
+    : event.eventType === "vehicle_capture" || event.plateText || event.objectId !== undefined);
   els.testResults.innerHTML = `
     <div class="result-list">
       <div class="metric-row">
-        <strong>${vehicleEvents.length}</strong><span>vehicle events</span>
+        <strong>${videoEvents.length}</strong><span>${generic ? "detection events" : "vehicle events"}</span>
       </div>
-      ${vehicleEvents.map((event) => `
+      ${videoEvents.map((event) => `
         <article class="result-card">
           <h3>${escapeHtml(event.cameraName || event.cameraId || "video")}</h3>
           <p>Frame ${escapeHtml(event.frameNum ?? "")} - Object ${escapeHtml(event.objectId ?? "")}</p>
-          <strong>${escapeHtml(event.plateText || "No plate text")}</strong>
+          <strong>${escapeHtml(generic ? event.label || event.component || "detection" : event.plateText || "No plate text")}</strong>
           ${event.imagePath ? `<small>${escapeHtml(event.imagePath)}</small>` : ""}
         </article>
-      `).join("") || '<div class="empty">No vehicle event detected.</div>'}
+      `).join("") || `<div class="empty">No ${generic ? "detection" : "vehicle"} event detected.</div>`}
     </div>
   `;
 }

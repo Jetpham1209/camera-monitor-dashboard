@@ -52,11 +52,18 @@ class LprRuntime:
         self.started_at = time.time()
         self.fps_stats = {}
         self.last_status_write = 0.0
+        self.processor_type = self.normalize_processor_type(config)
         self.labels = self.load_labels(config)
         self.pipeline_stages = self.normalize_pipeline_stages(config)
         self.pgie_vehicle_class_ids = self.primary_vehicle_class_ids()
         self.component_names = {
             int(stage.get("gieId", index + 1)): stage.get("modelGroup", f"gie_{index + 1}")
+            for index, stage in enumerate(self.pipeline_stages)
+        }
+        self.component_class_filters = {
+            int(stage.get("gieId", index + 1)): (
+                self.stage_class_ids(stage.get("operateOnClassIds")) if not stage.get("operateOnGieId") else set()
+            )
             for index, stage in enumerate(self.pipeline_stages)
         }
         self.image_test_vehicle_ids = set(config.get("imageTest", {}).get("vehicleClassIds") or [2, 3, 5, 7])
@@ -74,6 +81,11 @@ class LprRuntime:
         }
         self.write_status("starting", "Runtime initialized.")
 
+    def normalize_processor_type(self, config):
+        processor = config.get("processor") or {}
+        value = processor.get("type") if isinstance(processor, dict) else processor
+        return "generic_detection" if value == "generic_detection" else "lpr"
+
     def primary_vehicle_class_ids(self):
         for stage in self.pipeline_stages:
             if int(stage.get("gieId", 0)) == 1:
@@ -84,6 +96,17 @@ class LprRuntime:
                     return {int(item) for item in re.split(r"[;,\\s]+", ids) if item.strip().isdigit()}
         return set()
 
+    def stage_class_ids(self, value):
+        if isinstance(value, list):
+            return {int(item) for item in value if str(item).strip() != ""}
+        if isinstance(value, str) and value.strip():
+            return {int(item) for item in re.split(r"[;,\\s]+", value) if item.strip().isdigit()}
+        return set()
+
+    def payload_selected(self, payload):
+        selected = self.component_class_filters.get(int(payload.get("componentId", 0))) or set()
+        return not selected or int(payload.get("classId", -1)) in selected
+
     def now_iso(self):
         return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -91,6 +114,7 @@ class LprRuntime:
         payload = {
             "state": state,
             "message": message,
+            "processorType": self.processor_type,
             "startedAt": self.now_iso() if state in {"starting", "playing"} else None,
             "updatedAt": self.now_iso(),
             "uptimeSec": round(time.time() - self.started_at, 3),
@@ -158,6 +182,7 @@ class LprRuntime:
                 "name": stage.get("name") or f"GIE {index + 1}",
                 "modelGroup": stage.get("modelGroup") or f"gie_{index + 1}",
                 "gieId": int(stage.get("gieId") or index + 1),
+                "operateOnGieId": stage.get("operateOnGieId"),
                 "operateOnClassIds": stage.get("operateOnClassIds") or [],
                 "configFile": stage.get("configFile") or f"/workspace/deepstream-lpr-app/runtime/generated/config_infer_{stage.get('id') or f'gie-{index + 1}'}.txt",
                 "ready": stage.get("ready", True),
@@ -216,9 +241,9 @@ class LprRuntime:
             j = i
         return inside
 
-    def should_capture(self, source_id, object_id, cooldown_sec):
+    def should_capture(self, source_id, object_id, cooldown_sec, capture_kind="object"):
         now = time.time()
-        key = (source_id, object_id)
+        key = (capture_kind, source_id, object_id)
         previous = self.captured.get(key)
         if previous and now - previous < cooldown_sec:
             return False
@@ -382,6 +407,8 @@ class LprRuntime:
         batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(gst_buffer))
         if self.test_mode == "image-debug":
             return self.probe_image_debug(gst_buffer, batch_meta, stage)
+        if self.processor_type == "generic_detection":
+            return self.probe_generic(gst_buffer, batch_meta, stage)
         frame_list = batch_meta.frame_meta_list
         while frame_list is not None:
             frame_meta = pyds.NvDsFrameMeta.cast(frame_list.data)
@@ -424,6 +451,7 @@ class LprRuntime:
                 failure = self.lpr_failure(result)
                 event = {
                     "eventType": "vehicle_capture",
+                    "processorType": self.processor_type,
                     "eventId": event_id,
                     "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "sourceId": source_id,
@@ -452,6 +480,59 @@ class LprRuntime:
                 }
                 print(json.dumps(event, ensure_ascii=False))
                 self.save_event(event)
+            frame_list = frame_list.next
+        return Gst.PadProbeReturn.OK
+
+    def probe_generic(self, gst_buffer, batch_meta, stage="final"):
+        frame_list = batch_meta.frame_meta_list
+        while frame_list is not None:
+            frame_meta = pyds.NvDsFrameMeta.cast(frame_list.data)
+            self.update_fps(frame_meta)
+            source_id = int(frame_meta.source_id)
+            stream_config = self.stream_config(source_id)
+            roi = stream_config.get("roi", {}).get("polygon", [])
+            cooldown_sec = float(stream_config.get("captureCooldownSec", 30))
+            obj_list = frame_meta.obj_meta_list
+            while obj_list is not None:
+                obj_meta = pyds.NvDsObjectMeta.cast(obj_list.data)
+                payload = self.object_payload(obj_meta, frame_meta, stage)
+                if not self.payload_selected(payload):
+                    obj_list = obj_list.next
+                    continue
+                roi_point = payload.get("footCenter") or payload["center"]
+                roi_x = float(roi_point["x"])
+                roi_y = float(roi_point["y"])
+                capture_key = f"{payload['componentId']}:{payload['objectId']}"
+                if not self.point_in_polygon(roi, roi_x, roi_y):
+                    obj_list = obj_list.next
+                    continue
+                if not self.should_capture(source_id, capture_key, cooldown_sec, "generic_detection"):
+                    obj_list = obj_list.next
+                    continue
+
+                event_id = f"{int(time.time())}_{source_id}_{frame_meta.frame_num}_{payload['componentId']}_{payload['objectId']}"
+                image_path = self.save_frame(gst_buffer, frame_meta, obj_meta, event_id, stream_config)
+                image_relative_path = str(Path(image_path).relative_to(self.runtime_dir)).replace("\\", "/") if image_path else None
+                event = {
+                    "eventType": "detection_capture",
+                    "processorType": self.processor_type,
+                    "eventId": event_id,
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "cameraId": stream_config.get("id", f"camera-{source_id + 1}"),
+                    "cameraName": stream_config.get("name", f"Camera {source_id + 1}"),
+                    "stream": stream_config.get("rtspUrl"),
+                    "frameWidth": int(frame_meta.source_frame_width),
+                    "frameHeight": int(frame_meta.source_frame_height),
+                    "roiPoint": roi_point,
+                    **payload,
+                    "imagePath": image_path,
+                    "imageRelativePath": image_relative_path,
+                    "imageUrl": f"/runtime/{image_relative_path}" if image_relative_path else None,
+                    "imageSaveError": None if image_path else self.last_capture_error,
+                }
+                print(json.dumps(event, ensure_ascii=False))
+                self.save_event(event)
+                obj_list = obj_list.next
             frame_list = frame_list.next
         return Gst.PadProbeReturn.OK
 
@@ -491,11 +572,11 @@ class LprRuntime:
                 "x": float(rect.left + rect.width / 2),
                 "y": float(rect.top + rect.height),
             },
-            "isVehicle": component_id == 1 and class_id in self.image_test_vehicle_ids,
-            "lprRequested": component_id == 1 and class_id in self.image_test_vehicle_ids,
+            "isVehicle": self.processor_type == "lpr" and component_id == 1 and class_id in self.image_test_vehicle_ids,
+            "lprRequested": self.processor_type == "lpr" and component_id == 1 and class_id in self.image_test_vehicle_ids,
             "classifierLabels": classifier_labels,
             "tensorPredictions": tensor_predictions,
-            "plateText": "".join(plate_labels) if plate_labels else "",
+            "plateText": "".join(plate_labels) if self.processor_type == "lpr" and plate_labels else "",
         }
 
     def image_detection_key(self, payload):
@@ -725,6 +806,9 @@ class LprRuntime:
             while obj_list is not None:
                 obj_meta = pyds.NvDsObjectMeta.cast(obj_list.data)
                 payload = self.object_payload(obj_meta, frame_meta, stage)
+                if self.processor_type == "generic_detection" and not self.payload_selected(payload):
+                    obj_list = obj_list.next
+                    continue
                 objects.append(payload)
                 event_key = self.image_detection_key(payload)
                 if stage == "final" and event_key in self.image_debug_seen:
@@ -739,6 +823,7 @@ class LprRuntime:
                     "eventId": event_id,
                     "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     **payload,
+                    "processorType": self.processor_type,
                     "imagePath": image_path,
                     "imageRelativePath": image_relative_path,
                     "imageUrl": f"/runtime/{image_relative_path}" if image_relative_path else None,
@@ -751,12 +836,12 @@ class LprRuntime:
                 final_key = (source_id, int(frame_meta.frame_num))
                 if final_key not in self.image_debug_final_frames:
                     self.image_debug_final_frames.add(final_key)
-                    lpr_results, non_vehicles, plates, ocr_objects = self.build_image_lpr_results(objects)
                     counts_by_component = {}
                     for item in objects:
                         counts_by_component[item["component"]] = counts_by_component.get(item["component"], 0) + 1
                     summary_event = {
                         "eventType": "image_frame_summary",
+                        "processorType": self.processor_type,
                         "stage": stage,
                         "sourceId": source_id,
                         "frameNum": int(frame_meta.frame_num),
@@ -764,16 +849,27 @@ class LprRuntime:
                         "frameHeight": int(frame_meta.source_frame_height),
                         "objectCount": len(objects),
                         "countsByComponent": counts_by_component,
+                    }
+                    if self.processor_type == "generic_detection":
+                        summary_event["detectionCount"] = len(objects)
+                        print(json.dumps(summary_event, ensure_ascii=False))
+                        self.save_event(summary_event)
+                        frame_list = frame_list.next
+                        continue
+
+                    lpr_results, non_vehicles, plates, ocr_objects = self.build_image_lpr_results(objects)
+                    summary_event.update({
                         "vehicleCount": len(lpr_results),
                         "nonVehicleCount": len(non_vehicles),
                         "plateCount": len(plates),
                         "ocrObjectCount": len(ocr_objects),
-                    }
+                    })
                     print(json.dumps(summary_event, ensure_ascii=False))
                     self.save_event(summary_event)
                     for result_index, result in enumerate(lpr_results, start=1):
                         event = {
                             "eventType": "image_lpr_result",
+                            "processorType": self.processor_type,
                             "eventId": f"image_lpr_{int(time.time())}_{source_id}_{frame_meta.frame_num}_{result_index}",
                             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                             "sourceId": source_id,
@@ -785,6 +881,7 @@ class LprRuntime:
                     for item in non_vehicles:
                         event = {
                             "eventType": "image_non_vehicle_detection",
+                            "processorType": self.processor_type,
                             "eventId": f"image_non_vehicle_{int(time.time())}_{source_id}_{frame_meta.frame_num}_{item['objectId']}",
                             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                             **item,
@@ -940,7 +1037,7 @@ def build_pipeline(runtime):
         if not left.link(right):
             raise RuntimeError(f"Could not link {left.name} -> {right.name}")
     if runtime.test_mode == "image-debug" and infer_elements:
-        infer_elements[0].get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, runtime.probe, "vehicle-detect")
+        infer_elements[0].get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, runtime.probe, "primary-detect")
     osd.get_static_pad("sink").add_probe(Gst.PadProbeType.BUFFER, runtime.probe)
     print(f"Pipeline mode: {len(infer_elements)} inference stage(s)")
     return pipeline

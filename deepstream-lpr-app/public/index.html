@@ -185,6 +185,15 @@
             <button id="confirmTestFlowBtn" type="button">Confirm flow</button>
           </div>
         </div>
+        <div class="grid">
+          <label>
+            Test processor
+            <select id="testProcessorType">
+              <option value="lpr">LPR - vehicle, plate, characters</option>
+              <option value="generic_detection">Generic Detection - configured labels only</option>
+            </select>
+          </label>
+        </div>
         <div id="testPipelineStages" class="pipeline-stage-list"></div>
         <div id="testFlowSummary" class="confirmed-flow-summary">
           <div class="empty">No confirmed test flow yet.</div>

@@ -57,7 +57,8 @@ function renderResults(results = []) {
         <img src="${escapeHtml(item.url)}" alt="${escapeHtml(item.eventId || item.fileName)}" loading="lazy" />
       </a>
       <div>
-        <strong>${escapeHtml(item.plateText || item.eventType || "capture")}</strong>
+        <strong>${escapeHtml(item.plateText || item.label || item.component || item.eventType || "capture")}</strong>
+        ${item.processorType ? `<small>${escapeHtml(item.processorType.replaceAll("_", " "))}</small>` : ""}
         ${item.failedModel ? `<small>Fail: ${escapeHtml(item.failedStage || "")} / ${escapeHtml(item.failedModel)} - ${escapeHtml(item.failureReason || "")}</small>` : ""}
         <span>${escapeHtml(item.cameraName || item.cameraId || "source")} - ${escapeHtml(item.date || "")}</span>
         <small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small>
