@@ -1676,6 +1676,32 @@ function selectedCameraPolygon() {
   return parseRoiValue(els.cameraSettingRoi.value || "[]");
 }
 
+function clearRoiReferenceImage(initialPoints = []) {
+  roiTool.image = null;
+  roiTool.source = "";
+  roiTool.points = Array.isArray(initialPoints) ? initialPoints : [];
+  if (els.roiImageFile) els.roiImageFile.value = "";
+  els.roiImageSize.value = "No image loaded";
+  drawRoiTool();
+  updateRoiOutput();
+}
+
+function restoreLatestRoiReference(camera) {
+  const polygon = selectedCameraPolygon();
+  const capture = latestCaptureForCamera(camera.id);
+  if (!capture?.url) {
+    clearRoiReferenceImage(polygon);
+    return false;
+  }
+  if (els.roiImageFile) els.roiImageFile.value = "";
+  const capturedAt = capture.updatedAt || capture.createdAt;
+  const label = capturedAt
+    ? `${camera.name} - ${formatDateTime(capturedAt)}`
+    : `${camera.name} - latest sample`;
+  loadRoiImageFromUrl(capture.url, label, false, polygon);
+  return true;
+}
+
 function openRoiTool() {
   syncRoiCameraSelect();
   const camera = readCameraSetting();
@@ -1684,9 +1710,7 @@ function openRoiTool() {
   }
   els.roiToolPanel.classList.remove("hidden");
   els.roiToolTitle.textContent = `ROI setting - ${camera.name}`;
-  roiTool.points = selectedCameraPolygon();
-  drawRoiTool();
-  updateRoiOutput();
+  restoreLatestRoiReference(camera);
   els.roiToolPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
