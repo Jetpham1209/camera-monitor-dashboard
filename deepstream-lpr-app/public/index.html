@@ -7,12 +7,50 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main class="shell">
-      <header>
-        <p>DeepStream LPR</p>
-        <h1>Deploy App LPR Tren Jetson</h1>
-      </header>
+    <main class="shell app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <p>DeepStream LPR</p>
+          <h1>Jetson Console</h1>
+        </div>
+        <nav class="sidebar-nav" aria-label="Dashboard sections">
+          <button type="button" class="sidebar-link active" data-nav-view="dashboard">Dashboard</button>
+          <button type="button" class="sidebar-link" data-nav-view="cameras">Cameras & ROI</button>
+          <button type="button" class="sidebar-link" data-nav-view="deploy">Deploy</button>
+          <button type="button" class="sidebar-link" data-nav-view="models">Model Factory</button>
+          <button type="button" class="sidebar-link" data-nav-view="tests">Test Lab</button>
+          <button type="button" class="sidebar-link" data-nav-view="activity">Activity</button>
+        </nav>
+        <div class="sidebar-note">
+          <strong>Runtime workspace</strong>
+          <span>Camera setup, model builds, deploy health and test traces stay in one console.</span>
+        </div>
+      </aside>
 
+      <section class="workspace">
+        <header class="workspace-header">
+          <div>
+            <p>DeepStream LPR</p>
+            <h2 id="workspaceTitle">Main Dashboard</h2>
+          </div>
+          <a class="button-link secondary" href="/results">Open results</a>
+        </header>
+
+        <section class="view active" data-view-section="dashboard">
+          <section class="panel dashboard-hero">
+            <div>
+              <h2>Main Dashboard</h2>
+              <p>Tong hop camera, DeepStream app, model library va test flow da duoc setting.</p>
+            </div>
+            <div class="actions inline-actions">
+              <button type="button" data-open-view="deploy">Deploy settings</button>
+              <button type="button" class="secondary" data-open-view="cameras">Camera setup</button>
+            </div>
+          </section>
+          <div id="dashboardOverview" class="dashboard-overview"></div>
+        </section>
+
+        <section class="view" data-view-section="cameras">
       <section class="panel">
         <h2>Cameras & ROI</h2>
         <div id="cameraSettingsPanel" class="camera-settings-panel">
@@ -85,7 +123,9 @@
           </div>
         </div>
       </section>
+        </section>
 
+        <section class="view" data-view-section="deploy">
       <section class="panel">
         <div class="panel-toolbar">
           <div>
@@ -123,12 +163,16 @@
           <div id="deployStatusCards" class="deploy-status-grid"></div>
         </div>
       </section>
+        </section>
 
+        <section class="view" data-view-section="models">
       <section class="panel">
         <h2>LPR Model Builders</h2>
         <div id="modelBuilders" class="model-builders"></div>
       </section>
+        </section>
 
+        <section class="view" data-view-section="tests">
       <section class="panel">
         <h2>Test Flows</h2>
         <div class="panel-toolbar">
@@ -185,7 +229,9 @@
           <div class="empty">No test result yet.</div>
         </div>
       </section>
+        </section>
 
+        <section class="view" data-view-section="activity">
       <section class="panel status-panel">
         <h2>Task Status</h2>
         <div id="globalStatus" class="task-status idle">
@@ -209,6 +255,8 @@
           </div>
         </div>
         <pre id="output" class="output-box"></pre>
+      </section>
+        </section>
       </section>
     </main>
 

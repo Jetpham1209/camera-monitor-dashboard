@@ -46,6 +46,8 @@ const modelBuilderGroups = [
 const modelRoleByGroup = Object.fromEntries(modelBuilderGroups.map((item) => [item.group, item]));
 
 const els = {
+  workspaceTitle: document.querySelector("#workspaceTitle"),
+  dashboardOverview: document.querySelector("#dashboardOverview"),
   streamWidth: document.querySelector("#streamWidth"),
   streamHeight: document.querySelector("#streamHeight"),
   deepstreamImage: document.querySelector("#deepstreamImage"),
@@ -121,6 +123,7 @@ let cameraDrafts = [];
 let deployApps = [];
 let deployCaptures = [];
 let confirmedTestPipelineStages = [];
+let latestDeployStatus = {};
 const roiTool = {
   image: null,
   source: "",
@@ -209,6 +212,206 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+const dashboardViewTitles = {
+  dashboard: "Main Dashboard",
+  cameras: "Cameras & ROI",
+  deploy: "Deploy Settings",
+  models: "Model Factory",
+  tests: "Test Lab",
+  activity: "Activity"
+};
+
+function selectDashboardView(view = "dashboard") {
+  const next = dashboardViewTitles[view] ? view : "dashboard";
+  document.querySelectorAll("[data-view-section]").forEach((section) => {
+    section.classList.toggle("active", section.dataset.viewSection === next);
+  });
+  document.querySelectorAll("[data-nav-view]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.navView === next);
+  });
+  if (els.workspaceTitle) els.workspaceTitle.textContent = dashboardViewTitles[next];
+  if (next === "dashboard") renderMainDashboard();
+}
+
+function dashboardTag(label, tone = "") {
+  return `<span class="dashboard-tag ${tone}">${escapeHtml(label)}</span>`;
+}
+
+function modelLibraryStats() {
+  const groups = modelBuilderGroups.map((group) => {
+    const files = modelFiles.get(group.group) || [];
+    return {
+      ...group,
+      total: files.length,
+      built: files.filter((file) => file.built).length,
+      files
+    };
+  });
+  return {
+    groups,
+    total: groups.reduce((sum, group) => sum + group.total, 0),
+    built: groups.reduce((sum, group) => sum + group.built, 0)
+  };
+}
+
+function dashboardDeploySummary() {
+  const container = latestDeployStatus.container || {};
+  const deepstream = latestDeployStatus.deepstream || {};
+  const sources = deepstream.sources || [];
+  const app = deployApps.find((item) => item.active) || deployApps[0] || null;
+  return { container, deepstream, sources, app };
+}
+
+function renderMainDashboard() {
+  if (!els.dashboardOverview) return;
+  const cameras = readCameraCards();
+  const enabledCameras = cameras.filter((camera) => camera.enabled !== false);
+  const camerasWithRoi = cameras.filter((camera) => cameraPolygon(camera).length >= 3);
+  const modelStats = modelLibraryStats();
+  const deploy = dashboardDeploySummary();
+  const testStages = confirmedTestPipelineStages.length ? normalizePipelineStages(confirmedTestPipelineStages) : [];
+  const selectedDeployCameras = new Set(deploy.app?.cameraIds || []);
+  const deployStageCount = deploy.app?.pipelineStages?.length
+    ? normalizePipelineStages(deploy.app.pipelineStages).filter((stage) => stage.enabled).length
+    : 0;
+  const running = Boolean(deploy.container.running);
+  const started = Boolean(deploy.deepstream.started);
+  const sourceText = deploy.sources.length
+    ? `${deploy.sources.length} source${deploy.sources.length === 1 ? "" : "s"} reporting FPS`
+    : "Waiting for source telemetry";
+
+  els.dashboardOverview.innerHTML = `
+    <div class="dashboard-kpis">
+      <article class="dashboard-kpi ${cameras.length ? "success" : "warning"}">
+        <span>Cameras</span>
+        <strong>${cameras.length}</strong>
+        <small>${enabledCameras.length} enabled - ${camerasWithRoi.length} ROI configured</small>
+      </article>
+      <article class="dashboard-kpi ${running && started ? "success" : "warning"}">
+        <span>DeepStream runtime</span>
+        <strong>${running ? "Container up" : "Not running"}</strong>
+        <small>${started ? "Pipeline started" : escapeHtml(deploy.deepstream.message || "Deploy an app to start the pipeline.")}</small>
+      </article>
+      <article class="dashboard-kpi ${modelStats.built ? "success" : "warning"}">
+        <span>Model library</span>
+        <strong>${modelStats.built}/${modelStats.total}</strong>
+        <small>Built source models ready for GIE stages</small>
+      </article>
+      <article class="dashboard-kpi ${testStages.length ? "success" : "warning"}">
+        <span>Confirmed test flow</span>
+        <strong>${testStages.length}</strong>
+        <small>${testStages.filter((stage) => stage.enabled).length} enabled inference stage(s)</small>
+      </article>
+    </div>
+    <div class="dashboard-grid">
+      <section class="dashboard-section">
+        <div class="panel-toolbar">
+          <div>
+            <h3>Camera setup</h3>
+            <p>RTSP inputs and ROI readiness for deploy.</p>
+          </div>
+          <div class="dashboard-actions">
+            <button type="button" class="secondary" data-open-view="cameras">Manage</button>
+          </div>
+        </div>
+        <div class="dashboard-list">
+          ${cameras.length ? cameras.map((camera, index) => `
+            <article class="dashboard-camera-row">
+              <strong>${escapeHtml(camera.name || camera.id || `Camera ${index + 1}`)}</strong>
+              <span class="dashboard-list-meta">${escapeHtml(camera.id || `camera-${index + 1}`)} - ${escapeHtml(camera.rtspUrl || "No RTSP URL")}</span>
+              <div class="dashboard-tags">
+                ${dashboardTag(camera.enabled !== false ? "enabled" : "disabled", camera.enabled !== false ? "success" : "warning")}
+                ${dashboardTag(cameraPolygon(camera).length >= 3 ? roiSummary(cameraPolygon(camera)) : "full frame ROI", cameraPolygon(camera).length >= 3 ? "success" : "warning")}
+                ${dashboardTag(frameSizeSummary(camera.id))}
+              </div>
+            </article>
+          `).join("") : '<div class="empty">No camera configured yet.</div>'}
+        </div>
+      </section>
+      <section class="dashboard-section">
+        <div class="panel-toolbar">
+          <div>
+            <h3>Active deploy app</h3>
+            <p>${escapeHtml(deploy.app?.name || "No deploy app selected.")}</p>
+          </div>
+          <div class="dashboard-actions">
+            <button type="button" class="secondary" data-open-view="deploy">Configure</button>
+            <a class="button-link secondary" href="/results">Results</a>
+          </div>
+        </div>
+        <div class="dashboard-list">
+          <article class="dashboard-stage-row">
+            <strong>${started ? "Pipeline running" : "Pipeline waiting"}</strong>
+            <span class="dashboard-list-meta">${escapeHtml(sourceText)}</span>
+            <div class="dashboard-tags">
+              ${dashboardTag(running ? "container running" : "container stopped", running ? "success" : "warning")}
+              ${dashboardTag(started ? "DeepStream started" : "DeepStream not started", started ? "success" : "warning")}
+              ${dashboardTag(`${selectedDeployCameras.size} camera(s)`)}
+              ${dashboardTag(`${deployStageCount} stage(s)`)}
+            </div>
+          </article>
+          ${deploy.sources.map((source) => `
+            <article class="dashboard-stage-row">
+              <strong>${escapeHtml(source.cameraName || source.cameraId || `Source ${source.sourceId}`)}</strong>
+              <span class="dashboard-list-meta">${Number(source.fps || 0).toFixed(2)} FPS - ${Number(source.frameCount || 0)} frames</span>
+            </article>
+          `).join("")}
+        </div>
+      </section>
+      <section class="dashboard-section">
+        <div class="panel-toolbar">
+          <div>
+            <h3>Model readiness</h3>
+            <p>Source artifacts available to build or select in a flow.</p>
+          </div>
+          <div class="dashboard-actions">
+            <button type="button" class="secondary" data-open-view="models">Factory</button>
+          </div>
+        </div>
+        <div class="dashboard-list">
+          ${modelStats.groups.map((group) => `
+            <article class="dashboard-model-row">
+              <strong>${escapeHtml(group.title)}</strong>
+              <span class="dashboard-list-meta">${group.built} built of ${group.total} source model(s)</span>
+              <div class="dashboard-tags">
+                ${dashboardTag(group.group)}
+                ${dashboardTag(group.built ? "ready" : "needs build", group.built ? "success" : "warning")}
+              </div>
+            </article>
+          `).join("")}
+        </div>
+      </section>
+      <section class="dashboard-section">
+        <div class="panel-toolbar">
+          <div>
+            <h3>Test flow</h3>
+            <p>Image and video tests use the confirmed stages.</p>
+          </div>
+          <div class="dashboard-actions">
+            <button type="button" class="secondary" data-open-view="tests">Open tests</button>
+          </div>
+        </div>
+        <div class="dashboard-list">
+          ${testStages.length ? testStages.map((stage, index) => {
+            const file = (modelFiles.get(stage.modelGroup) || []).find((item) => item.sourceKey === stage.selectedModel);
+            return `
+              <article class="dashboard-stage-row">
+                <strong>${index + 1}. ${escapeHtml(stage.name)}</strong>
+                <span class="dashboard-list-meta">${escapeHtml(stage.modelGroup)} - ${escapeHtml(file?.displayName || stage.selectedModel || "current active model")}</span>
+                <div class="dashboard-tags">
+                  ${dashboardTag(stage.enabled ? "enabled" : "disabled", stage.enabled ? "success" : "warning")}
+                  ${dashboardTag(`GIE ${stage.gieId}`)}
+                  ${dashboardTag(stage.operateOnClassIds ? `classes ${stage.operateOnClassIds}` : "all classes")}
+                </div>
+              </article>
+            `;
+          }).join("") : '<div class="empty">Confirm a test flow to pin image and video test stages.</div>'}
+        </div>
+      </section>
+    </div>
+  `;
 }
 
 async function api(path, options = {}) {
@@ -517,6 +720,7 @@ function renderCameras(streams = []) {
     });
   });
   syncRoiCameraSelect();
+  renderMainDashboard();
 }
 
 function addCamera() {
@@ -586,6 +790,7 @@ function renderDeployApps(apps = [], cameras = readCameraCards()) {
   attachDeployAppHandlers();
   attachDeployPreviewImageHandlers();
   bindStageActions(els.deployAppList, () => renderDeployApps(readDeployApps(), readCameraCards()));
+  renderMainDashboard();
 }
 
 function renderDeployAppCard(app, index, cameras) {
@@ -863,6 +1068,7 @@ function renderConfirmedTestFlow() {
   if (!els.testFlowSummary) return;
   if (!confirmedTestPipelineStages.length) {
     els.testFlowSummary.innerHTML = '<div class="empty">No confirmed test flow yet.</div>';
+    renderMainDashboard();
     return;
   }
   els.testFlowSummary.innerHTML = `
@@ -883,6 +1089,7 @@ function renderConfirmedTestFlow() {
       }).join("")}
     </div>
   `;
+  renderMainDashboard();
 }
 
 function bindStageActions(root = document, onChange = null) {
@@ -1073,6 +1280,7 @@ function renderConfig(config) {
   if (els.ocrMaxWidthRatio) els.ocrMaxWidthRatio.value = ocr.maxWidthRatio ?? 0.25;
   if (els.ocrMinHeightRatio) els.ocrMinHeightRatio.value = ocr.minHeightRatio ?? 0.18;
   if (els.ocrMaxHeightRatio) els.ocrMaxHeightRatio.value = ocr.maxHeightRatio ?? 1.15;
+  renderMainDashboard();
   print(config);
 }
 
@@ -1260,6 +1468,7 @@ function renderModelFiles(group, files = []) {
   if (!container) return;
   if (!files.length) {
     container.innerHTML = '<div class="empty">No source model yet.</div>';
+    renderMainDashboard();
     return;
   }
   container.innerHTML = files.map((file) => `
@@ -1331,6 +1540,7 @@ function renderModelFiles(group, files = []) {
     button.addEventListener("click", () => deleteModelFile(button.dataset.deleteModelFile, button.dataset.fileId, button).catch((error) => print(error.message)));
   });
   updateModelSelects();
+  renderMainDashboard();
 }
 
 async function uploadSourceLabels(group, sourceKey, button = null) {
@@ -1855,6 +2065,7 @@ async function loadEvents() {
 
 function renderDeployStatus(status = {}) {
   if (!els.deployStatusCards) return;
+  latestDeployStatus = status;
   const container = status.container || {};
   const deepstream = status.deepstream || {};
   const sources = deepstream.sources || [];
@@ -1883,6 +2094,7 @@ function renderDeployStatus(status = {}) {
       </article>
     `}
   `;
+  renderMainDashboard();
 }
 
 async function refreshDeployStatus(button = null) {
@@ -1913,6 +2125,7 @@ function startDeployStatusPolling() {
 }
 
 async function init() {
+  selectDashboardView("dashboard");
   renderModelBuilders();
   renderCheckpoints();
   updateRoiOutput();
@@ -1923,6 +2136,12 @@ async function init() {
   await refreshDeployStatus().catch(() => {});
   startDeployStatusPolling();
 }
+
+document.addEventListener("click", (event) => {
+  const viewButton = event.target.closest("[data-nav-view], [data-open-view]");
+  if (!viewButton) return;
+  selectDashboardView(viewButton.dataset.navView || viewButton.dataset.openView);
+});
 
 els.saveBtn.addEventListener("click", () => saveConfig().catch((error) => print(error.message)));
 els.deployBtn.addEventListener("click", () => deploy().catch((error) => {
