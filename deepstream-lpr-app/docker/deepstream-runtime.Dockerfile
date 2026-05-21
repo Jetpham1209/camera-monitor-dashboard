@@ -38,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-ugly \
     libgirepository-1.0-1 \
+    libmp3lame0 \
     libopencv-dev \
     libmpg123-0 \
     libmpeg2-4 \
