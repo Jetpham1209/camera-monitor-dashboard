@@ -1147,9 +1147,10 @@ function renderModelBuilders() {
         <label>
           Engine build
           <select data-builder="factory" data-key="engineBuildMethod">
-            <option value="auto" selected>Auto</option>
-            <option value="deepstream-runtime">DeepStream runtime</option>
-            <option value="trtexec">trtexec</option>
+            <option value="auto" selected>Auto - runtime trtexec</option>
+            <option value="runtime-trtexec">Runtime-matched trtexec</option>
+            <option value="deepstream-runtime">DeepStream nvinfer</option>
+            <option value="trtexec">Builder trtexec - advanced</option>
             <option value="skip">Skip engine</option>
           </select>
         </label>

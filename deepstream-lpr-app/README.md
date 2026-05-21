@@ -13,7 +13,7 @@ Scaffold deploy tren Jetson cho bai toan nhan dien dau xe va doc bien so trong R
 
 ## Chay dang product Docker
 
-Day la cach khuyen nghi tren Jetson de isolate moi truong. Control UI chay trong container, runtime DeepStream chay trong image `camera-monitor-deepstream-runtime:local` co san Python binding `pyds`, con build model YOLO/ONNX/TensorRT chay trong image `deepstream-lpr-model-builder:local`. Host Jetson khong can cai `torch`, `onnx`, `ultralytics`, hay `pyds` bang pip.
+Day la cach khuyen nghi tren Jetson de isolate moi truong. Control UI chay trong container, runtime DeepStream chay trong image `camera-monitor-deepstream-runtime:local` co san Python binding `pyds`, con model-builder image `deepstream-lpr-model-builder:local` lo export YOLO `.pt` sang ONNX. Mac dinh engine duoc build bang `trtexec` trong DeepStream runtime image da duoc profile hoa de TensorRT version khop voi container inference. Host Jetson khong can cai `torch`, `onnx`, `ultralytics`, hay `pyds` bang pip.
 
 ### Compatibility target
 
@@ -27,7 +27,7 @@ Product deploy path hien tai target JetPack 6.x tren Jetson Orin. Script install
 
 JetPack 5.x hien khong duoc dong goi mac dinh cho product Docker path nay vi khac Ubuntu/Python/DeepStream stack. Neu preflight detect JetPack 5.x, script se dung som va yeu cau upgrade len JetPack 6.x hoac tao image set rieng cho JetPack 5.
 
-Ly do phai strict version: TensorRT engine phu thuoc GPU + TensorRT + CUDA + DeepStream image. Clone repo sang Jetson khac thi nen build lai engine tren chinh Jetson do, khong copy engine tu may khac.
+Ly do phai strict version: TensorRT engine phu thuoc GPU + TensorRT + CUDA + DeepStream image. Clone repo sang Jetson khac thi nen build lai engine tren chinh Jetson do, va build bang TensorRT cua runtime target, khong copy engine tu may khac.
 
 Tu root repo:
 
@@ -152,7 +152,10 @@ Pipeline hien tai:
 - `.pt` detection model -> export ONNX bang export script cua `marcoslucianops/DeepStream-Yolo`.
 - `.pt` non-detection model -> export ONNX bang `ultralytics`.
 - `.onnx` -> copy vao thu muc build.
-- ONNX -> TensorRT `.engine` bang `trtexec` trong model-builder container neu bat `Build TensorRT engine`.
+- ONNX -> TensorRT `.engine` bang `trtexec`.
+  - `Auto` va `Runtime-matched trtexec` chay `trtexec` trong image DeepStream runtime da detect theo Jetson profile. Day la mode mac dinh.
+  - `Builder trtexec - advanced` chi dung `trtexec` trong model-builder image khi TensorRT major/minor trung voi profile runtime; neu lech version UI se fail som.
+  - `DeepStream nvinfer` van de lai cho DeepStream tu build engine neu can debug mot model/parser dac thu.
 - YOLOv8+ detect -> clone/pin `DeepStream-Yolo`, compile `libnvdsinfer_custom_impl_Yolo.so` neu bat `Build DeepStream-Yolo parser`.
 - Tu dong cap nhat `runtime/config.json` va generated DeepStream config.
 
@@ -168,7 +171,7 @@ Base image mac dinh:
 ultralytics/ultralytics:latest-jetson-jetpack6
 ```
 
-Base image model-builder can co san `torch`, `ultralytics`, `cv2`, va `trtexec`. Co the doi trong `deepstream-lpr-app/.env.product` bang `MODEL_BUILDER_BASE_IMAGE`.
+Base image model-builder can co san `torch`, `ultralytics`, va `cv2`. Co the doi trong `deepstream-lpr-app/.env.product` bang `MODEL_BUILDER_BASE_IMAGE`. TensorRT cua image nay khong duoc coi la runtime target neu dung mode mac dinh.
 
 Thu muc build se nam trong:
 
@@ -264,7 +267,9 @@ MODEL_BUILDER_BASE_IMAGE
 
 Khong nen sua cac bien version nay neu khong doi ca JetPack/DeepStream image tuong ung.
 
-De build TensorRT engine, model-builder image can co `trtexec`. Mac dinh app goi:
+Mode mac dinh khong dung `trtexec` cua model-builder. App export ONNX trong model-builder, sau do goi `trtexec` trong `DEEPSTREAM_IMAGE` de engine khop TensorRT cua DeepStream runtime da chon. Viec nay van la build bang `trtexec`, khong phai cho `nvinfer` tu optimize engine.
+
+Neu co ly do phai chon `Builder trtexec - advanced`, model-builder image can co `trtexec` va TensorRT major/minor phai trung `TENSORRT_VERSION` ma preflight detect. Mac dinh app goi:
 
 ```text
 /usr/src/tensorrt/bin/trtexec

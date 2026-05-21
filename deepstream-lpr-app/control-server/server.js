@@ -33,6 +33,7 @@ const MODEL_BUILDER_AUTO_BUILD = process.env.MODEL_BUILDER_AUTO_BUILD !== "0";
 const MODEL_BUILDER_FORCE_BUILD = process.env.MODEL_BUILDER_FORCE_BUILD === "1";
 const MODEL_BUILDER_WORKDIR = "/workspace/deepstream-lpr-app";
 const CUDA_VER = process.env.CUDA_VER || "";
+const TENSORRT_VERSION = process.env.TENSORRT_VERSION || "";
 const CAPTURE_TIMEOUT_MS = Number(process.env.PROBE_TIMEOUT_MS || 10000);
 const PING_TIMEOUT_MS = Number(process.env.PING_TIMEOUT_MS || 3000);
 
@@ -1074,8 +1075,8 @@ function reusableArtifact(filePath, dependencies = [], forceRebuild = false) {
 
 function resolveEngineBuildMethod(requested, canUseDeepStreamYolo) {
   const value = String(requested || "auto").trim().toLowerCase();
-  if (["trtexec", "deepstream-runtime", "skip"].includes(value)) return value;
-  return canUseDeepStreamYolo ? "deepstream-runtime" : "trtexec";
+  if (["runtime-trtexec", "trtexec", "deepstream-runtime", "skip"].includes(value)) return value;
+  return "runtime-trtexec";
 }
 
 function resolveDeepStreamYoloRef(group, sourceExt, requested = "") {
@@ -1339,6 +1340,61 @@ function trtexecCommand() {
   return process.env.TRTEXEC_PATH_IN_BUILDER || process.env.TRTEXEC_PATH || "/usr/src/tensorrt/bin/trtexec";
 }
 
+function tensorRtMajorMinor(value) {
+  const match = String(value || "").match(/(\d+)\.(\d+)/);
+  return match ? `${match[1]}.${match[2]}` : "";
+}
+
+async function modelBuilderTensorRtVersion() {
+  const result = await runModelBuilder([
+    "bash",
+    "-lc",
+    [
+      "set -e",
+      "python3 - <<'PY'",
+      "try:",
+      "    import tensorrt as trt",
+      "    print(trt.__version__)",
+      "except Exception:",
+      "    pass",
+      "PY"
+    ].join("\n")
+  ]);
+  if (result.code !== 0) {
+    const error = new Error(`Cannot read TensorRT version from model-builder image ${MODEL_BUILDER_IMAGE}.\n${result.output}`);
+    error.output = result.output;
+    throw error;
+  }
+  const version = result.output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => /^\d+\.\d+/.test(line));
+  return { version: version || "", output: result.output };
+}
+
+async function assertBuilderTrtexecMatchesRuntime() {
+  if (!tensorRtMajorMinor(TENSORRT_VERSION)) {
+    return "Detected runtime TensorRT version is unknown; builder trtexec compatibility check skipped.";
+  }
+  const builder = await modelBuilderTensorRtVersion();
+  const builderVersion = tensorRtMajorMinor(builder.version);
+  const runtimeVersion = tensorRtMajorMinor(TENSORRT_VERSION);
+  if (!builderVersion) {
+    throw new Error(
+      `Cannot verify TensorRT in model-builder image ${MODEL_BUILDER_IMAGE}. ` +
+      "Use Auto / Runtime trtexec, or provide a builder image with Python TensorRT installed."
+    );
+  }
+  if (builderVersion !== runtimeVersion) {
+    throw new Error(
+      `Builder trtexec TensorRT ${builder.version} does not match detected DeepStream runtime TensorRT ${TENSORRT_VERSION}. ` +
+      "Use Auto / Runtime trtexec so the engine is built by trtexec inside the selected DeepStream runtime image, " +
+      "or replace MODEL_BUILDER_BASE_IMAGE with a builder image that matches this Jetson profile."
+    );
+  }
+  return `Builder TensorRT ${builder.version} matches runtime TensorRT ${TENSORRT_VERSION}.`;
+}
+
 async function ensureDeepStreamYoloRepo() {
   return await ensureDeepStreamYoloRepoAtRef(DEEPSTREAM_YOLO_REF);
 }
@@ -1571,7 +1627,7 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
   const canUseDeepStreamYolo = task === "detect" || task === "auto";
   const buildParser = parseBool(options.buildParser, canUseDeepStreamYolo);
   const engineBuildMethod = buildEngine
-    ? resolveEngineBuildMethod(options.engineBuildMethod || model.engineBuildMethod, canUseDeepStreamYolo && buildParser)
+    ? resolveEngineBuildMethod(options.engineBuildMethod || "auto", canUseDeepStreamYolo && buildParser)
     : "skip";
   const forceRebuild = parseBool(options.forceRebuild, false);
   const numClassesFromLabels = countLabelLines(hostPathFromWorkspace(model.labels));
@@ -1594,6 +1650,8 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
     `Source type: ${sourceExt || "unknown"}`,
     `DeepStream-Yolo parser ref: ${deepstreamYoloRef}`,
     `Engine build method: ${engineBuildMethod}`,
+    `DeepStream runtime image: ${config.deepstreamImage}`,
+    `Detected runtime TensorRT: ${TENSORRT_VERSION || "unknown"}`,
     `Build batch size: ${batchSize}`,
     ""
   ].join("\n");
@@ -1602,7 +1660,10 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
   const onnxIsReusable = reusableArtifact(paths.onnx, [source], forceRebuild) && (!onnxNeedsGeneratedLabels || Boolean(usableFileStat(paths.labels)));
   const parserUsesProfile = isParserProfile(deepstreamYoloRef);
   const buildEngineWithTrtexec = buildEngine && engineBuildMethod === "trtexec";
-  const buildEngineWithRuntimeTrtexec = buildEngine && engineBuildMethod === "deepstream-runtime" && parserUsesProfile;
+  const buildEngineWithRuntimeTrtexec = buildEngine && (
+    engineBuildMethod === "runtime-trtexec" ||
+    (engineBuildMethod === "deepstream-runtime" && parserUsesProfile)
+  );
   const deferEngineToDeepStream = buildEngine && engineBuildMethod === "deepstream-runtime" && !parserUsesProfile;
   const engineIsReusable = (buildEngineWithTrtexec || buildEngineWithRuntimeTrtexec) && reusableArtifact(paths.engine, [paths.onnx], forceRebuild);
   const parserRefMatches = previousBuild.deepstreamYoloRef === deepstreamYoloRef;
@@ -1708,6 +1769,7 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
       output += `\n# Build TensorRT engine\n${message}\n`;
     } else {
       const trtResult = await runCheckpoint(checkpoints, "build_tensorrt", async () => {
+        const compatibility = await assertBuilderTrtexecMatchesRuntime();
         const trtexec = trtexecCommand();
         const trtArgs = [
           `--onnx=${workspacePath(paths.onnx)}`,
@@ -1722,7 +1784,7 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
           error.output = result.output;
           throw error;
         }
-        return result;
+        return { ...result, output: `${compatibility}\n${result.output}` };
       }, "TensorRT engine built.", onProgress);
       output += `\n# Build TensorRT engine\n${trtResult.output}\n`;
       if (trtResult.code !== 0) {

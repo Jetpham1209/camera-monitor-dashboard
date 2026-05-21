@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 import argparse
+import inspect
+import os
+import runpy
 import shutil
-import subprocess
+import sys
 from pathlib import Path
 
 
@@ -15,12 +18,35 @@ EXPORT_SCRIPTS = {
     "yolov13": "export_yoloV13.py",
 }
 
+def run_export_script(script, argv, cwd):
+    old_argv = sys.argv[:]
+    old_cwd = Path.cwd()
+    torch_export = None
+    original_export = None
+    try:
+        import torch
 
-def run(command, cwd):
-    result = subprocess.run(command, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    print(result.stdout)
-    if result.returncode != 0:
-        raise SystemExit(result.returncode)
+        torch_export = torch.onnx
+        original_export = torch_export.export
+        if "dynamo" in inspect.signature(original_export).parameters:
+            def legacy_export(*args, **kwargs):
+                kwargs.setdefault("dynamo", False)
+                return original_export(*args, **kwargs)
+
+            torch_export.export = legacy_export
+            print("Using TorchScript ONNX exporter (dynamo=False) for DeepStream-Yolo compatibility")
+    except Exception as exc:
+        print(f"Could not force legacy Torch ONNX exporter: {exc}")
+
+    try:
+        os.chdir(cwd)
+        sys.argv = [str(script), *argv]
+        runpy.run_path(str(script), run_name="__main__")
+    finally:
+        if torch_export is not None and original_export is not None:
+            torch_export.export = original_export
+        sys.argv = old_argv
+        os.chdir(old_cwd)
 
 
 def main():
@@ -66,9 +92,7 @@ def main():
     work_source = output.parent / f"deepstream_yolo_export{source.suffix.lower()}"
     shutil.copy2(source, work_source)
 
-    command = [
-        "python3",
-        str(script),
+    script_argv = [
         "-w",
         str(work_source),
         "-s",
@@ -79,11 +103,11 @@ def main():
         str(max(1, args.batch)),
     ]
     if args.simplify:
-        command.append("--simplify")
+        script_argv.append("--simplify")
     if args.dynamic:
-        command.append("--dynamic")
+        script_argv.append("--dynamic")
 
-    run(command, cwd=output.parent)
+    run_export_script(script, script_argv, cwd=output.parent)
 
     exported = work_source.with_suffix(".onnx")
     if not exported.exists():
