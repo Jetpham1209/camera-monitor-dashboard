@@ -345,39 +345,42 @@ function defaultPipelineStages() {
   return [
     {
       id: "pgie",
-      name: "PGIE Vehicle",
-      modelGroup: "vehicle_front",
+      name: "PGIE",
+      gieType: "PGIE",
+      modelGroup: "",
       selectedModel: "",
       enabled: true,
       gieId: 1,
       networkType: 0,
       operateOnGieId: "",
       operateOnClassIds: "",
-      role: "vehicle_front"
+      role: "pgie"
     },
     {
-      id: "sgie-plate",
-      name: "SGIE Plate",
-      modelGroup: "plate_detector",
+      id: "sgie",
+      name: "SGIE",
+      gieType: "SGIE",
+      modelGroup: "",
       selectedModel: "",
       enabled: true,
       gieId: 2,
       networkType: 0,
       operateOnGieId: 1,
-      operateOnClassIds: "0",
-      role: "plate_detector"
+      operateOnClassIds: "",
+      role: "sgie"
     },
     {
-      id: "tgie-character",
-      name: "TGIE Character",
-      modelGroup: "plate_ocr",
+      id: "tgie",
+      name: "TGIE",
+      gieType: "TGIE",
+      modelGroup: "",
       selectedModel: "",
       enabled: true,
       gieId: 3,
       networkType: 0,
       operateOnGieId: 2,
-      operateOnClassIds: "0",
-      role: "plate_ocr"
+      operateOnClassIds: "",
+      role: "tgie"
     }
   ];
 }
@@ -403,29 +406,21 @@ function defaultConfig() {
     captureCooldownSec: 30,
     deepstreamImage: DEFAULT_DEEPSTREAM_IMAGE,
     trackerLib: "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so",
-    models: {
-      vehicle_front: {},
-      plate_detector: {},
-      plate_ocr: {}
-    },
+    models: {},
     pipelineStages: defaultPipelineStages(),
     deploy: {
       lastStatus: "not_deployed",
       lastOutput: "",
       updatedAt: null
     },
-    activeDeployAppId: "lpr-app-1",
+    activeDeployAppId: "deepstream-app-1",
     deployApps: [
       {
-        id: "lpr-app-1",
-        name: "LPR App 1",
+        id: "deepstream-app-1",
+        name: "DeepStream App 1",
         active: true,
         cameraIds: ["camera-1"],
-        selectedModels: {
-          vehicle_front: "",
-          plate_detector: "",
-          plate_ocr: ""
-        },
+        selectedModels: {},
         pipelineStages: defaultPipelineStages()
       }
     ],
@@ -459,13 +454,10 @@ function mergeConfig(base, patch) {
       frontVehicleClassIds: patch.frontVehicleClassIds || [0],
       captureCooldownSec: patch.captureCooldownSec || 30
     }] : base.streams);
-  output.models = {
-    ...base.models,
-    ...(patch.models || {}),
-    vehicle_front: { ...base.models.vehicle_front, ...(patch.models?.vehicle_front || {}) },
-    plate_detector: { ...base.models.plate_detector, ...(patch.models?.plate_detector || {}) },
-    plate_ocr: { ...base.models.plate_ocr, ...(patch.models?.plate_ocr || {}) }
-  };
+  output.models = { ...(base.models || {}) };
+  for (const [group, model] of Object.entries(patch.models || {})) {
+    output.models[group] = { ...(base.models?.[group] || {}), ...(model || {}) };
+  }
   output.deploy = { ...base.deploy, ...(patch.deploy || {}) };
   output.deployApps = Array.isArray(patch.deployApps) ? patch.deployApps : base.deployApps;
   output.pipelineStages = Array.isArray(patch.pipelineStages) ? patch.pipelineStages : (base.pipelineStages || defaultPipelineStages());
@@ -883,6 +875,7 @@ function normalizePipelineStages(config) {
     return {
       id: sanitizeStageId(stage.id, `gie-${index + 1}`),
       name: String(stage.name || fallback.name || `GIE ${index + 1}`),
+      gieType: String(stage.gieType || fallback.gieType || stage.name || fallback.name || "GIE"),
       modelGroup: group,
       selectedModel: String(stage.selectedModel || "").trim(),
       enabled: stage.enabled !== false,
@@ -1210,6 +1203,40 @@ async function listModelFiles(group) {
   }
 
   return files.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+}
+
+async function listModelGroups() {
+  const config = await getConfig();
+  const candidates = new Set(Object.keys(config.models || {}));
+  let entries = [];
+  try {
+    entries = await fsp.readdir(MODELS_DIR, { withFileTypes: true });
+  } catch {
+    entries = [];
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) candidates.add(entry.name);
+  }
+
+  const groups = [];
+  for (const value of candidates) {
+    let group = "";
+    try {
+      group = sanitizeModelGroup(value);
+    } catch {
+      continue;
+    }
+    const files = await listModelFiles(group);
+    if (!files.length) continue;
+    groups.push({
+      group,
+      displayName: files[0]?.displayName || group,
+      fileCount: files.length,
+      builtCount: files.filter((file) => file.built).length,
+      files
+    });
+  }
+  return groups.sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
 function decodeModelFileId(fileId) {
@@ -2329,6 +2356,7 @@ app.post("/api/upload/:slot", upload.single("file"), async (req, res) => {
     const [prefix, ...rest] = slot.split("_");
     const group = slot.startsWith("vehicle_front") ? "vehicle_front" : `${prefix}_${rest[0]}`;
     const kind = slot.replace(`${group}_`, "").replace("custom_lib", "customLib");
+    config.models[group] = config.models[group] || {};
     config.models[group][kind] = workspacePath(req.file.path);
     if (kind === "labels") {
       const labelCount = countLabelLines(req.file.path);
@@ -2410,6 +2438,14 @@ app.get("/api/models/:group/files", async (req, res) => {
   try {
     const group = sanitizeModelGroup(req.params.group);
     res.json({ group, files: await listModelFiles(group) });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.get("/api/models/groups", async (_req, res) => {
+  try {
+    res.json({ groups: await listModelGroups() });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }

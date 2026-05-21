@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>DeepStream LPR Deploy</title>
+    <title>DeepStream Deploy Console</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <main class="shell app-shell">
       <aside class="sidebar">
         <div class="sidebar-brand">
-          <p>DeepStream LPR</p>
+          <p>DeepStream</p>
           <h1>Jetson Console</h1>
         </div>
         <nav class="sidebar-nav" aria-label="Dashboard sections">
@@ -30,7 +30,7 @@
       <section class="workspace">
         <header class="workspace-header">
           <div>
-            <p>DeepStream LPR</p>
+            <p>DeepStream runtime</p>
             <h2 id="workspaceTitle">Main Dashboard</h2>
           </div>
           <a class="button-link secondary" href="/results">Open results</a>
@@ -146,7 +146,6 @@
         <div class="actions inline-actions deploy-actions">
           <button id="saveBtn">Save config</button>
           <button id="deployBtn">Deploy / Update active app</button>
-          <button id="stopBtn">Stop</button>
           <button id="eventsBtn">Load events</button>
         </div>
         <div class="deploy-monitor">
@@ -157,6 +156,7 @@
             </div>
             <div class="actions inline-actions">
               <button id="refreshDeployStatusBtn" type="button" class="secondary">Refresh status</button>
+              <button id="stopRunningDeployBtn" type="button" class="danger">Stop running app</button>
               <a class="button-link secondary" href="/results">View results</a>
             </div>
           </div>
@@ -167,7 +167,7 @@
 
         <section class="view" data-view-section="models">
       <section class="panel">
-        <h2>LPR Model Builders</h2>
+        <h2>Model Factory</h2>
         <div id="modelBuilders" class="model-builders"></div>
       </section>
         </section>
@@ -204,7 +204,7 @@
         <div class="test-flows">
           <article class="test-card">
             <h3>Test by Image</h3>
-            <p>Upload mot anh de debug detection; object xe se di tiep qua plate/OCR.</p>
+            <p>Upload mot anh de debug flow da confirm qua cac inference stage.</p>
             <label>Image file <input id="testImageFile" type="file" accept=".jpg,.jpeg,.png,.bmp,.webp" /></label>
             <div class="actions inline-actions">
               <button id="uploadTestImageBtn" type="button">Upload image</button>

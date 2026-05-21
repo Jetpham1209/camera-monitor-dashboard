@@ -287,6 +287,15 @@ label {
   font-weight: 700;
   margin-bottom: 12px;
 }
+label small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.model-name-field {
+  grid-column: span 2;
+}
 input, textarea, select {
   width: 100%;
   border: 1px solid var(--line);
@@ -683,6 +692,9 @@ textarea { min-height: 120px; resize: vertical; }
   border-radius: 8px;
   padding: 12px;
   background: #fff;
+}
+.stage-config-grid {
+  grid-template-columns: minmax(180px, 0.45fr) minmax(260px, 1fr);
 }
 .stage-actions {
   margin-top: 10px;
@@ -1161,6 +1173,7 @@ pre {
   }
   .app-shell,
   .grid,
+  .stage-config-grid,
   .roi-tool-grid,
   .test-flows,
   .image-result-layout,
@@ -1169,6 +1182,9 @@ pre {
   .dashboard-kpis,
   .dashboard-grid {
     grid-template-columns: 1fr;
+  }
+  .model-name-field {
+    grid-column: auto;
   }
   .sidebar {
     position: static;

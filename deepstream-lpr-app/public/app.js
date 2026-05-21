@@ -1,49 +1,32 @@
-const modelBuilderGroups = [
+const gieStageTypes = [
   {
-    group: "vehicle_front",
-    title: "Vehicle Front Detector",
-    subtitle: "Model phat hien dau xe trong ROI.",
-    stageLabel: "PGIE Vehicle",
-    defaultTask: "detect",
-    defaultClasses: 1,
-    defaultImgsz: 640,
-    defaultParser: true,
+    gieType: "PGIE",
+    id: "pgie",
+    name: "PGIE",
     defaultGieId: 1,
     defaultNetworkType: 0,
     defaultOperateOnGieId: "",
     defaultOperateOnClassIds: ""
   },
   {
-    group: "plate_detector",
-    title: "Plate Detector",
-    subtitle: "Model phat hien bien so tren dau xe.",
-    stageLabel: "SGIE Plate",
-    defaultTask: "detect",
-    defaultClasses: 1,
-    defaultImgsz: 640,
-    defaultParser: true,
+    gieType: "SGIE",
+    id: "sgie",
+    name: "SGIE",
     defaultGieId: 2,
     defaultNetworkType: 0,
     defaultOperateOnGieId: 1,
-    defaultOperateOnClassIds: "0"
+    defaultOperateOnClassIds: ""
   },
   {
-    group: "plate_ocr",
-    title: "Plate Character Detector",
-    subtitle: "YOLO detect tung ky tu tren bien so, sau do sort theo toa do.",
-    stageLabel: "TGIE Character",
-    defaultTask: "detect",
-    defaultClasses: 36,
-    defaultImgsz: 224,
-    defaultParser: true,
+    gieType: "TGIE",
+    id: "tgie",
+    name: "TGIE",
     defaultGieId: 3,
     defaultNetworkType: 0,
     defaultOperateOnGieId: 2,
-    defaultOperateOnClassIds: "0"
+    defaultOperateOnClassIds: ""
   }
 ];
-
-const modelRoleByGroup = Object.fromEntries(modelBuilderGroups.map((item) => [item.group, item]));
 
 const els = {
   workspaceTitle: document.querySelector("#workspaceTitle"),
@@ -93,9 +76,9 @@ const els = {
   output: document.querySelector("#output"),
   saveBtn: document.querySelector("#saveBtn"),
   deployBtn: document.querySelector("#deployBtn"),
-  stopBtn: document.querySelector("#stopBtn"),
   eventsBtn: document.querySelector("#eventsBtn"),
   refreshDeployStatusBtn: document.querySelector("#refreshDeployStatusBtn"),
+  stopRunningDeployBtn: document.querySelector("#stopRunningDeployBtn"),
   deployStatusCards: document.querySelector("#deployStatusCards"),
   testImageFile: document.querySelector("#testImageFile"),
   testVideoFile: document.querySelector("#testVideoFile"),
@@ -131,6 +114,7 @@ const roiTool = {
 };
 const tasks = new Map();
 const modelFiles = new Map();
+let modelLibraryGroups = [];
 let deployStatusPollTimer = null;
 let deployStatusPollInFlight = false;
 
@@ -240,8 +224,8 @@ function dashboardTag(label, tone = "") {
 }
 
 function modelLibraryStats() {
-  const groups = modelBuilderGroups.map((group) => {
-    const files = modelFiles.get(group.group) || [];
+  const groups = modelLibraryGroups.map((group) => {
+    const files = modelFiles.get(group.group) || group.files || [];
     return {
       ...group,
       total: files.length,
@@ -373,7 +357,7 @@ function renderMainDashboard() {
         <div class="dashboard-list">
           ${modelStats.groups.map((group) => `
             <article class="dashboard-model-row">
-              <strong>${escapeHtml(group.title)}</strong>
+              <strong>${escapeHtml(group.displayName || group.group)}</strong>
               <span class="dashboard-list-meta">${group.built} built of ${group.total} source model(s)</span>
               <div class="dashboard-tags">
                 ${dashboardTag(group.group)}
@@ -395,11 +379,11 @@ function renderMainDashboard() {
         </div>
         <div class="dashboard-list">
           ${testStages.length ? testStages.map((stage, index) => {
-            const file = (modelFiles.get(stage.modelGroup) || []).find((item) => item.sourceKey === stage.selectedModel);
+            const file = findModelFile(stage.modelGroup, stage.selectedModel);
             return `
               <article class="dashboard-stage-row">
-                <strong>${index + 1}. ${escapeHtml(stage.name)}</strong>
-                <span class="dashboard-list-meta">${escapeHtml(stage.modelGroup)} - ${escapeHtml(file?.displayName || stage.selectedModel || "current active model")}</span>
+                <strong>${index + 1}. ${escapeHtml(stage.gieType || "GIE")}</strong>
+                <span class="dashboard-list-meta">GIE ${escapeHtml(stage.gieId)} - ${escapeHtml(file?.displayName || stage.selectedModel || "current active model")}</span>
                 <div class="dashboard-tags">
                   ${dashboardTag(stage.enabled ? "enabled" : "disabled", stage.enabled ? "success" : "warning")}
                   ${dashboardTag(`GIE ${stage.gieId}`)}
@@ -483,13 +467,71 @@ function selectedModelsFromStages(stages = []) {
   }, {});
 }
 
-function firstStageClassIds(stages = [], modelGroup = "vehicle_front") {
-  const stage = normalizePipelineStages(stages).find((item) => item.enabled && item.modelGroup === modelGroup);
+function firstStageClassIds(stages = []) {
+  const normalized = normalizePipelineStages(stages).filter((item) => item.enabled);
+  const stage = normalized.find((item) => !item.operateOnGieId) || normalized[0];
   return stage?.operateOnClassIds || "";
 }
 
 function builderControl(group, key) {
   return document.querySelector(`[data-builder="${group}"][data-key="${key}"]`);
+}
+
+function modelGroupLabel(group) {
+  return modelLibraryGroups.find((item) => item.group === group)?.displayName
+    || group
+    || "model";
+}
+
+function normalizeGieType(value = "", index = 0) {
+  const requested = String(value || "").trim().toUpperCase();
+  return gieStageTypes.find((item) => item.gieType === requested)?.gieType
+    || gieStageTypes[Math.min(index, gieStageTypes.length - 1)]?.gieType
+    || "GIE";
+}
+
+function stageTypeByName(value = "", index = 0) {
+  const gieType = normalizeGieType(value, index);
+  return gieStageTypes.find((item) => item.gieType === gieType) || gieStageTypes[0];
+}
+
+function modelGroupFromModelName(modelName = "") {
+  const group = String(modelName || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80);
+  if (!group) throw new Error("Nhap Model name truoc khi upload source model.");
+  return group;
+}
+
+function factoryModelGroup() {
+  const modelName = builderControl("factory", "modelName")?.value || "";
+  return modelGroupFromModelName(modelName);
+}
+
+function allModelFiles({ built = false } = {}) {
+  return [...modelFiles.values()]
+    .flat()
+    .filter((file) => !built || file.built);
+}
+
+function modelSelectionValue(group, sourceKey) {
+  return group && sourceKey ? `${group}::${sourceKey}` : "";
+}
+
+function parseModelSelection(value = "", fallbackGroup = "") {
+  const selection = String(value || "");
+  if (selection.includes("::")) {
+    const [group, ...sourceParts] = selection.split("::");
+    return { group, sourceKey: sourceParts.join("::") };
+  }
+  return { group: fallbackGroup, sourceKey: selection };
+}
+
+function findModelFile(group, sourceKey) {
+  return (modelFiles.get(group) || []).find((file) => file.sourceKey === sourceKey) || null;
 }
 
 function buildOptions(group, overrides = {}) {
@@ -508,7 +550,7 @@ function buildOptions(group, overrides = {}) {
     engineBuildMethod: builderControl(controlGroup, "engineBuildMethod")?.value || "auto",
     buildParser: builderControl(controlGroup, "buildParser").checked,
     forceRebuild: builderControl(controlGroup, "forceRebuild").checked,
-    sourcePath: builderControl(controlGroup, "sourceSelect")?.value || "",
+    sourcePath: "",
     modelName: builderControl(controlGroup, "modelName")?.value || "",
     description: builderControl(controlGroup, "description")?.value || "",
     ...overrides
@@ -551,45 +593,47 @@ function frameSizeSummary(cameraId) {
 }
 
 function defaultPipelineStages() {
-  return modelBuilderGroups.map((item, index) => ({
-    id: index === 0 ? "pgie" : index === 1 ? "sgie-plate" : "tgie-character",
-    name: item.stageLabel,
-    modelGroup: item.group,
+  return gieStageTypes.map((item) => ({
+    id: item.id,
+    name: item.name,
+    gieType: item.gieType,
+    modelGroup: "",
     selectedModel: "",
     enabled: true,
     gieId: item.defaultGieId,
     networkType: item.defaultNetworkType,
     operateOnGieId: item.defaultOperateOnGieId,
     operateOnClassIds: item.defaultOperateOnClassIds,
-    role: item.group
+    role: item.gieType.toLowerCase()
   }));
 }
 
 function normalizePipelineStages(stages = []) {
   const input = Array.isArray(stages) && stages.length ? stages : defaultPipelineStages();
   return input.map((stage, index) => {
-    const role = modelRoleByGroup[stage.modelGroup] || modelBuilderGroups[index] || modelBuilderGroups[0];
+    const stageType = stageTypeByName(stage.gieType || stage.name, index);
     return {
       id: String(stage.id || `gie-${index + 1}`).trim() || `gie-${index + 1}`,
-      name: String(stage.name || role.stageLabel || `GIE ${index + 1}`).trim(),
-      modelGroup: String(stage.modelGroup || role.group).trim(),
+      name: stageType.name,
+      gieType: stageType.gieType,
+      modelGroup: String(stage.modelGroup || "").trim(),
       selectedModel: String(stage.selectedModel || "").trim(),
       enabled: stage.enabled !== false,
-      gieId: Math.max(1, Number(stage.gieId || role.defaultGieId || index + 1)),
-      networkType: Number(stage.networkType ?? role.defaultNetworkType ?? 0),
+      gieId: Math.max(1, Number(stage.gieId || stageType.defaultGieId || index + 1)),
+      networkType: Number(stage.networkType ?? stageType.defaultNetworkType ?? 0),
       operateOnGieId: stage.operateOnGieId === "" || stage.operateOnGieId === null || stage.operateOnGieId === undefined
         ? ""
         : Number(stage.operateOnGieId),
-      operateOnClassIds: String(stage.operateOnClassIds ?? role.defaultOperateOnClassIds ?? ""),
-      role: String(stage.role || stage.modelGroup || role.group)
+      operateOnClassIds: String(stage.operateOnClassIds ?? stageType.defaultOperateOnClassIds ?? ""),
+      role: String(stage.role || stageType.gieType.toLowerCase())
     };
   });
 }
 
 function defaultDeployApp(index = 0, cameras = []) {
   return {
-    id: `lpr-app-${index + 1}`,
-    name: `LPR App ${index + 1}`,
+    id: `deepstream-app-${index + 1}`,
+    name: `DeepStream App ${index + 1}`,
     active: index === 0,
     cameraIds: cameras.filter((camera) => camera.enabled !== false).map((camera) => camera.id),
     pipelineStages: defaultPipelineStages(),
@@ -749,14 +793,14 @@ function readDeployApps(cameras = readCameraCards()) {
   const cards = [...document.querySelectorAll("[data-deploy-app-card]")];
   if (!cards.length) return [defaultDeployApp(0, cameras)];
   let apps = cards.map((card, index) => {
-    const id = card.dataset.deployAppId || `lpr-app-${index + 1}`;
+    const id = card.dataset.deployAppId || `deepstream-app-${index + 1}`;
     const cameraSelections = [...card.querySelectorAll("[data-deploy-camera]:checked")]
       .map((input) => input.value)
       .filter((cameraId) => cameraIds.has(cameraId));
     const pipelineStages = readPipelineStages(card.querySelector("[data-deploy-stage-list]"));
     return {
       id,
-      name: card.querySelector("[data-deploy-field='name']").value.trim() || `LPR App ${index + 1}`,
+      name: card.querySelector("[data-deploy-field='name']").value.trim() || `DeepStream App ${index + 1}`,
       active: card.querySelector("[data-deploy-active]")?.checked || false,
       cameraIds: cameraSelections,
       pipelineStages,
@@ -803,7 +847,7 @@ function renderDeployAppCard(app, index, cameras) {
           <input data-deploy-active type="radio" name="activeDeployApp" ${app.active ? "checked" : ""} />
           Active
         </label>
-        <label>App name <input data-deploy-field="name" value="${escapeHtml(app.name || `LPR App ${index + 1}`)}" /></label>
+        <label>App name <input data-deploy-field="name" value="${escapeHtml(app.name || `DeepStream App ${index + 1}`)}" /></label>
         <div class="actions inline-actions">
           <button type="button" data-remove-deploy-app="${index}" ${deployApps.length <= 1 ? "disabled" : ""}>Remove app</button>
         </div>
@@ -858,27 +902,39 @@ function renderDeployCameraPreview(camera) {
 }
 
 function stagesFromSelectedModels(selectedModels = {}) {
-  const stages = defaultPipelineStages();
-  return stages.map((stage) => ({
-    ...stage,
-    selectedModel: selectedModels?.[stage.modelGroup] || stage.selectedModel || ""
-  }));
+  const entries = Object.entries(selectedModels || {}).filter(([_group, sourceKey]) => sourceKey);
+  if (!entries.length) return defaultPipelineStages();
+  return entries.map(([group, sourceKey], index) => {
+    const stageType = gieStageTypes[Math.min(index, gieStageTypes.length - 1)] || gieStageTypes[0];
+    return {
+      id: stageType.id || `gie-${index + 1}`,
+      name: stageType.name,
+      gieType: stageType.gieType,
+      modelGroup: group,
+      selectedModel: sourceKey,
+      enabled: true,
+      gieId: index + 1,
+      networkType: stageType.defaultNetworkType,
+      operateOnGieId: stageType.defaultOperateOnGieId,
+      operateOnClassIds: stageType.defaultOperateOnClassIds,
+      role: stageType.gieType.toLowerCase()
+    };
+  });
 }
 
 function stageRowsMarkup(stages = []) {
   return normalizePipelineStages(stages).map((stage, index) => `
     <article class="pipeline-stage-row" data-stage-row>
-      <div class="grid">
-        <label>Stage name <input data-stage-field="name" value="${escapeHtml(stage.name)}" /></label>
+      <div class="grid stage-config-grid">
         <label>
-          Model role
-          <select data-stage-field="modelGroup" data-selected-value="${escapeHtml(stage.modelGroup)}">
-            ${modelBuilderGroups.map((item) => `<option value="${escapeHtml(item.group)}">${escapeHtml(item.stageLabel)}</option>`).join("")}
+          GIE type
+          <select data-stage-field="gieType" data-selected-value="${escapeHtml(stage.gieType)}">
+            ${gieStageTypes.map((item) => `<option value="${escapeHtml(item.gieType)}">${escapeHtml(item.gieType)}</option>`).join("")}
           </select>
         </label>
         <label>
           Source model
-          <select data-stage-field="selectedModel" data-selected-value="${escapeHtml(stage.selectedModel)}"></select>
+          <select data-stage-field="selectedModel" data-selected-value="${escapeHtml(modelSelectionValue(stage.modelGroup, stage.selectedModel))}"></select>
         </label>
       </div>
       <div class="grid">
@@ -892,6 +948,7 @@ function stageRowsMarkup(stages = []) {
       </div>
       <div class="model-file-actions stage-actions">
         <label class="inline-check"><input data-stage-field="enabled" type="checkbox" ${stage.enabled ? "checked" : ""} /> Enabled</label>
+        <input data-stage-field="modelGroup" type="hidden" value="${escapeHtml(stage.modelGroup)}" />
         <input data-stage-field="id" type="hidden" value="${escapeHtml(stage.id)}" />
         <input data-stage-field="role" type="hidden" value="${escapeHtml(stage.role)}" />
         <input data-stage-field="networkType" type="hidden" value="${escapeHtml(stage.networkType)}" />
@@ -902,23 +959,25 @@ function stageRowsMarkup(stages = []) {
 }
 
 function hydrateStageControls(root = document) {
-  root.querySelectorAll("[data-stage-field='modelGroup']").forEach((select) => {
+  root.querySelectorAll("[data-stage-field='gieType']").forEach((select, index) => {
     const selected = select.dataset.selectedValue || select.value;
-    select.value = modelBuilderGroups.some((item) => item.group === selected) ? selected : modelBuilderGroups[0].group;
+    select.value = normalizeGieType(selected, index);
   });
   root.querySelectorAll("[data-stage-field='selectedModel']").forEach((select) => {
     const row = select.closest("[data-stage-row]");
-    const group = row?.querySelector("[data-stage-field='modelGroup']")?.value || modelBuilderGroups[0].group;
+    const group = row?.querySelector("[data-stage-field='modelGroup']")?.value || "";
     const current = select.dataset.selectedValue || select.value || "";
-    const files = (modelFiles.get(group) || []).filter((file) => file.built);
-    const hasCurrent = files.some((file) => file.sourceKey === current);
+    const parsed = parseModelSelection(current, group);
+    const currentValue = modelSelectionValue(parsed.group, parsed.sourceKey);
+    const files = allModelFiles({ built: true });
+    const hasCurrent = files.some((file) => modelSelectionValue(file.group, file.sourceKey) === currentValue);
     select.innerHTML = [
-      '<option value="">Current active model</option>',
-      current && !hasCurrent ? `<option value="${escapeHtml(current)}">${escapeHtml(current)} - loading labels...</option>` : "",
-      ...files.map((file) => `<option value="${escapeHtml(file.sourceKey)}">${escapeHtml(file.displayName || file.name)} - ${escapeHtml(file.task || "detect")}</option>`)
+      '<option value="">Select built model...</option>',
+      currentValue && !hasCurrent ? `<option value="${escapeHtml(currentValue)}">${escapeHtml(parsed.sourceKey)} - loading model...</option>` : "",
+      ...files.map((file) => `<option value="${escapeHtml(modelSelectionValue(file.group, file.sourceKey))}">${escapeHtml(file.displayName || file.name)} - ${escapeHtml(file.group)} - ${escapeHtml(file.task || "detect")}</option>`)
     ].join("");
-    if (current) select.value = current;
-    select.dataset.selectedValue = current || select.value || "";
+    if (currentValue) select.value = currentValue;
+    select.dataset.selectedValue = currentValue || select.value || "";
   });
   hydrateStageLabelPickers(root);
 }
@@ -926,8 +985,8 @@ function hydrateStageControls(root = document) {
 function selectedStageModelFile(row) {
   const group = row?.querySelector("[data-stage-field='modelGroup']")?.value || "";
   const select = row?.querySelector("[data-stage-field='selectedModel']");
-  const sourceKey = select?.value || select?.dataset.selectedValue || "";
-  return (modelFiles.get(group) || []).find((file) => file.sourceKey === sourceKey) || null;
+  const parsed = parseModelSelection(select?.value || select?.dataset.selectedValue || "", group);
+  return findModelFile(parsed.group, parsed.sourceKey);
 }
 
 function stageRowsIn(root = document) {
@@ -996,18 +1055,21 @@ function readPipelineStages(container) {
   if (!rows.length) return defaultPipelineStages();
   return normalizePipelineStages(rows.map((row, index) => {
     const field = (key) => row.querySelector(`[data-stage-field="${key}"]`);
-    const group = field("modelGroup")?.value || modelBuilderGroups[index]?.group || modelBuilderGroups[0].group;
+    const selected = parseModelSelection(field("selectedModel")?.value || "", field("modelGroup")?.value || "");
+    const stageType = stageTypeByName(field("gieType")?.value, index);
+    const group = selected.group || field("modelGroup")?.value || "";
     return {
       id: field("id")?.value || `${group}-${index + 1}`,
-      name: field("name")?.value || modelRoleByGroup[group]?.stageLabel || `GIE ${index + 1}`,
+      name: stageType.name,
+      gieType: stageType.gieType,
       modelGroup: group,
-      selectedModel: field("selectedModel")?.value || "",
+      selectedModel: selected.sourceKey || "",
       enabled: field("enabled")?.checked !== false,
       gieId: field("gieId")?.value || index + 1,
-      networkType: field("networkType")?.value || modelRoleByGroup[group]?.defaultNetworkType || 0,
+      networkType: field("networkType")?.value || stageType.defaultNetworkType || 0,
       operateOnGieId: field("operateOnGieId")?.value || "",
       operateOnClassIds: field("operateOnClassIds")?.value || "",
-      role: field("role")?.value || group
+      role: field("role")?.value || stageType.gieType.toLowerCase()
     };
   }));
 }
@@ -1034,7 +1096,7 @@ function addStageRow(list) {
   stages.push({
     ...defaultPipelineStages()[Math.min(nextIndex, defaultPipelineStages().length - 1)],
     id: `gie-${nextIndex + 1}`,
-    name: `GIE ${nextIndex + 1}`,
+    name: `GIE`,
     gieId: nextIndex + 1,
     selectedModel: ""
   });
@@ -1078,11 +1140,11 @@ function renderConfirmedTestFlow() {
     </div>
     <div class="confirmed-flow-list">
       ${confirmedTestPipelineStages.map((stage, index) => {
-        const file = (modelFiles.get(stage.modelGroup) || []).find((item) => item.sourceKey === stage.selectedModel);
+        const file = findModelFile(stage.modelGroup, stage.selectedModel);
         return `
           <div class="confirmed-flow-step">
-            <b>${index + 1}. ${escapeHtml(stage.name)}</b>
-            <span>${escapeHtml(stage.modelGroup)} / GIE ${escapeHtml(stage.gieId)} / ${escapeHtml(file?.displayName || stage.selectedModel || "current active model")}</span>
+            <b>${index + 1}. ${escapeHtml(stage.gieType || "GIE")}</b>
+            <span>GIE ${escapeHtml(stage.gieId)} / ${escapeHtml(file?.displayName || stage.selectedModel || "current active model")}</span>
             <small>Operate on GIE: ${escapeHtml(stage.operateOnGieId || "none")} - Classes: ${escapeHtml(stage.operateOnClassIds || "all")}</small>
           </div>
         `;
@@ -1093,15 +1155,12 @@ function renderConfirmedTestFlow() {
 }
 
 function bindStageActions(root = document, onChange = null) {
-  root.querySelectorAll("[data-stage-field='modelGroup']").forEach((select) => {
+  root.querySelectorAll("[data-stage-field='gieType']").forEach((select) => {
     select.addEventListener("change", () => {
       const row = select.closest("[data-stage-row]");
-      const role = modelRoleByGroup[select.value] || modelBuilderGroups[0];
-      const selectedModel = row?.querySelector("[data-stage-field='selectedModel']");
+      const stageType = stageTypeByName(select.value);
       const networkType = row?.querySelector("[data-stage-field='networkType']");
-      if (selectedModel) selectedModel.dataset.selectedValue = "";
-      if (networkType) networkType.value = role.defaultNetworkType;
-      hydrateStageControls(row || root);
+      if (networkType) networkType.value = stageType.defaultNetworkType;
       if (onChange) onChange();
     });
   });
@@ -1109,8 +1168,11 @@ function bindStageActions(root = document, onChange = null) {
     select.addEventListener("change", () => {
       select.dataset.selectedValue = select.value;
       const row = select.closest("[data-stage-row]");
+      const groupField = row?.querySelector("[data-stage-field='modelGroup']");
+      const parsed = parseModelSelection(select.value, groupField?.value || "");
       const hidden = row?.querySelector("[data-stage-field='operateOnClassIds']");
       const textInput = row?.querySelector("[data-stage-field='operateOnClassIdsText']");
+      if (groupField) groupField.value = parsed.group;
       if (hidden && textInput && selectedStageModelFile(row)?.labels?.length) {
         hidden.value = "";
         textInput.value = "";
@@ -1121,7 +1183,11 @@ function bindStageActions(root = document, onChange = null) {
   root.querySelectorAll("[data-stage-field='selectedModel']").forEach((select) => {
     select.addEventListener("input", () => {
       select.dataset.selectedValue = select.value;
-      hydrateStageLabelPickers(select.closest("[data-stage-row]") || root);
+      const row = select.closest("[data-stage-row]");
+      const groupField = row?.querySelector("[data-stage-field='modelGroup']");
+      const parsed = parseModelSelection(select.value, groupField?.value || "");
+      if (groupField) groupField.value = parsed.group;
+      hydrateStageLabelPickers(row || root);
     });
   });
   root.querySelectorAll("[data-stage-field='operateOnClassIdsText']").forEach((input) => {
@@ -1313,24 +1379,26 @@ function renderModelBuilders() {
     ["yolov12", "YOLOv12"],
     ["yolov13", "YOLOv13"]
   ];
-  const defaultRole = modelBuilderGroups[0];
+  const defaultRole = {
+    defaultTask: "detect",
+    defaultImgsz: 640,
+    defaultParser: true
+  };
   els.modelBuilders.innerHTML = `
     <article class="model-builder-card">
       <div class="model-builder-head">
         <div>
           <h3>Model Builder Factory</h3>
-          <p>Upload source model, dien metadata va build thanh artifact DeepStream co the chon trong flow test/deploy.</p>
+          <p>Upload YOLO source model, build DeepStream artifacts va chon lai trong moi GIE flow.</p>
         </div>
         <code>factory</code>
       </div>
       <div class="grid">
-        <label>
-          Model artifact type
-          <select data-builder="factory" data-key="group">
-            ${modelBuilderGroups.map((item) => `<option value="${escapeHtml(item.group)}">${escapeHtml(item.title)} - ${escapeHtml(item.group)}</option>`).join("")}
-          </select>
+        <label class="model-name-field">
+          Model name
+          <input data-builder="factory" data-key="modelName" placeholder="vd: person_detector_yolov8n" />
+          <small>Model name tao model library rieng. Co the la person_detector, dog_detector, fire_smoke...</small>
         </label>
-        <label>Model name <input data-builder="factory" data-key="modelName" placeholder="vd: yolov8n_vehicle_front_v1" /></label>
         <label>Description <input data-builder="factory" data-key="description" placeholder="Nguon data, version, ghi chu..." /></label>
       </div>
       <div class="grid">
@@ -1366,7 +1434,6 @@ function renderModelBuilders() {
       <div class="grid one">
         <label>Source .pt/.onnx <input data-builder="factory" data-key="source" type="file" accept=".pt,.onnx" /></label>
       </div>
-      <label>Source to build <select data-builder="factory" data-key="sourceSelect"></select></label>
       <div class="checks">
         <label><input data-builder="factory" data-key="fp16" type="checkbox" checked /> FP16 engine</label>
         <label><input data-builder="factory" data-key="simplify" type="checkbox" checked /> Simplify ONNX</label>
@@ -1377,45 +1444,22 @@ function renderModelBuilders() {
       </div>
       <div class="actions inline-actions">
         <button type="button" data-upload-factory-source>Upload source</button>
-        <button type="button" data-build-factory-source>Build selected source</button>
-        <button type="button" data-build-log="factory">View selected role log</button>
         <button type="button" data-refresh-model-files="all">Refresh library</button>
       </div>
       <div class="task-status idle" data-task-status="model-factory">
         ${statusMarkup("idle", "Ready.")}
       </div>
       <div class="model-file-list model-library" data-model-library>
-        ${modelBuilderGroups.map((item) => `
-          <section class="model-library-group">
-            <div class="model-library-head">
-              <strong>${escapeHtml(item.title)}</strong>
-              <small>${escapeHtml(item.group)}</small>
-            </div>
-            <div class="model-file-list" data-model-files="${item.group}">
-              <div class="empty">No files loaded.</div>
-            </div>
-          </section>
-        `).join("")}
+        <div class="empty">No source model yet.</div>
       </div>
     </article>
   `;
   document.querySelector("[data-upload-factory-source]")?.addEventListener("click", (event) => {
-    const group = builderControl("factory", "group").value;
-    uploadSource(group, event.currentTarget).catch((error) => print(error.message));
-  });
-  document.querySelector("[data-build-factory-source]")?.addEventListener("click", (event) => {
-    const group = builderControl("factory", "group").value;
-    buildModel(group, event.currentTarget).catch((error) => {
-      renderCheckpoints(error.body?.checkpoints || []);
+    try {
+      uploadSource(factoryModelGroup(), event.currentTarget).catch((error) => print(error.message));
+    } catch (error) {
       print(error.message);
-    });
-  });
-  builderControl("factory", "group")?.addEventListener("change", () => {
-    const role = modelRoleByGroup[builderControl("factory", "group").value] || modelBuilderGroups[0];
-    builderControl("factory", "imgsz").value = role.defaultImgsz || 640;
-    builderControl("factory", "task").value = role.defaultTask || "detect";
-    builderControl("factory", "buildParser").checked = Boolean(role.defaultParser);
-    updateModelSelects();
+    }
   });
   document.querySelectorAll("[data-build-log]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1426,7 +1470,7 @@ function renderModelBuilders() {
   document.querySelectorAll("[data-refresh-model-files]").forEach((button) => {
     button.addEventListener("click", () => loadAllModelFiles(button).catch((error) => print(error.message)));
   });
-  modelBuilderGroups.forEach((item) => renderModelFiles(item.group, modelFiles.get(item.group) || []));
+  renderModelLibrary();
   updateModelSelects();
 }
 
@@ -1444,8 +1488,6 @@ async function uploadSource(group, button = null) {
   });
   setTaskStatus(`model-${group}`, "success", `Uploaded ${fileName}.`);
   await loadModelFiles(group);
-  const select = builderControl(controlGroup, "sourceSelect");
-  if (select && result.model?.source) select.value = result.model.source;
   print(result);
 }
 
@@ -1460,6 +1502,28 @@ function formatBytes(bytes = 0) {
 function formatDateTime(value) {
   if (!value) return "";
   return new Date(value).toLocaleString();
+}
+
+function renderModelLibrary() {
+  const library = document.querySelector("[data-model-library]");
+  if (!library) return;
+  if (!modelLibraryGroups.length) {
+    library.innerHTML = '<div class="empty">No source model yet.</div>';
+    renderMainDashboard();
+    return;
+  }
+  library.innerHTML = modelLibraryGroups.map((item) => `
+    <section class="model-library-group">
+      <div class="model-library-head">
+        <strong>${escapeHtml(item.displayName || item.group)}</strong>
+        <small>${escapeHtml(item.group)}</small>
+      </div>
+      <div class="model-file-list" data-model-files="${escapeHtml(item.group)}">
+        <div class="empty">Loading files...</div>
+      </div>
+    </section>
+  `).join("");
+  modelLibraryGroups.forEach((item) => renderModelFiles(item.group, modelFiles.get(item.group) || item.files || []));
 }
 
 function renderModelFiles(group, files = []) {
@@ -1498,9 +1562,6 @@ function renderModelFiles(group, files = []) {
             Upload labels
           </button>
         ` : ""}
-        <button class="model-use-button" type="button" data-select-build-source="${escapeHtml(group)}" data-source-path="${escapeHtml(file.path)}">
-          Use
-        </button>
         <button class="model-build-button" type="button" data-build-source="${escapeHtml(group)}" data-source-path="${escapeHtml(file.path)}" data-source-name="${escapeHtml(file.name)}" data-built="${file.built ? "1" : "0"}">
           ${file.built ? "Built" : "Build"}
         </button>
@@ -1510,17 +1571,6 @@ function renderModelFiles(group, files = []) {
       </div>
     </div>
   `).join("");
-  container.querySelectorAll("[data-select-build-source]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const group = button.dataset.selectBuildSource;
-      const groupSelect = builderControl("factory", "group");
-      if (groupSelect) groupSelect.value = group;
-      updateModelSelects();
-      const select = builderControl("factory", "sourceSelect") || builderControl(group, "sourceSelect");
-      if (select) select.value = button.dataset.sourcePath;
-      setTaskStatus("model-factory", "success", "Source selected.");
-    });
-  });
   container.querySelectorAll("[data-upload-labels]").forEach((button) => {
     button.addEventListener("click", () => uploadSourceLabels(button.dataset.uploadLabels, button.dataset.sourceKey, button).catch((error) => print(error.message)));
   });
@@ -1558,19 +1608,21 @@ async function uploadSourceLabels(group, sourceKey, button = null) {
 }
 
 function updateModelSelects() {
-  const byGroup = Object.fromEntries(modelBuilderGroups.map((item) => [item.group, modelFiles.get(item.group) || []]));
-  const factoryGroup = builderControl("factory", "group")?.value || modelBuilderGroups[0].group;
-  const builderSelect = builderControl("factory", "sourceSelect");
-  if (builderSelect) {
-    const current = builderSelect.value;
-    const files = byGroup[factoryGroup] || [];
-    builderSelect.innerHTML = [
-      '<option value="">Select source...</option>',
-      ...files.map((file) => `<option value="${escapeHtml(file.path)}">${escapeHtml(file.displayName || file.name)} - ${file.built ? "built" : "not built"}</option>`)
-    ].join("");
-    if (files.some((file) => file.path === current)) builderSelect.value = current;
-  }
   hydrateStageControls(document);
+}
+
+function upsertModelLibraryGroup(group, files = []) {
+  const current = modelLibraryGroups.find((item) => item.group === group);
+  const next = {
+    group,
+    displayName: files[0]?.displayName || current?.displayName || group,
+    fileCount: files.length,
+    builtCount: files.filter((file) => file.built).length,
+    files
+  };
+  modelLibraryGroups = files.length
+    ? [...modelLibraryGroups.filter((item) => item.group !== group), next].sort((a, b) => a.displayName.localeCompare(b.displayName))
+    : modelLibraryGroups.filter((item) => item.group !== group);
 }
 
 async function loadModelFiles(group, button = null) {
@@ -1578,7 +1630,8 @@ async function loadModelFiles(group, button = null) {
     return await api(`/api/models/${group}/files`);
   });
   modelFiles.set(group, result.files || []);
-  renderModelFiles(group, result.files || []);
+  upsertModelLibraryGroup(group, result.files || []);
+  renderModelLibrary();
   hydrateStageControls(document);
   renderConfirmedTestFlow();
   setTaskStatus(`model-${group}`, "success", `Loaded ${(result.files || []).length} files.`);
@@ -1588,9 +1641,13 @@ async function loadModelFiles(group, button = null) {
 async function loadAllModelFiles(button = null) {
   setButtonBusy(button, true, "Refreshing...");
   try {
-    await Promise.all(modelBuilderGroups.map((item) => loadModelFiles(item.group).catch((error) => {
-      setTaskStatus(`model-${item.group}`, "failed", error.message);
-    })));
+    const result = await api("/api/models/groups");
+    modelFiles.clear();
+    modelLibraryGroups = result.groups || [];
+    modelLibraryGroups.forEach((group) => modelFiles.set(group.group, group.files || []));
+    renderModelLibrary();
+    hydrateStageControls(document);
+    renderConfirmedTestFlow();
     setTaskStatus("model-factory", "success", "Library refreshed.");
   } finally {
     setButtonBusy(button, false);
@@ -1603,7 +1660,8 @@ async function deleteModelFile(group, fileId, button = null) {
     return await api(`/api/models/${group}/files/${encodeURIComponent(fileId)}`, { method: "DELETE" });
   });
   modelFiles.set(group, result.files || []);
-  renderModelFiles(group, result.files || []);
+  upsertModelLibraryGroup(group, result.files || []);
+  renderModelLibrary();
   setTaskStatus(`model-${group}`, "success", "File deleted.");
   print(result);
 }
@@ -1820,7 +1878,7 @@ async function runTestMedia(kind, button = null) {
     body.selectedModels = selectedModelsFromStages(body.pipelineStages);
     if (kind === "image") {
       body.testMode = "image-debug";
-      const vehicleClassIds = firstStageClassIds(body.pipelineStages, "vehicle_front");
+      const vehicleClassIds = firstStageClassIds(body.pipelineStages);
       if (vehicleClassIds) body.imageTest = { vehicleClassIds };
     }
     return await api(`/api/test/${kind}`, {
@@ -1958,18 +2016,13 @@ async function buildModelSource(group, sourcePath, sourceName = "", alreadyBuilt
     print(message);
     return;
   }
-  const groupSelect = builderControl("factory", "group");
-  if (groupSelect) groupSelect.value = group;
-  updateModelSelects();
-  const select = builderControl(group, "sourceSelect") || builderControl("factory", "sourceSelect");
-  if (select) select.value = sourcePath;
-  await buildModel(group, button, { sourcePath, forceRebuild });
+  await buildModel(group, button, { sourcePath, forceRebuild, modelName: "", description: "" });
 }
 
 async function buildModel(group, button = null, overrides = {}) {
-  const sourcePath = overrides.sourcePath || builderControl(group, "sourceSelect")?.value || builderControl("factory", "sourceSelect")?.value || "";
+  const sourcePath = overrides.sourcePath || "";
   if (!sourcePath) {
-    const message = `Chon source model trong danh sach ${group} truoc khi build.`;
+    const message = `Bam Build tren source model ${modelGroupLabel(group)} can build.`;
     setTaskStatus(`model-${group}`, "failed", message);
     print(message);
     return;
@@ -2048,8 +2101,8 @@ async function deploy() {
   print(result);
 }
 
-async function stop() {
-  const result = await withTask("stop", els.stopBtn, "Stopping...", async () => {
+async function stop(button = null) {
+  const result = await withTask("stop", button, "Stopping...", async () => {
     return await api("/api/stop", { method: "POST" });
   });
   await refreshDeployStatus().catch(() => {});
@@ -2069,7 +2122,19 @@ function renderDeployStatus(status = {}) {
   const container = status.container || {};
   const deepstream = status.deepstream || {};
   const sources = deepstream.sources || [];
+  const activeApp = deployApps.find((app) => app.active) || deployApps[0] || null;
+  if (els.stopRunningDeployBtn) {
+    els.stopRunningDeployBtn.disabled = !container.running;
+    els.stopRunningDeployBtn.textContent = container.running
+      ? `Stop ${activeApp?.name || "running app"}`
+      : "Stop running app";
+  }
   els.deployStatusCards.innerHTML = `
+    <article class="deploy-status-card ${container.running ? "success" : ""}">
+      <span>Active app</span>
+      <strong>${escapeHtml(activeApp?.name || "No app selected")}</strong>
+      <small>${escapeHtml(activeApp?.id || "Deploy an app to start runtime.")}</small>
+    </article>
     <article class="deploy-status-card ${container.running ? "success" : "failed"}">
       <span>Container</span>
       <strong>${container.running ? "Running" : container.exists ? "Stopped" : "Missing"}</strong>
@@ -2148,9 +2213,9 @@ els.deployBtn.addEventListener("click", () => deploy().catch((error) => {
   renderCheckpoints(error.body?.checkpoints || []);
   print(error.message);
 }));
-els.stopBtn.addEventListener("click", () => stop().catch((error) => print(error.message)));
 els.eventsBtn.addEventListener("click", () => loadEvents().catch((error) => print(error.message)));
 els.refreshDeployStatusBtn?.addEventListener("click", () => refreshDeployStatus(els.refreshDeployStatusBtn).catch((error) => print(error.message)));
+els.stopRunningDeployBtn?.addEventListener("click", () => stop(els.stopRunningDeployBtn).catch((error) => print(error.message)));
 els.addCameraBtn.addEventListener("click", () => {
   try {
     addCamera();
