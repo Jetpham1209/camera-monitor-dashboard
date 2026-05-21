@@ -58,6 +58,13 @@ RUN if [ -x "/opt/nvidia/deepstream/deepstream-${DEEPSTREAM_VERSION}/user_additi
       "/opt/nvidia/deepstream/deepstream/user_additional_install.sh"; \
     fi
 
+# DeepStream 7.1 additional installs may leave these codec packages marked as
+# installed while their shared objects are absent from the final filesystem.
+RUN apt-get update && apt-get install --reinstall -y --no-install-recommends \
+    libmp3lame0 \
+    libxvidcore4 \
+  && rm -rf /var/lib/apt/lists/*
+
 RUN python3 -m pip install --timeout 1000 --retries 20 --no-cache-dir numpy==1.26.0 \
   && python3 -m pip install --timeout 1000 --retries 20 --no-cache-dir --no-deps "${PYDS_WHEEL_URL}"
 
