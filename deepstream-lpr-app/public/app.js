@@ -570,6 +570,7 @@ function findModelFile(group, sourceKey) {
 function buildOptions(group, overrides = {}) {
   const controlGroup = builderControl(group, "imgsz") ? group : "factory";
   return {
+    profile: builderControl(controlGroup, "profile")?.value || "yolo_detection",
     imgsz: Number(builderControl(controlGroup, "imgsz").value),
     opset: Number(builderControl(controlGroup, "opset").value),
     task: builderControl(controlGroup, "task").value,
@@ -1015,7 +1016,7 @@ function hydrateStageControls(root = document) {
     select.innerHTML = [
       '<option value="">Select built model...</option>',
       currentValue && !hasCurrent ? `<option value="${escapeHtml(currentValue)}">${escapeHtml(parsed.sourceKey)} - loading model...</option>` : "",
-      ...files.map((file) => `<option value="${escapeHtml(modelSelectionValue(file.group, file.sourceKey))}">${escapeHtml(file.displayName || file.name)} - ${escapeHtml(file.group)} - ${escapeHtml(file.task || "detect")}</option>`)
+      ...files.map((file) => `<option value="${escapeHtml(modelSelectionValue(file.group, file.sourceKey))}">${escapeHtml(file.displayName || file.name)} - ${escapeHtml(file.group)} - ${escapeHtml(file.profile || file.task || "detect")}</option>`)
     ].join("");
     if (currentValue) select.value = currentValue;
     select.dataset.selectedValue = currentValue || select.value || "";
@@ -1415,7 +1416,17 @@ function renderCheckpoints(checkpoints = []) {
 
 function renderModelBuilders() {
   const taskOptions = ["detect", "auto", "classify", "segment", "pose", "obb"];
+  const profileOptions = [
+    ["yolo_detection", "YOLO Detection", "Bbox detection parser from DeepStream-Yolo."],
+    ["yolo_face", "YOLO Face", "Face outputs and parser from DeepStream-Yolo-Face."],
+    ["yolo_segmentation", "YOLO Segmentation", "Instance masks and parser from DeepStream-Yolo-Seg."],
+    ["yolo_pose", "YOLO Pose", "Keypoint outputs and parser from DeepStream-Yolo-Pose."],
+    ["yolo_classification", "YOLO Classification", "Classifier engine without YOLO detection parser."],
+    ["custom_onnx", "Custom ONNX", "Use uploaded ONNX and labels without automatic YOLO parser."]
+  ];
   const versionOptions = [
+    ["yolov5", "YOLOv5"],
+    ["yolov7", "YOLOv7"],
     ["yolov8", "YOLOv8"],
     ["yolov9", "YOLOv9"],
     ["yolov10", "YOLOv10"],
@@ -1453,7 +1464,14 @@ function renderModelBuilders() {
       </div>
       <div class="grid">
         <label>
-          YOLO task
+          Model profile
+          <select data-builder="factory" data-key="profile">
+            ${profileOptions.map(([value, label]) => `<option value="${value}" ${value === "yolo_detection" ? "selected" : ""}>${label}</option>`).join("")}
+          </select>
+          <small data-model-profile-hint>${profileOptions[0][2]}</small>
+        </label>
+        <label>
+          Export task
           <select data-builder="factory" data-key="task">
             ${taskOptions.map((task) => `<option value="${task}" ${task === defaultRole.defaultTask ? "selected" : ""}>${task}</option>`).join("")}
           </select>
@@ -1461,7 +1479,7 @@ function renderModelBuilders() {
         <label>
           YOLO version
           <select data-builder="factory" data-key="yoloVersion">
-            ${versionOptions.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}
+            ${versionOptions.map(([value, label]) => `<option value="${value}" ${value === "yolov8" ? "selected" : ""}>${label}</option>`).join("")}
           </select>
         </label>
         <label>
@@ -1514,8 +1532,34 @@ function renderModelBuilders() {
   document.querySelectorAll("[data-refresh-model-files]").forEach((button) => {
     button.addEventListener("click", () => loadAllModelFiles(button).catch((error) => print(error.message)));
   });
+  const profileSelect = builderControl("factory", "profile");
+  profileSelect?.addEventListener("change", () => applyFactoryProfileDefaults(profileOptions));
+  applyFactoryProfileDefaults(profileOptions);
   renderModelLibrary();
   updateModelSelects();
+}
+
+function applyFactoryProfileDefaults(profileOptions = []) {
+  const profile = builderControl("factory", "profile")?.value || "yolo_detection";
+  const task = builderControl("factory", "task");
+  const parser = builderControl("factory", "buildParser");
+  const source = builderControl("factory", "source");
+  const hint = document.querySelector("[data-model-profile-hint]");
+  const defaults = {
+    yolo_detection: { task: "detect", parser: true, accept: ".pt,.onnx" },
+    yolo_face: { task: "detect", parser: true, accept: ".pt,.onnx" },
+    yolo_segmentation: { task: "segment", parser: true, accept: ".pt,.onnx" },
+    yolo_pose: { task: "pose", parser: true, accept: ".pt,.onnx" },
+    yolo_classification: { task: "classify", parser: false, accept: ".pt,.onnx" },
+    custom_onnx: { task: "auto", parser: false, accept: ".onnx" }
+  };
+  const selected = defaults[profile] || defaults.yolo_detection;
+  if (task) task.value = selected.task;
+  if (parser) parser.checked = selected.parser;
+  if (source) source.accept = selected.accept;
+  if (hint) {
+    hint.textContent = profileOptions.find(([value]) => value === profile)?.[2] || "";
+  }
 }
 
 async function uploadSource(group, button = null) {
@@ -1526,6 +1570,7 @@ async function uploadSource(group, button = null) {
   const result = await withTask(`model-${group}`, button, `Uploading ${group}...`, async () => {
     const form = new FormData();
     form.append("file", sourceInput.files[0]);
+    form.append("profile", builderControl(controlGroup, "profile")?.value || "yolo_detection");
     form.append("modelName", builderControl(controlGroup, "modelName")?.value || "");
     form.append("description", builderControl(controlGroup, "description")?.value || "");
     return await api(`/api/model-source/${group}`, { method: "POST", body: form });
@@ -1588,6 +1633,7 @@ function renderModelFiles(group, files = []) {
         <small>
           <b class="${file.built ? "built" : "not-built"}">${file.built ? "built" : "not built"}</b>
           ${file.buildStatus ? `<b>${escapeHtml(file.buildStatus)}</b>` : ""}
+          ${file.profile ? `<b>${escapeHtml(file.profile)}</b>` : ""}
           ${file.engineBuildMethod ? `<b>${escapeHtml(file.engineBuildMethod)}</b>` : ""}
           ${file.deepstreamYoloRef ? `<b>parser ${escapeHtml(file.deepstreamYoloRef.slice(0, 8))}</b>` : ""}
           ${file.name.toLowerCase().endsWith(".onnx") ? `<b class="${file.labelsUploaded ? "built" : "not-built"}">${file.labelsUploaded ? "labels ok" : "needs labels"}</b>` : ""}
@@ -1606,7 +1652,7 @@ function renderModelFiles(group, files = []) {
             Upload labels
           </button>
         ` : ""}
-        <button class="model-build-button" type="button" data-build-source="${escapeHtml(group)}" data-source-path="${escapeHtml(file.path)}" data-source-name="${escapeHtml(file.name)}" data-built="${file.built ? "1" : "0"}">
+        <button class="model-build-button" type="button" data-build-source="${escapeHtml(group)}" data-source-path="${escapeHtml(file.path)}" data-source-name="${escapeHtml(file.name)}" data-source-profile="${escapeHtml(file.profile || "yolo_detection")}" data-built="${file.built ? "1" : "0"}">
           ${file.built ? "Built" : "Build"}
         </button>
         <button type="button" data-delete-model-file="${escapeHtml(group)}" data-file-id="${escapeHtml(file.id)}">
@@ -1623,6 +1669,7 @@ function renderModelFiles(group, files = []) {
       button.dataset.buildSource,
       button.dataset.sourcePath,
       button.dataset.sourceName,
+      button.dataset.sourceProfile,
       button.dataset.built === "1",
       button
     ).catch((error) => {
@@ -2098,7 +2145,7 @@ function renderTestResults(kind, result) {
   `;
 }
 
-async function buildModelSource(group, sourcePath, sourceName = "", alreadyBuilt = false, button = null) {
+async function buildModelSource(group, sourcePath, sourceName = "", sourceProfile = "yolo_detection", alreadyBuilt = false, button = null) {
   const forceRebuild = builderControl(group, "forceRebuild")?.checked || builderControl("factory", "forceRebuild")?.checked || false;
   if (alreadyBuilt && !forceRebuild) {
     const message = `${sourceName || "Selected model"} da build roi. Bat Force rebuild neu muon build lai.`;
@@ -2106,7 +2153,7 @@ async function buildModelSource(group, sourcePath, sourceName = "", alreadyBuilt
     print(message);
     return;
   }
-  await buildModel(group, button, { sourcePath, forceRebuild, modelName: "", description: "" });
+  await buildModel(group, button, { sourcePath, profile: sourceProfile, forceRebuild, modelName: "", description: "" });
 }
 
 async function buildModel(group, button = null, overrides = {}) {

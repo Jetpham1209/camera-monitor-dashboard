@@ -150,18 +150,24 @@ Moi Deploy App va Test Flow deu co processor rieng. Neu chon `LPR` nhung flow ch
 
 Neu model cua ban den tu YOLO family, control UI co **Model Builder Factory**. User nhap model name/description, upload source `.pt` hoac `.onnx`, build artifact, roi chon artifact do cho PGIE/SGIE/TGIE trong test hoac deploy flow. Cung factory nay co the build model xe, bien so, nguoi, vat the khac.
 
-Factory co `imgsz`, `opset`, `task`, YOLO version, TensorRT/parser toggles, nut upload, nut build va log/checkpoint rieng theo model source.
+Factory co `Model profile`, `imgsz`, `opset`, export task, YOLO version, TensorRT/parser toggles, nut upload, nut build va log/checkpoint rieng theo model source. Profile duoc luu cung source model va artifact build de runtime config biet parser/network type nao can dung.
 
 Pipeline hien tai:
 
-- `.pt` detection model -> export ONNX bang export script cua `marcoslucianops/DeepStream-Yolo`.
-- `.pt` non-detection model -> export ONNX bang `ultralytics`.
+- `YOLO Detection` -> export/parser theo `marcoslucianops/DeepStream-Yolo`.
+- `YOLO Face` -> export/parser theo `marcoslucianops/DeepStream-Yolo-Face`.
+- `YOLO Segmentation` -> export/parser theo `marcoslucianops/DeepStream-Yolo-Seg`.
+- `YOLO Pose` -> export/parser theo `marcoslucianops/DeepStream-Yolo-Pose`.
+- `YOLO Classification` -> export `.pt` bang `ultralytics`, build classifier engine, khong build YOLO detection parser.
+- `Custom ONNX` -> chi nhan `.onnx`; user upload `labels.txt` neu can label tren UI/runtime.
+- `.pt` profile co export repo rieng -> export ONNX bang export script cua profile do.
+- `.pt` profile khong co export repo rieng -> export ONNX bang `ultralytics`.
 - `.onnx` -> copy vao thu muc build.
 - ONNX -> TensorRT `.engine` bang `trtexec`.
   - `Auto` va `Runtime-matched trtexec` chay `trtexec` trong image DeepStream runtime da detect theo Jetson profile. Day la mode mac dinh.
   - `Builder trtexec - advanced` chi dung `trtexec` trong model-builder image khi TensorRT major/minor trung voi profile runtime; neu lech version UI se fail som.
   - `DeepStream nvinfer` van de lai cho DeepStream tu build engine neu can debug mot model/parser dac thu.
-- YOLOv8+ detect -> clone/pin `DeepStream-Yolo`, compile `libnvdsinfer_custom_impl_Yolo.so` neu bat `Build DeepStream-Yolo parser`.
+- Profile co parser repo -> clone profile repo, compile parser `.so` neu bat `Build DeepStream-Yolo parser`.
 - Tu dong cap nhat `runtime/config.json` va generated DeepStream config.
 
 Lan build model dau tien co the lau vi dashboard se build Docker image:
@@ -288,7 +294,7 @@ export TRTEXEC_PATH_IN_BUILDER=/duong/dan/toi/trtexec
 
 Nen build TensorRT engine truc tiep tren chinh Jetson se deploy, vi engine phu thuoc CUDA, TensorRT, GPU va precision.
 
-De auto build parser `.so`, may Jetson can chay duoc Docker DeepStream image da chon trong UI. Builder se clone/pin repo:
+De auto build parser `.so`, may Jetson can chay duoc Docker DeepStream image da chon trong UI. Detection profile se clone/pin repo:
 
 ```text
 https://github.com/marcoslucianops/DeepStream-Yolo
@@ -307,11 +313,17 @@ Va compile thanh:
 deepstream-lpr-app/models/<model_group>/build/libnvdsinfer_custom_impl_Yolo.so
 ```
 
-Mac dinh builder dung export script cua DeepStream-Yolo cho YOLOv8, YOLOv9, YOLOv10, YOLO11, YOLOv12, YOLOv13. Neu muon override repo/ref:
+Mac dinh detection profile dung export script cua DeepStream-Yolo cho YOLOv8, YOLOv9, YOLOv10, YOLO11, YOLOv12, YOLOv13. Face/Seg/Pose chi ho tro nhung YOLO version co export script trong repo profile tuong ung; neu chon version khong duoc ho tro buoc `Export ONNX` se fail ro rang. Neu muon override repo/ref:
 
 ```bash
 export DEEPSTREAM_YOLO_REPO=https://github.com/marcoslucianops/DeepStream-Yolo.git
 export DEEPSTREAM_YOLO_REF=2894babce8e75c49115dbe0c7b516289ed853565
+export DEEPSTREAM_YOLO_FACE_REPO=https://github.com/marcoslucianops/DeepStream-Yolo-Face.git
+export DEEPSTREAM_YOLO_FACE_REF=master
+export DEEPSTREAM_YOLO_SEG_REPO=https://github.com/marcoslucianops/DeepStream-Yolo-Seg.git
+export DEEPSTREAM_YOLO_SEG_REF=master
+export DEEPSTREAM_YOLO_POSE_REPO=https://github.com/marcoslucianops/DeepStream-Yolo-Pose.git
+export DEEPSTREAM_YOLO_POSE_REF=master
 npm run lpr:control
 ```
 

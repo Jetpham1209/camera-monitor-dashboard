@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 
-EXPORT_SCRIPTS = {
+DETECTION_EXPORT_SCRIPTS = {
     "yolov8": "export_yoloV8.py",
     "yolov9": "export_yoloV9.py",
     "yolov10": "export_yoloV10.py",
@@ -16,6 +16,28 @@ EXPORT_SCRIPTS = {
     "yolov11": "export_yolo11.py",
     "yolov12": "export_yolov12.py",
     "yolov13": "export_yoloV13.py",
+}
+
+PROFILE_EXPORT_SCRIPTS = {
+    "yolo_detection": DETECTION_EXPORT_SCRIPTS,
+    "yolo_face": {
+        "yolov5": "export_yoloV5_face.py",
+        "yolov7": "export_yoloV7_face.py",
+        "yolov8": "export_yoloV8_face.py",
+    },
+    "yolo_segmentation": {
+        "yolov5": "export_yoloV5_seg.py",
+        "yolov7": "export_yoloV7_seg.py",
+        "yolov8": "export_yoloV8_seg.py",
+        "yolo11": "export_yolo11_seg.py",
+        "yolov11": "export_yolo11_seg.py",
+    },
+    "yolo_pose": {
+        "yolov7": "export_yoloV7_pose.py",
+        "yolov8": "export_yoloV8_pose.py",
+        "yolo11": "export_yolo11_pose.py",
+        "yolov11": "export_yolo11_pose.py",
+    },
 }
 
 def run_export_script(script, argv, cwd):
@@ -54,6 +76,7 @@ def main():
     parser.add_argument("--source", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--repo-dir", required=True)
+    parser.add_argument("--profile", default="yolo_detection", choices=sorted(PROFILE_EXPORT_SCRIPTS))
     parser.add_argument("--version", default="yolov8")
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--opset", type=int, default=17)
@@ -80,9 +103,9 @@ def main():
     if source.suffix.lower() != ".pt":
         raise SystemExit("DeepStream-Yolo export supports .pt and .onnx sources")
 
-    script_name = EXPORT_SCRIPTS.get(version)
+    script_name = PROFILE_EXPORT_SCRIPTS[args.profile].get(version)
     if not script_name:
-        raise SystemExit(f"Unsupported DeepStream-Yolo version '{args.version}'")
+        raise SystemExit(f"Unsupported {args.profile} export version '{args.version}'")
 
     script = repo_dir / "utils" / script_name
     if not script.exists():

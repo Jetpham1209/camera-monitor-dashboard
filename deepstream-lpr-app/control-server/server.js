@@ -25,6 +25,12 @@ const PORT = Number(process.env.LPR_CONTROL_PORT || 5190);
 const DEEPSTREAM_YOLO_REPO = process.env.DEEPSTREAM_YOLO_REPO || "https://github.com/marcoslucianops/DeepStream-Yolo.git";
 const DEEPSTREAM_YOLO_REF = process.env.DEEPSTREAM_YOLO_REF || "2894babce8e75c49115dbe0c7b516289ed853565";
 const DEEPSTREAM_YOLO_LEGACY_REF = process.env.DEEPSTREAM_YOLO_LEGACY_REF || "f630b10a8088398251bca7f2f50064b57fab06bb";
+const DEEPSTREAM_YOLO_FACE_REPO = process.env.DEEPSTREAM_YOLO_FACE_REPO || "https://github.com/marcoslucianops/DeepStream-Yolo-Face.git";
+const DEEPSTREAM_YOLO_FACE_REF = process.env.DEEPSTREAM_YOLO_FACE_REF || "master";
+const DEEPSTREAM_YOLO_SEG_REPO = process.env.DEEPSTREAM_YOLO_SEG_REPO || "https://github.com/marcoslucianops/DeepStream-Yolo-Seg.git";
+const DEEPSTREAM_YOLO_SEG_REF = process.env.DEEPSTREAM_YOLO_SEG_REF || "master";
+const DEEPSTREAM_YOLO_POSE_REPO = process.env.DEEPSTREAM_YOLO_POSE_REPO || "https://github.com/marcoslucianops/DeepStream-Yolo-Pose.git";
+const DEEPSTREAM_YOLO_POSE_REF = process.env.DEEPSTREAM_YOLO_POSE_REF || "master";
 const DEFAULT_DEEPSTREAM_IMAGE = process.env.DEEPSTREAM_IMAGE || "camera-monitor-deepstream-runtime:local";
 const MODEL_BUILDER_IMAGE = process.env.MODEL_BUILDER_IMAGE || "deepstream-lpr-model-builder:local";
 const MODEL_BUILDER_BASE_IMAGE = process.env.MODEL_BUILDER_BASE_IMAGE || "ultralytics/ultralytics:latest-jetson-jetpack6";
@@ -40,6 +46,77 @@ const PING_TIMEOUT_MS = Number(process.env.PING_TIMEOUT_MS || 3000);
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 const jobs = new Map();
+
+const MODEL_PROFILE_SPECS = {
+  yolo_detection: {
+    label: "YOLO Detection",
+    task: "detect",
+    repoName: "DeepStream-Yolo",
+    repo: DEEPSTREAM_YOLO_REPO,
+    ref: DEEPSTREAM_YOLO_REF,
+    parserDir: "nvdsinfer_custom_impl_Yolo",
+    parserLib: "libnvdsinfer_custom_impl_Yolo.so",
+    parseBboxFunc: "NvDsInferParseYolo",
+    networkType: 0,
+    clusterMode: 2,
+    exportWithProfileRepo: true
+  },
+  yolo_face: {
+    label: "YOLO Face",
+    task: "detect",
+    repoName: "DeepStream-Yolo-Face",
+    repo: DEEPSTREAM_YOLO_FACE_REPO,
+    ref: DEEPSTREAM_YOLO_FACE_REF,
+    parserDir: "nvdsinfer_custom_impl_Yolo_face",
+    parserLib: "libnvdsinfer_custom_impl_Yolo_face.so",
+    parseInstanceMaskFunc: "NvDsInferParseYoloFace",
+    networkType: 3,
+    clusterMode: 4,
+    outputInstanceMask: true,
+    exportWithProfileRepo: true
+  },
+  yolo_segmentation: {
+    label: "YOLO Segmentation",
+    task: "segment",
+    repoName: "DeepStream-Yolo-Seg",
+    repo: DEEPSTREAM_YOLO_SEG_REPO,
+    ref: DEEPSTREAM_YOLO_SEG_REF,
+    parserDir: "nvdsinfer_custom_impl_Yolo_seg",
+    parserLib: "libnvdsinfer_custom_impl_Yolo_seg.so",
+    parseInstanceMaskFunc: "NvDsInferParseYoloSeg",
+    networkType: 3,
+    clusterMode: 4,
+    outputInstanceMask: true,
+    segmentationThreshold: 0.5,
+    exportWithProfileRepo: true
+  },
+  yolo_pose: {
+    label: "YOLO Pose",
+    task: "pose",
+    repoName: "DeepStream-Yolo-Pose",
+    repo: DEEPSTREAM_YOLO_POSE_REPO,
+    ref: DEEPSTREAM_YOLO_POSE_REF,
+    parserDir: "nvdsinfer_custom_impl_Yolo_pose",
+    parserLib: "libnvdsinfer_custom_impl_Yolo_pose.so",
+    parseInstanceMaskFunc: "NvDsInferParseYoloPose",
+    networkType: 3,
+    clusterMode: 4,
+    outputInstanceMask: true,
+    exportWithProfileRepo: true
+  },
+  yolo_classification: {
+    label: "YOLO Classification",
+    task: "classify",
+    networkType: 1,
+    exportWithProfileRepo: false
+  },
+  custom_onnx: {
+    label: "Custom ONNX",
+    task: "auto",
+    networkType: null,
+    exportWithProfileRepo: false
+  }
+};
 
 function ensureDirs() {
   for (const dir of [RUNTIME_DIR, GENERATED_DIR, THIRD_PARTY_DIR, TEST_MEDIA_DIR, MODELS_DIR, MODEL_ARCHIVE_DIR, ROI_CAPTURE_DIR]) {
@@ -519,6 +596,16 @@ function sanitizeModelGroup(value) {
   return group;
 }
 
+function normalizeModelProfile(value) {
+  const profile = String(value || "").trim().toLowerCase();
+  return MODEL_PROFILE_SPECS[profile] ? profile : "yolo_detection";
+}
+
+function modelProfileSpec(value) {
+  const profile = normalizeModelProfile(value);
+  return { id: profile, ...MODEL_PROFILE_SPECS[profile] };
+}
+
 const storage = multer.diskStorage({
   destination(req, _file, cb) {
     try {
@@ -846,6 +933,10 @@ function validateProcessorFlow(config, context = "runtime") {
 }
 
 function modelConfig(slot, model, gieId, networkType, operateOnGieId = null, batchSize = 1, operateOnClassIds = []) {
+  const profile = modelProfileSpec(model.profile || model.build?.profile);
+  const runtimeNetworkType = profile.networkType === null || profile.networkType === undefined
+    ? Number(networkType ?? 0)
+    : Number(profile.networkType);
   const labelCount = countLabelLines(hostPathFromWorkspace(model.labels));
   const configuredClasses = Number(model.numClasses || 0);
   const detectedClasses = slot === "plate_ocr"
@@ -862,7 +953,7 @@ function modelConfig(slot, model, gieId, networkType, operateOnGieId = null, bat
     model.customLib ? `custom-lib-path=${model.customLib}` : "# custom-lib-path=/workspace/deepstream-lpr-app/models/libnvdsinfer_custom_impl_Yolo.so",
     `batch-size=${Math.max(1, Number(batchSize || 1))}`,
     "network-mode=2",
-    `network-type=${networkType}`,
+    `network-type=${runtimeNetworkType}`,
     `gie-unique-id=${gieId}`,
     operateOnGieId ? "process-mode=2" : "process-mode=1",
     "interval=0",
@@ -870,6 +961,9 @@ function modelConfig(slot, model, gieId, networkType, operateOnGieId = null, bat
   ];
   if (slot === "plate_ocr") {
     lines.push("force-implicit-batch-dim=1", "scaling-filter=2");
+  }
+  if (profile.outputInstanceMask) {
+    lines.push("symmetric-padding=1", "scaling-filter=1", "scaling-compute-hw=0", "force-implicit-batch-dim=0");
   }
   if (operateOnGieId) {
     lines.push(`operate-on-gie-id=${operateOnGieId}`);
@@ -880,22 +974,34 @@ function modelConfig(slot, model, gieId, networkType, operateOnGieId = null, bat
       lines.push(`operate-on-class-ids=${classIds.join(";")}`);
     }
   }
-  if (networkType === 0) {
+  if (runtimeNetworkType === 0) {
     lines.push(`num-detected-classes=${detectedClasses}`);
     lines.push(
       "cluster-mode=2",
       `parse-bbox-func-name=${model.parseBboxFunc || "NvDsInferParseYolo"}`
     );
     lines.push(`engine-create-func-name=${model.engineCreateFunc || "NvDsInferYoloCudaEngineGet"}`);
-  } else if (networkType === 1) {
+  } else if (runtimeNetworkType === 1) {
     lines.push(`output-blob-names=${model.outputBlobName || "output0"}`);
     lines.push("output-tensor-meta=1");
     lines.push("classifier-async-mode=0");
     lines.push(`classifier-threshold=${Number(model.classifierThreshold ?? 0)}`);
+  } else if (runtimeNetworkType === 3 && profile.parseInstanceMaskFunc) {
+    lines.push(`num-detected-classes=${detectedClasses}`);
+    lines.push(
+      `cluster-mode=${profile.clusterMode || 4}`,
+      `parse-bbox-instance-mask-func-name=${model.parseBboxInstanceMaskFunc || profile.parseInstanceMaskFunc}`,
+      "output-instance-mask=1"
+    );
+    if (profile.segmentationThreshold !== undefined) {
+      lines.push(`segmentation-threshold=${Number(model.segmentationThreshold ?? profile.segmentationThreshold)}`);
+    }
   }
   const preClusterThreshold = slot === "plate_ocr" ? 0.4 : 0.35;
   const topk = slot === "vehicle_front" ? 50 : slot === "plate_ocr" ? 200 : 100;
-  lines.push("", "[class-attrs-all]", `pre-cluster-threshold=${preClusterThreshold}`, "nms-iou-threshold=0.45", `topk=${topk}`, "");
+  lines.push("", "[class-attrs-all]", `pre-cluster-threshold=${preClusterThreshold}`);
+  if (runtimeNetworkType === 0) lines.push("nms-iou-threshold=0.45", `topk=${topk}`);
+  lines.push("");
   return lines.join("\n");
 }
 
@@ -981,6 +1087,7 @@ function applySelectedModels(config, selectedModels = {}) {
       ...model,
       source: build.source || model.source,
       sourceKey: selectedKey,
+      profile: normalizeModelProfile(build.profile || model.profile),
       onnx: build.onnx || model.onnx,
       engine: build.engine || model.engine,
       labels: resolveModelLabels(group, selectedKey, build, model),
@@ -1167,7 +1274,13 @@ function buildHasRunnableArtifacts(build, paths = null) {
   const parserPath = hostPathFromWorkspace(build.customLib);
   const enginePath = hostPathFromWorkspace(build.engine);
   if (isDeepStreamRuntimeBuild(build)) {
-    return Boolean(usableFileStat(onnxPath) && usableFileStat(labelsPath) && usableFileStat(parserPath));
+    const profile = modelProfileSpec(build.profile);
+    const parserRequired = Boolean(profile.parseBboxFunc || profile.parseInstanceMaskFunc);
+    return Boolean(
+      usableFileStat(onnxPath) &&
+      usableFileStat(labelsPath) &&
+      (!parserRequired || usableFileStat(parserPath))
+    );
   }
   if (usableFileStat(enginePath)) return true;
   if (paths && usableFileStat(paths.engine)) return true;
@@ -1245,6 +1358,7 @@ async function listModelFiles(group) {
       built: isBuilt,
       buildStatus: isBuilt ? (isDeepStreamRuntimeBuild(build) ? "ready_for_deepstream" : "built") : "not_built",
       buildUpdatedAt: build?.updatedAt || null,
+      profile: normalizeModelProfile(build?.profile || meta.profile || model.profile),
       task: build?.task || model.build?.task || "",
       engineBuildMethod: build?.engineBuildMethod || "",
       deepstreamYoloRef: build?.deepstreamYoloRef || "",
@@ -1488,38 +1602,48 @@ async function ensureDeepStreamYoloRepo() {
 }
 
 async function ensureDeepStreamYoloRepoAtRef(ref = DEEPSTREAM_YOLO_REF) {
-  const repoDir = path.join(THIRD_PARTY_DIR, "DeepStream-Yolo");
+  return await ensureModelProfileRepo(modelProfileSpec("yolo_detection"), ref);
+}
+
+async function ensureModelProfileRepo(profile, ref = profile.ref) {
+  if (!profile.repo || !profile.repoName) {
+    throw new Error(`Model profile ${profile.id || "unknown"} does not have an automatic parser/export repo.`);
+  }
+  const repoDir = path.join(THIRD_PARTY_DIR, profile.repoName);
   const gitDir = path.join(repoDir, ".git");
   const safeDir = await runCommand("git", ["config", "--global", "--add", "safe.directory", repoDir], { cwd: APP_ROOT });
   if (safeDir.code !== 0) {
-    throw new Error(`Cannot mark DeepStream-Yolo repo as a safe Git directory.\n${safeDir.output}`);
+    throw new Error(`Cannot mark ${profile.repoName} repo as a safe Git directory.\n${safeDir.output}`);
   }
 
   if (!fs.existsSync(gitDir)) {
     await fsp.rm(repoDir, { recursive: true, force: true });
-    const clone = await runCommand("git", ["clone", "--depth", "1", DEEPSTREAM_YOLO_REPO, repoDir], { cwd: APP_ROOT });
+    const clone = await runCommand("git", ["clone", "--depth", "1", profile.repo, repoDir], { cwd: APP_ROOT });
     if (clone.code !== 0) {
-      throw new Error(`Cannot clone DeepStream-Yolo repo.\n${clone.output}`);
+      throw new Error(`Cannot clone ${profile.repoName} repo.\n${clone.output}`);
     }
   }
 
   const fetch = await runCommand("git", ["fetch", "--depth", "1", "origin", ref], { cwd: repoDir });
   if (fetch.code !== 0) {
-    throw new Error(`Cannot fetch DeepStream-Yolo ref ${ref}.\n${fetch.output}`);
+    throw new Error(`Cannot fetch ${profile.repoName} ref ${ref}.\n${fetch.output}`);
   }
   const checkout = await runCommand("git", ["checkout", "--detach", ref], { cwd: repoDir });
   if (checkout.code !== 0) {
-    throw new Error(`Cannot checkout DeepStream-Yolo ref ${ref}.\n${checkout.output}`);
+    const fetchedHead = await runCommand("git", ["checkout", "--detach", "FETCH_HEAD"], { cwd: repoDir });
+    if (fetchedHead.code !== 0) {
+      throw new Error(`Cannot checkout ${profile.repoName} ref ${ref}.\n${checkout.output}\n${fetchedHead.output}`);
+    }
   }
   return repoDir;
 }
 
-async function buildDeepStreamYoloParser(config, group, paths, repoDir = null, ref = DEEPSTREAM_YOLO_REF) {
+async function buildDeepStreamYoloParser(config, group, paths, repoDir = null, ref = DEEPSTREAM_YOLO_REF, profile = modelProfileSpec("yolo_detection")) {
   if (isParserProfile(ref)) {
     return await buildParserProfile(config, paths, parserProfileName(ref));
   }
-  repoDir = repoDir || await ensureDeepStreamYoloRepoAtRef(ref);
-  const mountedRepoDir = "/workspace/deepstream-lpr-app/runtime/third_party/DeepStream-Yolo";
+  repoDir = repoDir || await ensureModelProfileRepo(profile, ref);
+  const mountedRepoDir = `/workspace/deepstream-lpr-app/runtime/third_party/${profile.repoName}`;
   const mountedOutput = workspacePath(paths.parserLib);
   const compileCommand = [
     "set -e",
@@ -1528,9 +1652,9 @@ async function buildDeepStreamYoloParser(config, group, paths, repoDir = null, r
     "CUDA_VER=${CUDA_VER:-$(nvcc --version | sed -n 's/.*release \\([0-9][0-9]*\\.[0-9][0-9]*\\).*/\\1/p' | head -n1)}",
     "test -n \"$CUDA_VER\"",
     "if [ ! -d \"/usr/local/cuda-$CUDA_VER\" ] && [ -d /usr/local/cuda ]; then ln -sfn /usr/local/cuda \"/usr/local/cuda-$CUDA_VER\"; fi",
-    `make -C ${mountedRepoDir}/nvdsinfer_custom_impl_Yolo clean CUDA_VER=$CUDA_VER`,
-    `make -C ${mountedRepoDir}/nvdsinfer_custom_impl_Yolo CUDA_VER=$CUDA_VER`,
-    `cp ${mountedRepoDir}/nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so ${mountedOutput}`
+    `make -C ${mountedRepoDir}/${profile.parserDir} clean CUDA_VER=$CUDA_VER`,
+    `make -C ${mountedRepoDir}/${profile.parserDir} CUDA_VER=$CUDA_VER`,
+    `cp ${mountedRepoDir}/${profile.parserDir}/${profile.parserLib} ${mountedOutput}`
   ].join(" && ");
   const result = await runCommand("docker", [
     "run",
@@ -1548,13 +1672,13 @@ async function buildDeepStreamYoloParser(config, group, paths, repoDir = null, r
   ], { cwd: APP_ROOT });
 
   if (result.code !== 0) {
-    throw new Error(`DeepStream-Yolo parser build failed. Make sure Docker can run the DeepStream image and CUDA_VER matches your Jetson/DeepStream image.\n${result.output}`);
+    throw new Error(`${profile.label} parser build failed. Make sure Docker can run the DeepStream image and CUDA_VER matches your Jetson/DeepStream image.\n${result.output}`);
   }
 
   if (!fs.existsSync(paths.parserLib)) {
-    throw new Error("DeepStream-Yolo parser build finished but output .so was not found.");
+    throw new Error(`${profile.label} parser build finished but output .so was not found.`);
   }
-  return `DeepStream-Yolo ref: ${ref}\n${result.output}`;
+  return `${profile.repoName} ref: ${ref}\n${result.output}`;
 }
 
 async function buildParserProfile(config, paths, profileName) {
@@ -1678,14 +1802,17 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
   const sourceKey = sourceKeyFromPath(source);
   model.sourceKey = sourceKey;
   const sourceMeta = model.sourceMeta?.[sourceKey] || {};
+  const profile = modelProfileSpec(options.profile || sourceMeta.profile || model.profile);
   const modelName = String(options.modelName || sourceMeta.modelName || model.sourceOriginalName || path.basename(source)).trim();
   const description = String(options.description || sourceMeta.description || "").trim();
+  model.profile = profile.id;
   model.sourceMeta = {
     ...(model.sourceMeta || {}),
     [sourceKey]: {
       ...sourceMeta,
       modelName,
       description,
+      profile: profile.id,
       originalName: model.sourceOriginalName || path.basename(source),
       updatedAt: new Date().toISOString()
     }
@@ -1705,17 +1832,19 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
   const imgsz = Math.max(32, Number(options.imgsz || 640));
   const opset = Math.max(11, Number(options.opset || 17));
   const batchSize = Math.max(1, Number(options.batchSize || previousBuild.batchSize || model.engineBatchSize || 1));
-  const task = options.task || "detect";
+  const task = profile.task || options.task || "detect";
   const yoloVersion = String(options.yoloVersion || model.yoloVersion || "yolov8").toLowerCase();
   const simplify = parseBool(options.simplify, true);
   const dynamic = parseBool(options.dynamic, false);
   const buildEngine = parseBool(options.buildEngine, true);
   const fp16 = parseBool(options.fp16, true);
   const workspaceMb = Math.max(256, Number(options.workspaceMb || 2048));
-  const canUseDeepStreamYolo = task === "detect" || task === "auto";
-  const buildParser = parseBool(options.buildParser, canUseDeepStreamYolo);
+  const sourceExt = path.extname(source).toLowerCase();
+  const canUseProfileRepo = Boolean(profile.repo && profile.repoName && profile.parserDir && profile.parserLib);
+  const canUseProfileParser = canUseProfileRepo && profile.networkType !== 1;
+  const buildParser = parseBool(options.buildParser, canUseProfileParser);
   const engineBuildMethod = buildEngine
-    ? resolveEngineBuildMethod(options.engineBuildMethod || "auto", canUseDeepStreamYolo && buildParser)
+    ? resolveEngineBuildMethod(options.engineBuildMethod || "auto", canUseProfileParser && buildParser)
     : "skip";
   const forceRebuild = parseBool(options.forceRebuild, false);
   const numClassesFromLabels = countLabelLines(hostPathFromWorkspace(model.labels));
@@ -1723,20 +1852,22 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
   let output = "";
   let repoDir = "";
 
-  if (dynamic && batchSize > 1 && canUseDeepStreamYolo && path.extname(source).toLowerCase() === ".pt") {
+  if (profile.id === "custom_onnx" && sourceExt !== ".onnx") {
+    throw new Error("Custom ONNX profile only accepts .onnx sources. Use a YOLO profile for .pt export.");
+  }
+  if (dynamic && batchSize > 1 && canUseProfileRepo && sourceExt === ".pt") {
     throw new Error("DeepStream-Yolo export does not allow Dynamic shape and static batch size > 1 at the same time. Disable Dynamic shape or set build batch size to 1.");
   }
 
-  const sourceExt = path.extname(source).toLowerCase();
-  const deepstreamYoloRef = resolveDeepStreamYoloRef(
-    group,
-    sourceExt,
-    options.deepstreamYoloRef || options.deepStreamYoloRef
-  );
+  const requestedRepoRef = options.deepstreamYoloRef || options.deepStreamYoloRef || "";
+  const deepstreamYoloRef = profile.id === "yolo_detection"
+    ? resolveDeepStreamYoloRef(group, sourceExt, requestedRepoRef)
+    : String(requestedRepoRef || profile.ref || "").trim();
   output += [
     "# Build plan",
+    `Model profile: ${profile.label} (${profile.id})`,
     `Source type: ${sourceExt || "unknown"}`,
-    `DeepStream-Yolo parser ref: ${deepstreamYoloRef}`,
+    canUseProfileRepo ? `${profile.repoName} parser ref: ${deepstreamYoloRef}` : "Automatic parser repo: none",
     `Engine build method: ${engineBuildMethod}`,
     `DeepStream runtime image: ${config.deepstreamImage}`,
     `Detected runtime TensorRT: ${TENSORRT_VERSION || "unknown"}`,
@@ -1746,35 +1877,40 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
   const labelSource = sourceLabelPath(group, sourceKey);
   const onnxNeedsGeneratedLabels = sourceExt === ".pt";
   const onnxIsReusable = reusableArtifact(paths.onnx, [source], forceRebuild) && (!onnxNeedsGeneratedLabels || Boolean(usableFileStat(paths.labels)));
-  const parserUsesProfile = isParserProfile(deepstreamYoloRef);
+  const parserUsesLocalProfile = profile.id === "yolo_detection" && isParserProfile(deepstreamYoloRef);
   const buildEngineWithTrtexec = buildEngine && engineBuildMethod === "trtexec";
   const buildEngineWithRuntimeTrtexec = buildEngine && (
     engineBuildMethod === "runtime-trtexec" ||
-    (engineBuildMethod === "deepstream-runtime" && parserUsesProfile)
+    (engineBuildMethod === "deepstream-runtime" && parserUsesLocalProfile)
   );
-  const deferEngineToDeepStream = buildEngine && engineBuildMethod === "deepstream-runtime" && !parserUsesProfile;
+  const deferEngineToDeepStream = buildEngine && engineBuildMethod === "deepstream-runtime" && !parserUsesLocalProfile;
   const engineIsReusable = (buildEngineWithTrtexec || buildEngineWithRuntimeTrtexec) && reusableArtifact(paths.engine, [paths.onnx], forceRebuild);
-  const parserRefMatches = previousBuild.deepstreamYoloRef === deepstreamYoloRef;
-  const parserIsReusable = buildParser && canUseDeepStreamYolo && parserRefMatches && reusableArtifact(paths.parserLib, [], forceRebuild);
-  const needsDeepStreamYoloRepo = canUseDeepStreamYolo && !parserUsesProfile && ((sourceExt === ".pt" && !onnxIsReusable) || (buildParser && !parserIsReusable));
-  if (needsDeepStreamYoloRepo) {
+  const parserRefMatches = previousBuild.deepstreamYoloRef === deepstreamYoloRef
+    && normalizeModelProfile(previousBuild.profile || profile.id) === profile.id;
+  const parserIsReusable = buildParser && canUseProfileParser && parserRefMatches && reusableArtifact(paths.parserLib, [], forceRebuild);
+  const needsProfileRepo = canUseProfileRepo && !parserUsesLocalProfile && (
+    (sourceExt === ".pt" && profile.exportWithProfileRepo && !onnxIsReusable) ||
+    (buildParser && !parserIsReusable)
+  );
+  if (needsProfileRepo) {
     repoDir = (await runCheckpoint(checkpoints, "sync_deepstream_yolo", async () => {
-      const syncedRepoDir = await ensureDeepStreamYoloRepoAtRef(deepstreamYoloRef);
-      return { repoDir: syncedRepoDir, output: `Repo: ${syncedRepoDir}\nRef: ${deepstreamYoloRef}` };
-    }, "DeepStream-Yolo repo ready.", onProgress)).repoDir;
+      const syncedRepoDir = await ensureModelProfileRepo(profile, deepstreamYoloRef);
+      return { repoDir: syncedRepoDir, output: `Profile: ${profile.label}\nRepo: ${syncedRepoDir}\nRef: ${deepstreamYoloRef}` };
+    }, `${profile.repoName} repo ready.`, onProgress)).repoDir;
   } else {
     const message = parserIsReusable
-      ? `Using cached DeepStream-Yolo parser built from ref ${deepstreamYoloRef}.`
-      : "No DeepStream-Yolo repo needed for this model/task.";
+      ? `Using cached ${profile.label} parser built from ref ${deepstreamYoloRef}.`
+      : `No automatic parser repo needed for ${profile.label}.`;
     skipCheckpoint(checkpoints, "sync_deepstream_yolo", message, onProgress);
   }
   const exportArgs = [];
-  if (canUseDeepStreamYolo && sourceExt === ".pt") {
+  if (canUseProfileRepo && profile.exportWithProfileRepo && sourceExt === ".pt") {
     exportArgs.push(
       `${MODEL_BUILDER_WORKDIR}/model-builder/export_deepstream_yolo.py`,
       "--source", workspacePath(source),
       "--output", workspacePath(paths.onnx),
-      "--repo-dir", `${MODEL_BUILDER_WORKDIR}/runtime/third_party/DeepStream-Yolo`,
+      "--repo-dir", `${MODEL_BUILDER_WORKDIR}/runtime/third_party/${profile.repoName}`,
+      "--profile", profile.id,
       "--version", yoloVersion,
       "--imgsz", String(imgsz),
       "--opset", String(opset),
@@ -1885,7 +2021,7 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
     await fsp.rm(paths.engine, { force: true }).catch(() => {});
     const message = [
       "Engine build delegated to DeepStream nvinfer.",
-      "Reason: YOLO detector models that use DeepStream-Yolo parser should be built by DeepStream engine-create-func, not generic trtexec.",
+      `Reason: ${profile.label} is configured for DeepStream nvinfer engine creation.`,
       `Runtime engine target: ${paths.engine}`
     ].join("\n");
     skipCheckpoint(checkpoints, "build_tensorrt", message, onProgress);
@@ -1901,15 +2037,15 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
   model.engineBuildMethod = engineBuildMethod;
   model.deepstreamYoloRef = deepstreamYoloRef;
 
-  if (buildParser && canUseDeepStreamYolo) {
+  if (buildParser && canUseProfileParser) {
     let parserOutput = "";
     if (parserIsReusable) {
-      parserOutput = `Using cached DeepStream parser: ${paths.parserLib}\nDeepStream-Yolo ref: ${deepstreamYoloRef}`;
+      parserOutput = `Using cached ${profile.label} parser: ${paths.parserLib}\n${profile.repoName} ref: ${deepstreamYoloRef}`;
       skipCheckpoint(checkpoints, "build_parser", parserOutput, onProgress);
     } else {
       try {
         const parserResult = await runCheckpoint(checkpoints, "build_parser", async () => {
-          const builtParserOutput = await buildDeepStreamYoloParser(config, group, paths, repoDir || null, deepstreamYoloRef);
+          const builtParserOutput = await buildDeepStreamYoloParser(config, group, paths, repoDir || null, deepstreamYoloRef, profile);
           return { output: builtParserOutput };
         }, "DeepStream parser built.", onProgress);
         parserOutput = parserResult.output || "";
@@ -1921,10 +2057,15 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
     }
     output += `\n# Build DeepStream-Yolo parser\n${parserOutput}\n`;
     model.customLib = workspacePath(paths.parserLib);
-    model.parseBboxFunc = "NvDsInferParseYolo";
+    model.parseBboxFunc = profile.parseBboxFunc || "";
+    model.parseBboxInstanceMaskFunc = profile.parseInstanceMaskFunc || "";
     model.engineCreateFunc = "NvDsInferYoloCudaEngineGet";
   } else {
     skipCheckpoint(checkpoints, "build_parser", "Build parser is disabled or not applicable for this model/task.", onProgress);
+    model.customLib = "";
+    model.parseBboxFunc = "";
+    model.parseBboxInstanceMaskFunc = "";
+    model.engineCreateFunc = "";
   }
 
   model.build = {
@@ -1934,7 +2075,9 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
     engine: model.engine || "",
     labels: usableFileStat(paths.labels) ? workspacePath(paths.labels) : model.labels || "",
     customLib: model.customLib || "",
+    profile: profile.id,
     parseBboxFunc: model.parseBboxFunc || "",
+    parseBboxInstanceMaskFunc: model.parseBboxInstanceMaskFunc || "",
     numClasses,
     batchSize,
     yoloVersion,
@@ -2449,8 +2592,10 @@ app.post("/api/model-source/:group", uploadSource.single("file"), async (req, re
     const sourceKey = sourceKeyFromPath(req.file.path);
     const modelName = String(req.body?.modelName || "").trim();
     const description = String(req.body?.description || "").trim();
+    const profile = normalizeModelProfile(req.body?.profile);
     model.source = workspacePath(req.file.path);
     model.sourceKey = sourceKey;
+    model.profile = profile;
     model.sourceOriginalName = req.file.originalname;
     model.sourceUploadedAt = new Date().toISOString();
     model.sourceMeta = {
@@ -2458,6 +2603,7 @@ app.post("/api/model-source/:group", uploadSource.single("file"), async (req, re
       [sourceKey]: {
         modelName,
         description,
+        profile,
         originalName: req.file.originalname,
         uploadedAt: model.sourceUploadedAt
       }
