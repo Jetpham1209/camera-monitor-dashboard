@@ -14,6 +14,8 @@ const state = {
   }
 };
 
+const monitorBase = window.location.pathname.startsWith("/camera-monitor") ? "/camera-monitor" : "";
+
 const els = {
   cameraList: document.querySelector("#cameraList"),
   emptyState: document.querySelector("#emptyState"),
@@ -82,7 +84,7 @@ function formatDuration(seconds = 0) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const response = await fetch(`${monitorBase}${path}`, {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options
   });
@@ -720,7 +722,8 @@ function escapeHtml(value = "") {
 
 function connectSocket() {
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${protocol}://${window.location.host}`);
+  const socketPath = monitorBase ? `${monitorBase}/ws` : "";
+  const ws = new WebSocket(`${protocol}://${window.location.host}${socketPath}`);
   ws.addEventListener("open", () => {
     els.socketState.textContent = "Live";
   });

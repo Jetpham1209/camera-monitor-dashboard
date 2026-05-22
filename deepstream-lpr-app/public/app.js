@@ -215,6 +215,7 @@ function escapeHtml(value) {
 
 const dashboardViewTitles = {
   dashboard: "Main Dashboard",
+  monitor: "Camera Monitor",
   cameras: "Cameras & ROI",
   deploy: "Deploy Settings",
   models: "Model Factory",

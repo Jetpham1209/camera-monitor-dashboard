@@ -15,6 +15,7 @@
         </div>
         <nav class="sidebar-nav" aria-label="Dashboard sections">
           <button type="button" class="sidebar-link active" data-nav-view="dashboard">Dashboard</button>
+          <button type="button" class="sidebar-link" data-nav-view="monitor">Camera Monitor</button>
           <button type="button" class="sidebar-link" data-nav-view="cameras">Cameras & ROI</button>
           <button type="button" class="sidebar-link" data-nav-view="deploy">Deploy</button>
           <button type="button" class="sidebar-link" data-nav-view="models">Model Factory</button>
@@ -44,10 +45,28 @@
             </div>
             <div class="actions inline-actions">
               <button type="button" data-open-view="deploy">Deploy settings</button>
+              <button type="button" class="secondary" data-open-view="monitor">Camera monitor</button>
               <button type="button" class="secondary" data-open-view="cameras">Camera setup</button>
             </div>
           </section>
           <div id="dashboardOverview" class="dashboard-overview"></div>
+        </section>
+
+        <section class="view" data-view-section="monitor">
+          <section class="panel monitor-panel">
+            <div class="panel-toolbar">
+              <div>
+                <h2>Camera Monitor</h2>
+                <p>Theo doi camera RTSP, stream HLS, capture frame va Telegram alert trong Jetson Console.</p>
+              </div>
+              <a class="button-link secondary" href="/camera-monitor/" target="_blank" rel="noreferrer">Open full screen</a>
+            </div>
+            <iframe
+              class="camera-monitor-frame"
+              src="/camera-monitor/"
+              title="Camera Monitor"
+            ></iframe>
+          </section>
         </section>
 
         <section class="view" data-view-section="cameras">

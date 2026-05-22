@@ -10,6 +10,7 @@ Scaffold deploy tren Jetson cho DeepStream detection app co the chay LPR process
 - Detect/OCR bien so.
 - Tracking object id de tranh capture qua nhieu lan cho cung mot xe.
 - Control UI de nhap RTSP, ve ROI polygon tren anh mau, upload/build model YOLO, build ONNX/TensorRT engine, roi bam Deploy.
+- Camera Monitor duoc mount vao cung Jetson Console de ping camera, xem HLS stream, capture frame, ve shape va cau hinh Telegram alert.
 
 ## Chay dang product Docker
 
@@ -49,6 +50,8 @@ Mo:
 ```text
 http://<ip-jetson>:5190
 ```
+
+Jetson Console la web app product duy nhat tren port nay. Sidebar `Camera Monitor` mo lai luong monitor RTSP cu trong cung server tai `/camera-monitor/`; khong can start them dashboard monitor port `5174` khi chay product Docker.
 
 Neu user hien tai chua co quyen Docker, script se dung `sudo docker compose`.
 
@@ -98,6 +101,24 @@ http://<ip-jetson>:5190
 ```
 
 Neu tren Jetson go `pm2` bi `command not found`, van dung cac lenh `npm run lpr:pm2:*` o tren. Project da cai PM2 local trong `node_modules`, khong bat buoc cai PM2 global.
+
+## Camera Monitor trong Jetson Console
+
+Sidebar **Camera Monitor** gom chuc nang monitor RTSP vao Jetson app:
+
+- quan ly danh sach camera monitor rieng trong `data/cameras.json`.
+- ping camera theo interval, ghi outage trong `data/state.json`.
+- start/stop HLS stream, capture frame vao `data/captures/`.
+- ve rectangle, circle, polygon tren frame capture.
+- cau hinh Telegram alert trong UI; settings luu vao `data/settings.json`.
+
+Control server mount feature nay tai:
+
+```text
+http://<ip-jetson>:5190/camera-monitor/
+```
+
+Danh sach camera deploy DeepStream o **Cameras & ROI** van la config runtime rieng. Camera monitor dung de quan sat/capture/alert; camera deploy dung de tao DeepStream pipeline va ROI.
 
 ## Multi-camera config
 

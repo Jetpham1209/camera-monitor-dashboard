@@ -4,8 +4,10 @@ const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
 const { spawn } = require("child_process");
+const http = require("http");
 const net = require("net");
 const ffmpegStatic = require("ffmpeg-static");
+const { createCameraMonitorFeature } = require("./camera-monitor-feature");
 
 const APP_ROOT = path.resolve(__dirname, "..");
 const REPO_ROOT = path.resolve(APP_ROOT, "..");
@@ -45,6 +47,7 @@ const PING_TIMEOUT_MS = Number(process.env.PING_TIMEOUT_MS || 3000);
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
+const httpServer = http.createServer(app);
 const jobs = new Map();
 
 const MODEL_PROFILE_SPECS = {
@@ -2484,6 +2487,12 @@ async function runTestMedia(kind, config) {
 }
 
 ensureDirs();
+const cameraMonitorFeature = createCameraMonitorFeature({
+  app,
+  server: httpServer,
+  repoRoot: REPO_ROOT,
+  ffmpegPath: ffmpegExecutable()
+});
 app.use(express.static(PUBLIC_DIR));
 app.use("/models", express.static(MODELS_DIR));
 app.use("/runtime", express.static(RUNTIME_DIR));
@@ -2799,6 +2808,17 @@ app.get("*", (_req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, "index.html"));
 });
 
-app.listen(PORT, () => {
+httpServer.listen(PORT, () => {
+  cameraMonitorFeature.start();
   console.log(`DeepStream LPR control UI: http://localhost:${PORT}`);
+});
+
+process.on("SIGINT", () => {
+  cameraMonitorFeature.stop();
+  process.exit(0);
+});
+
+process.on("SIGTERM", () => {
+  cameraMonitorFeature.stop();
+  process.exit(0);
 });

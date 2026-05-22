@@ -306,6 +306,8 @@ Nếu server công ty không nhận heartbeat quá thời gian cấu hình, nó 
 
 ## DeepStream LPR App
 
+Khi chay product tren Jetson, control UI o port `5190` da gom them **Camera Monitor** vao sidebar. Luong monitor RTSP, HLS stream, capture frame, shape tool va Telegram alert co the dung ngay trong Jetson Console tai `/camera-monitor/`; khong can host them dashboard monitor port `5174` tren cung Jetson.
+
 Repo cũng có scaffold app DeepStream để chạy trên Jetson cho bài toán nhận diện đầu xe và đọc biển số trong ROI.
 
 Chạy control UI:
