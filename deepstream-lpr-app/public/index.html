@@ -172,6 +172,7 @@
             <label class="inline-check camera-enabled-setting"><input id="cameraSettingEnabled" type="checkbox" checked /> Enabled</label>
           </div>
           <input id="cameraSettingRoi" type="hidden" value="[]" />
+          <input id="cameraSettingZones" type="hidden" value="[]" />
           <input id="cameraEditingIndex" type="hidden" value="" />
           <div class="camera-meta">
             <span class="camera-status" id="cameraSettingConnection"><b>Check connection</b> Not checked</span>
@@ -213,10 +214,36 @@
                 </div>
               </div>
               <div class="roi-output-panel">
+                <div class="zone-editor">
+                  <div class="panel-toolbar compact-toolbar">
+                    <div>
+                      <h3>Zone logic</h3>
+                      <p>Moi zone co polygon va dieu kien rieng.</p>
+                    </div>
+                    <button id="newZoneBtn" type="button" class="secondary">New zone</button>
+                  </div>
+                  <label>Editing zone <select id="roiZoneSelect"></select></label>
+                  <div class="grid one">
+                    <label>Zone name <input id="roiZoneName" placeholder="Entry lane" /></label>
+                    <label>Logic mode
+                      <select id="roiZoneMode">
+                        <option value="capture_when_inside">Capture when inside</option>
+                        <option value="alert_when_inside">Alert when inside</option>
+                        <option value="lpr_only_inside">LPR only inside</option>
+                        <option value="detect_only_inside">Detect only inside</option>
+                        <option value="ignore_inside">Ignore inside</option>
+                      </select>
+                    </label>
+                    <label>Class IDs for this zone <input id="roiZoneClassIds" placeholder="blank = use camera/stage classes" /></label>
+                    <label>Cooldown seconds <input id="roiZoneCooldown" type="number" min="1" placeholder="blank = camera cooldown" /></label>
+                    <label class="inline-check"><input id="roiZoneEnabled" type="checkbox" checked /> Zone enabled</label>
+                  </div>
+                  <div id="roiZoneList" class="zone-list"></div>
+                </div>
                 <label>Polygon coordinates JSON <textarea id="roiPolygonOutput" readonly></textarea></label>
                 <div class="actions inline-actions">
-                  <button id="applyRoiBtn" type="button">Apply polygon</button>
-                  <button id="removeRoiBtn" type="button" class="danger">Remove polygon</button>
+                  <button id="applyRoiBtn" type="button">Apply zone</button>
+                  <button id="removeRoiBtn" type="button" class="danger">Remove zone</button>
                 </div>
               </div>
             </div>

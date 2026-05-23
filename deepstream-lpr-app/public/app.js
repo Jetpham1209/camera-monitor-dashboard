@@ -55,6 +55,7 @@ const els = {
   cameraSettingClassIds: document.querySelector("#cameraSettingClassIds"),
   cameraSettingEnabled: document.querySelector("#cameraSettingEnabled"),
   cameraSettingRoi: document.querySelector("#cameraSettingRoi"),
+  cameraSettingZones: document.querySelector("#cameraSettingZones"),
   cameraEditingIndex: document.querySelector("#cameraEditingIndex"),
   cameraSettingConnection: document.querySelector("#cameraSettingConnection"),
   cameraSettingRoiSummary: document.querySelector("#cameraSettingRoiSummary"),
@@ -75,6 +76,14 @@ const els = {
   roiImageSize: document.querySelector("#roiImageSize"),
   roiCanvas: document.querySelector("#roiCanvas"),
   roiCanvasEmpty: document.querySelector("#roiCanvasEmpty"),
+  roiZoneSelect: document.querySelector("#roiZoneSelect"),
+  roiZoneName: document.querySelector("#roiZoneName"),
+  roiZoneMode: document.querySelector("#roiZoneMode"),
+  roiZoneClassIds: document.querySelector("#roiZoneClassIds"),
+  roiZoneCooldown: document.querySelector("#roiZoneCooldown"),
+  roiZoneEnabled: document.querySelector("#roiZoneEnabled"),
+  roiZoneList: document.querySelector("#roiZoneList"),
+  newZoneBtn: document.querySelector("#newZoneBtn"),
   roiPolygonOutput: document.querySelector("#roiPolygonOutput"),
   undoRoiPointBtn: document.querySelector("#undoRoiPointBtn"),
   clearRoiBtn: document.querySelector("#clearRoiBtn"),
@@ -125,7 +134,8 @@ let latestDeployStatus = {};
 const roiTool = {
   image: null,
   source: "",
-  points: []
+  points: [],
+  zoneIndex: 0
 };
 const tasks = new Map();
 const modelFiles = new Map();
@@ -268,7 +278,7 @@ function renderMainDashboard() {
   if (!els.dashboardOverview) return;
   const cameras = readCameraCards();
   const enabledCameras = cameras.filter((camera) => camera.enabled !== false);
-  const camerasWithRoi = cameras.filter((camera) => cameraPolygon(camera).length >= 3);
+  const camerasWithRoi = cameras.filter((camera) => cameraZones(camera).some((zone) => cleanZonePolygon(zone.polygon).length >= 3));
   const modelStats = modelLibraryStats();
   const deploy = dashboardDeploySummary();
   const testStages = confirmedTestPipelineStages.length ? normalizePipelineStages(confirmedTestPipelineStages) : [];
@@ -323,7 +333,7 @@ function renderMainDashboard() {
               <span class="dashboard-list-meta">${escapeHtml(camera.id || `camera-${index + 1}`)} - ${escapeHtml(camera.rtspUrl || "No RTSP URL")}</span>
               <div class="dashboard-tags">
                 ${dashboardTag(camera.enabled !== false ? "enabled" : "disabled", camera.enabled !== false ? "success" : "warning")}
-                ${dashboardTag(cameraPolygon(camera).length >= 3 ? roiSummary(cameraPolygon(camera)) : "full frame ROI", cameraPolygon(camera).length >= 3 ? "success" : "warning")}
+                ${dashboardTag(zoneSummary(cameraZones(camera)), cameraZones(camera).some((zone) => cleanZonePolygon(zone.polygon).length >= 3) ? "success" : "warning")}
                 ${dashboardTag(frameSizeSummary(camera.id))}
               </div>
             </article>
@@ -593,14 +603,32 @@ function buildOptions(group, overrides = {}) {
 }
 
 function defaultCamera(index = 0) {
+  const defaultZone = defaultZoneConfig(0, {
+    classIds: "0",
+    cooldownSec: 30
+  });
   return {
     id: `camera-${index + 1}`,
     name: `Camera ${index + 1}`,
     rtspUrl: "",
     enabled: true,
     roi: { polygon: [] },
+    zones: [defaultZone],
     frontVehicleClassIds: [0],
     captureCooldownSec: 30
+  };
+}
+
+function defaultZoneConfig(index = 0, overrides = {}) {
+  return {
+    id: `zone-${index + 1}`,
+    name: `Zone ${index + 1}`,
+    enabled: true,
+    mode: "capture_when_inside",
+    polygon: [],
+    classIds: "",
+    cooldownSec: "",
+    ...overrides
   };
 }
 
@@ -613,13 +641,81 @@ function parseRoiValue(value) {
   }
 }
 
+function parseZonesValue(value) {
+  try {
+    const zones = JSON.parse(value || "[]");
+    return Array.isArray(zones) ? zones : [];
+  } catch {
+    return [];
+  }
+}
+
+function cleanZonePolygon(polygon = []) {
+  return Array.isArray(polygon)
+    ? polygon
+      .map((point) => Array.isArray(point) && point.length >= 2 ? [Number(point[0]), Number(point[1])] : null)
+      .filter((point) => point && Number.isFinite(point[0]) && Number.isFinite(point[1]))
+    : [];
+}
+
+function normalizeZone(zone = {}, index = 0, camera = {}) {
+  const fallback = defaultZoneConfig(index);
+  const id = String(zone.id || fallback.id).trim() || fallback.id;
+  const mode = ["capture_when_inside", "alert_when_inside", "lpr_only_inside", "detect_only_inside", "ignore_inside"].includes(zone.mode)
+    ? zone.mode
+    : fallback.mode;
+  return {
+    ...fallback,
+    ...zone,
+    id,
+    name: String(zone.name || fallback.name).trim() || fallback.name,
+    enabled: zone.enabled !== false,
+    mode,
+    polygon: cleanZonePolygon(zone.polygon || zone.points || []),
+    classIds: Array.isArray(zone.classIds) ? zone.classIds.join(",") : String(zone.classIds ?? ""),
+    cooldownSec: zone.cooldownSec === "" || zone.cooldownSec === null || zone.cooldownSec === undefined
+      ? ""
+      : Math.max(1, Number(zone.cooldownSec || camera.captureCooldownSec || 30))
+  };
+}
+
 function cameraPolygon(camera, index = 0) {
   const polygon = camera?.roi?.polygon ?? defaultCamera(index).roi.polygon;
   return Array.isArray(polygon) ? polygon : [];
 }
 
+function cameraZones(camera, index = 0) {
+  const zones = Array.isArray(camera?.zones) ? camera.zones : [];
+  if (zones.length) {
+    return zones.map((zone, zoneIndex) => normalizeZone(zone, zoneIndex, camera));
+  }
+  const polygon = cameraPolygon(camera, index);
+  if (polygon.length) {
+    return [normalizeZone({
+      id: "zone-1",
+      name: "Zone 1",
+      polygon,
+      classIds: Array.isArray(camera?.frontVehicleClassIds) ? camera.frontVehicleClassIds.join(",") : camera?.frontVehicleClassIds || "",
+      cooldownSec: camera?.captureCooldownSec || ""
+    }, 0, camera)];
+  }
+  return [];
+}
+
 function roiSummary(polygon = []) {
   return polygon.length >= 3 ? `${polygon.length} points saved` : "No polygon, full frame";
+}
+
+function zoneSummary(zones = []) {
+  const active = zones.filter((zone) => zone.enabled !== false);
+  if (!active.length) return "No zones, full frame";
+  const withPolygon = active.filter((zone) => cleanZonePolygon(zone.polygon).length >= 3).length;
+  return `${active.length} zone${active.length === 1 ? "" : "s"} - ${withPolygon} polygon${withPolygon === 1 ? "" : "s"}`;
+}
+
+function primaryZonePolygon(camera, index = 0) {
+  const zone = cameraZones(camera, index).find((item) => cleanZonePolygon(item.polygon).length >= 3);
+  return zone?.polygon || cameraPolygon(camera, index);
 }
 
 function frameSizeSummary(cameraId) {
@@ -678,20 +774,28 @@ function defaultDeployApp(index = 0, cameras = []) {
 }
 
 function readCameraCards() {
-  return cameraDrafts.length ? cameraDrafts.map((camera) => ({
-    ...camera,
-    roi: { polygon: cameraPolygon(camera) }
-  })) : [];
+  return cameraDrafts.length ? cameraDrafts.map((camera, index) => {
+    const zones = cameraZones(camera, index);
+    const polygon = primaryZonePolygon({ ...camera, zones }, index);
+    return {
+      ...camera,
+      zones,
+      roi: { polygon }
+    };
+  }) : [];
 }
 
 function readCameraSetting() {
   const editingIndex = els.cameraEditingIndex.value === "" ? "" : Number(els.cameraEditingIndex.value);
+  const zones = parseZonesValue(els.cameraSettingZones.value).map((zone, index) => normalizeZone(zone, index));
+  const polygon = primaryZonePolygon({ zones, roi: { polygon: parseRoiValue(els.cameraSettingRoi.value) } });
   return {
     id: els.cameraSettingId.value.trim() || `camera-${cameraDrafts.length + 1}`,
     name: els.cameraSettingName.value.trim() || `Camera ${cameraDrafts.length + 1}`,
     rtspUrl: els.cameraSettingRtsp.value.trim(),
     enabled: els.cameraSettingEnabled.checked,
-    roi: { polygon: parseRoiValue(els.cameraSettingRoi.value) },
+    roi: { polygon },
+    zones,
     frontVehicleClassIds: els.cameraSettingClassIds.value,
     captureCooldownSec: Number(els.cameraSettingCooldown.value || 30),
     editingIndex
@@ -699,7 +803,8 @@ function readCameraSetting() {
 }
 
 function fillCameraSetting(camera = defaultCamera(cameraDrafts.length), index = "") {
-  const polygon = cameraPolygon(camera);
+  const zones = cameraZones(camera, Number(index) || 0);
+  const polygon = primaryZonePolygon({ ...camera, zones }, Number(index) || 0);
   els.cameraEditingIndex.value = index === "" ? "" : String(index);
   els.cameraSettingsTitle.textContent = index === "" ? "Add camera" : `Change setting - ${camera.name || camera.id}`;
   els.addCameraBtn.textContent = index === "" ? "Add camera" : "Update camera";
@@ -712,7 +817,10 @@ function fillCameraSetting(camera = defaultCamera(cameraDrafts.length), index = 
     ? camera.frontVehicleClassIds.join(",")
     : camera.frontVehicleClassIds || "0";
   els.cameraSettingRoi.value = JSON.stringify(polygon);
+  els.cameraSettingZones.value = JSON.stringify(zones);
+  roiTool.zoneIndex = 0;
   updateCameraSettingStatus();
+  renderZoneControls();
 }
 
 function resetCameraSetting() {
@@ -723,7 +831,7 @@ function resetCameraSetting() {
 
 function updateCameraSettingStatus() {
   const camera = readCameraSetting();
-  els.cameraSettingRoiSummary.innerHTML = `<b>ROI setting</b> ${escapeHtml(roiSummary(camera.roi.polygon))}`;
+  els.cameraSettingRoiSummary.innerHTML = `<b>ROI setting</b> ${escapeHtml(zoneSummary(camera.zones))}`;
   els.cameraSettingFrameSize.innerHTML = `<b>Frame size</b> ${escapeHtml(frameSizeSummary(camera.id))}`;
 }
 
@@ -736,6 +844,7 @@ function syncEditedCameraDraft() {
   const camera = readCameraSetting();
   const index = camera.editingIndex;
   delete camera.editingIndex;
+  camera.roi = { polygon: primaryZonePolygon(camera) };
   if (index !== "" && cameraDrafts[index]) cameraDrafts[index] = camera;
   return camera;
 }
@@ -768,7 +877,7 @@ function renderCameras(streams = []) {
       </div>
       <div class="camera-meta">
         <span class="camera-status" data-camera-status="${escapeHtml(camera.id || `camera-${index + 1}`)}"><b>Check connection</b> Not checked</span>
-        <span class="roi-state" data-roi-summary="${escapeHtml(camera.id || `camera-${index + 1}`)}"><b>ROI setting</b> ${escapeHtml(roiSummary(cameraPolygon(camera, index)))}</span>
+        <span class="roi-state" data-roi-summary="${escapeHtml(camera.id || `camera-${index + 1}`)}"><b>ROI setting</b> ${escapeHtml(zoneSummary(cameraZones(camera, index)))}</span>
         <span class="frame-size-state" data-frame-size="${escapeHtml(camera.id || `camera-${index + 1}`)}"><b>Frame size</b> ${escapeHtml(frameSizeSummary(camera.id || `camera-${index + 1}`))}</span>
       </div>
     </article>
@@ -922,9 +1031,8 @@ function latestCaptureForCamera(cameraId) {
 }
 
 function renderDeployCameraPreview(camera) {
-  const polygon = Array.isArray(camera.roi?.polygon) ? camera.roi.polygon : [];
+  const zones = cameraZones(camera);
   const capture = latestCaptureForCamera(camera.id);
-  const points = polygon.map((point) => point.join(",")).join(" ");
   return `
     <article class="deploy-camera-preview" data-deploy-preview-camera="${escapeHtml(camera.id)}">
       <div class="deploy-preview-head">
@@ -935,10 +1043,16 @@ function renderDeployCameraPreview(camera) {
         <div class="deploy-preview-image">
           <img src="${escapeHtml(capture.url)}" alt="${escapeHtml(camera.name || camera.id)} sample" data-preview-image />
           <svg data-preview-svg preserveAspectRatio="none">
-            ${polygon.length >= 3 ? `<polygon points="${escapeHtml(points)}"></polygon>` : ""}
+            ${zones.map((zone, index) => {
+              const polygon = cleanZonePolygon(zone.polygon);
+              const points = polygon.map((point) => point.join(",")).join(" ");
+              return polygon.length >= 3
+                ? `<polygon class="zone-${index % 6}" points="${escapeHtml(points)}"><title>${escapeHtml(zone.name || zone.id)}</title></polygon>`
+                : "";
+            }).join("")}
           </svg>
         </div>
-        <small>${escapeHtml(new Date(capture.updatedAt || capture.createdAt).toLocaleString())} - ${escapeHtml(roiSummary(polygon))}</small>
+        <small>${escapeHtml(new Date(capture.updatedAt || capture.createdAt).toLocaleString())} - ${escapeHtml(zoneSummary(zones))}</small>
       ` : `<div class="empty">Chua co frame mau. Bam Capture sample de lay anh tu camera.</div>`}
     </article>
   `;
@@ -1324,10 +1438,13 @@ function setCameraStatus(cameraId, state, message) {
   status.innerHTML = `<b>Check connection</b> ${escapeHtml(message)}`;
 }
 
-function updateCameraRoiSummary(cameraId, polygon = []) {
+function updateCameraRoiSummary(cameraId, zonesOrPolygon = []) {
   const summary = [...document.querySelectorAll("[data-roi-summary]")]
     .find((node) => node.dataset.roiSummary === cameraId);
-  if (summary) summary.innerHTML = `<b>ROI setting</b> ${escapeHtml(roiSummary(polygon))}`;
+  const text = Array.isArray(zonesOrPolygon) && zonesOrPolygon.some((item) => item && !Array.isArray(item))
+    ? zoneSummary(zonesOrPolygon)
+    : roiSummary(zonesOrPolygon);
+  if (summary) summary.innerHTML = `<b>ROI setting</b> ${escapeHtml(text)}`;
 }
 
 function updateCameraFrameStatuses() {
@@ -1765,7 +1882,117 @@ function syncRoiCameraSelect() {
 }
 
 function selectedCameraPolygon() {
-  return parseRoiValue(els.cameraSettingRoi.value || "[]");
+  const zones = selectedCameraZones();
+  return zones[roiTool.zoneIndex]?.polygon || parseRoiValue(els.cameraSettingRoi.value || "[]");
+}
+
+function selectedCameraZones() {
+  return parseZonesValue(els.cameraSettingZones.value).map((zone, index) => normalizeZone(zone, index, readCameraSetting()));
+}
+
+function setCameraZones(zones = []) {
+  const normalized = zones.map((zone, index) => normalizeZone(zone, index, readCameraSetting()));
+  els.cameraSettingZones.value = JSON.stringify(normalized);
+  els.cameraSettingRoi.value = JSON.stringify(primaryZonePolygon({ zones: normalized, roi: { polygon: [] } }));
+  updateCameraSettingStatus();
+  renderZoneControls();
+}
+
+function zoneModeLabel(mode) {
+  return {
+    capture_when_inside: "capture",
+    alert_when_inside: "alert",
+    lpr_only_inside: "lpr only",
+    detect_only_inside: "detect only",
+    ignore_inside: "ignore"
+  }[mode] || mode;
+}
+
+function currentZone() {
+  const zones = selectedCameraZones();
+  if (!zones.length) {
+    const zone = defaultZoneConfig(0, {
+      classIds: els.cameraSettingClassIds.value,
+      cooldownSec: els.cameraSettingCooldown.value || ""
+    });
+    setCameraZones([zone]);
+    roiTool.zoneIndex = 0;
+    return zone;
+  }
+  roiTool.zoneIndex = clamp(roiTool.zoneIndex, 0, zones.length - 1);
+  return zones[roiTool.zoneIndex];
+}
+
+function renderZoneControls() {
+  if (!els.roiZoneSelect) return;
+  const zones = selectedCameraZones();
+  roiTool.zoneIndex = zones.length ? clamp(roiTool.zoneIndex, 0, zones.length - 1) : 0;
+  els.roiZoneSelect.innerHTML = zones.length
+    ? zones.map((zone, index) => `<option value="${index}">${escapeHtml(zone.name || zone.id)} - ${escapeHtml(zoneModeLabel(zone.mode))}</option>`).join("")
+    : '<option value="0">No zone yet</option>';
+  els.roiZoneSelect.value = String(roiTool.zoneIndex);
+  const zone = zones[roiTool.zoneIndex] || defaultZoneConfig(0);
+  els.roiZoneName.value = zone.name || "";
+  els.roiZoneMode.value = zone.mode || "capture_when_inside";
+  els.roiZoneClassIds.value = Array.isArray(zone.classIds) ? zone.classIds.join(",") : zone.classIds || "";
+  els.roiZoneCooldown.value = zone.cooldownSec || "";
+  els.roiZoneEnabled.checked = zone.enabled !== false;
+  els.roiZoneList.innerHTML = zones.length ? zones.map((item, index) => `
+    <button type="button" class="zone-chip ${index === roiTool.zoneIndex ? "active" : ""}" data-zone-index="${index}">
+      <strong>${escapeHtml(item.name || item.id)}</strong>
+      <span>${escapeHtml(zoneModeLabel(item.mode))} - ${cleanZonePolygon(item.polygon).length >= 3 ? `${item.polygon.length} pts` : "full frame"}</span>
+    </button>
+  `).join("") : '<div class="empty">No zone configured.</div>';
+  els.roiZoneList.querySelectorAll("[data-zone-index]").forEach((button) => {
+    button.addEventListener("click", () => selectZone(Number(button.dataset.zoneIndex)));
+  });
+}
+
+function readZoneEditor() {
+  const zone = currentZone();
+  return normalizeZone({
+    ...zone,
+    name: els.roiZoneName.value || zone.name,
+    mode: els.roiZoneMode.value || zone.mode,
+    classIds: els.roiZoneClassIds.value,
+    cooldownSec: els.roiZoneCooldown.value,
+    enabled: els.roiZoneEnabled.checked,
+    polygon: roiTool.points
+  }, roiTool.zoneIndex, readCameraSetting());
+}
+
+function persistZoneEditor() {
+  const zones = selectedCameraZones();
+  zones[roiTool.zoneIndex] = readZoneEditor();
+  setCameraZones(zones);
+  roiTool.points = zones[roiTool.zoneIndex]?.polygon || [];
+  drawRoiTool();
+  updateRoiOutput();
+  syncEditedCameraDraft();
+  return zones[roiTool.zoneIndex];
+}
+
+function selectZone(index) {
+  const zones = selectedCameraZones();
+  if (!zones.length) return;
+  roiTool.zoneIndex = clamp(index, 0, zones.length - 1);
+  roiTool.points = zones[roiTool.zoneIndex].polygon || [];
+  renderZoneControls();
+  drawRoiTool();
+  updateRoiOutput();
+}
+
+function newZone() {
+  const zones = selectedCameraZones();
+  zones.push(defaultZoneConfig(zones.length, {
+    classIds: "",
+    cooldownSec: ""
+  }));
+  roiTool.zoneIndex = zones.length - 1;
+  setCameraZones(zones);
+  roiTool.points = [];
+  drawRoiTool();
+  updateRoiOutput();
 }
 
 function clearRoiReferenceImage(initialPoints = []) {
@@ -1797,11 +2024,16 @@ function restoreLatestRoiReference(camera) {
 function openRoiTool() {
   syncRoiCameraSelect();
   const camera = readCameraSetting();
+  if (!selectedCameraZones().length) setCameraZones([defaultZoneConfig(0, {
+    classIds: els.cameraSettingClassIds.value,
+    cooldownSec: els.cameraSettingCooldown.value || ""
+  })]);
   if (els.cameraSettingRoiSlot && els.roiToolPanel.parentElement !== els.cameraSettingRoiSlot) {
     els.cameraSettingRoiSlot.appendChild(els.roiToolPanel);
   }
   els.roiToolPanel.classList.remove("hidden");
-  els.roiToolTitle.textContent = `ROI setting - ${camera.name}`;
+  renderZoneControls();
+  els.roiToolTitle.textContent = `Zones - ${camera.name}`;
   restoreLatestRoiReference(camera);
   els.roiToolPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
@@ -1878,27 +2110,37 @@ function drawRoiTool() {
   if (!roiTool.image) return;
 
   context.drawImage(roiTool.image, 0, 0, canvas.width, canvas.height);
-  if (!roiTool.points.length) return;
-
-  context.save();
-  context.strokeStyle = "#22c55e";
-  context.fillStyle = "#22c55e";
-  context.lineWidth = Math.max(2, Math.round(canvas.width / 640));
-  context.beginPath();
-  roiTool.points.forEach(([x, y], index) => {
-    if (index === 0) context.moveTo(x, y);
-    else context.lineTo(x, y);
-  });
-  if (roiTool.points.length >= 3) context.closePath();
-  context.stroke();
-
-  roiTool.points.forEach(([x, y], index) => {
+  const zones = selectedCameraZones();
+  zones.forEach((zone, index) => {
+    const points = index === roiTool.zoneIndex ? roiTool.points : cleanZonePolygon(zone.polygon);
+    if (!points.length) return;
+    const active = index === roiTool.zoneIndex;
+    context.save();
+    context.strokeStyle = active ? "#22c55e" : "#38bdf8";
+    context.fillStyle = active ? "#22c55e" : "#38bdf8";
+    context.globalAlpha = active ? 1 : 0.45;
+    context.lineWidth = Math.max(2, Math.round(canvas.width / 640));
     context.beginPath();
-    context.arc(x, y, Math.max(4, Math.round(canvas.width / 320)), 0, Math.PI * 2);
-    context.fill();
-    drawRoiPointLabel(context, index + 1, x, y);
+    points.forEach(([x, y], pointIndex) => {
+      if (pointIndex === 0) context.moveTo(x, y);
+      else context.lineTo(x, y);
+    });
+    if (points.length >= 3) context.closePath();
+    context.stroke();
+    if (points.length >= 3) {
+      context.globalAlpha = active ? 0.15 : 0.08;
+      context.fill();
+    }
+    context.globalAlpha = active ? 1 : 0.65;
+    points.forEach(([x, y], pointIndex) => {
+      context.beginPath();
+      context.arc(x, y, Math.max(4, Math.round(canvas.width / 320)), 0, Math.PI * 2);
+      context.fill();
+      if (active) drawRoiPointLabel(context, pointIndex + 1, x, y);
+    });
+    context.restore();
   });
-  context.restore();
+  if (!roiTool.points.length) return;
 }
 
 function drawRoiPointLabel(context, label, x, y) {
@@ -1942,33 +2184,37 @@ async function saveRoiConfig(message) {
 }
 
 async function applyRoiToCamera() {
-  if (roiTool.points.length < 3) return print("ROI polygon can it nhat 3 diem.");
-  els.cameraSettingRoi.value = JSON.stringify(roiTool.points);
+  if (roiTool.points.length < 3) return print("Zone polygon can it nhat 3 diem.");
+  const zone = persistZoneEditor();
   const camera = syncEditedCameraDraft();
   updateCameraSettingStatus();
-  updateCameraRoiSummary(camera.id, roiTool.points);
+  updateCameraRoiSummary(camera.id, camera.zones);
   print({
-    message: "Da apply ROI polygon vao camera setting. Bam Add/Update camera de luu vao danh sach.",
+    message: "Da apply zone vao camera setting. Bam Add/Update camera de luu vao danh sach.",
     cameraId: camera.id,
     cameraName: camera.name,
+    zone,
     source: roiTool.source,
-    polygon: roiTool.points
+    zones: camera.zones
   });
 }
 
 async function removeRoiFromCamera() {
-  els.cameraSettingRoi.value = "[]";
+  const zones = selectedCameraZones();
+  zones.splice(roiTool.zoneIndex, 1);
+  roiTool.zoneIndex = clamp(roiTool.zoneIndex, 0, Math.max(0, zones.length - 1));
+  setCameraZones(zones);
   const camera = syncEditedCameraDraft();
-  roiTool.points = [];
+  roiTool.points = zones[roiTool.zoneIndex]?.polygon || [];
   updateCameraSettingStatus();
-  updateCameraRoiSummary(camera.id, []);
+  updateCameraRoiSummary(camera.id, camera.zones);
   drawRoiTool();
   updateRoiOutput();
   print({
-    message: "Da remove ROI polygon khoi camera setting. Bam Add/Update camera de luu vao danh sach.",
+    message: "Da remove zone khoi camera setting. Bam Add/Update camera de luu vao danh sach.",
     cameraId: camera.id,
     cameraName: camera.name,
-    polygon: []
+    zones: camera.zones
   });
 }
 
@@ -2139,6 +2385,7 @@ function renderTestResults(kind, result) {
           <h3>${escapeHtml(event.cameraName || event.cameraId || "video")}</h3>
           <p>Frame ${escapeHtml(event.frameNum ?? "")} - Object ${escapeHtml(event.objectId ?? "")}</p>
           <strong>${escapeHtml(generic ? event.label || event.component || "detection" : event.plateText || "No plate text")}</strong>
+          ${event.zoneName ? `<small>Zone: ${escapeHtml(event.zoneName)} (${escapeHtml(event.zoneMode || "")})</small>` : ""}
           ${event.imagePath ? `<small>${escapeHtml(event.imagePath)}</small>` : ""}
         </article>
       `).join("") || `<div class="empty">No ${generic ? "detection" : "vehicle"} event detected.</div>`}
@@ -2403,6 +2650,16 @@ els.deployAppList.addEventListener("change", (event) => {
 });
 els.roiImageFile.addEventListener("change", loadRoiImage);
 els.roiCameraSelect.addEventListener("change", openRoiTool);
+els.roiZoneSelect?.addEventListener("change", () => selectZone(Number(els.roiZoneSelect.value || 0)));
+els.newZoneBtn?.addEventListener("click", newZone);
+[els.roiZoneName, els.roiZoneMode, els.roiZoneClassIds, els.roiZoneCooldown, els.roiZoneEnabled].forEach((input) => {
+  input?.addEventListener("input", () => {
+    persistZoneEditor();
+  });
+  input?.addEventListener("change", () => {
+    persistZoneEditor();
+  });
+});
 els.captureRoiFrameBtn.addEventListener("click", () => captureRoiFrame(els.captureRoiFrameBtn).catch((error) => print(error.message)));
 els.closeRoiToolBtn.addEventListener("click", closeRoiTool);
 els.roiCanvas.addEventListener("click", addRoiPoint);

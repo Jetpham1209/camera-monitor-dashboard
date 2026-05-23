@@ -276,6 +276,9 @@ async function listRuntimeResults({ date = "", source = "", limit = 200 } = {}) 
         confidence: event.confidence ?? null,
         plateText: event.plateText || "",
         plateStatus: event.plateStatus || "",
+        zoneId: event.zoneId || "",
+        zoneName: event.zoneName || "",
+        zoneMode: event.zoneMode || "",
         failedStage: event.failedStage || "",
         failedModel: event.failedModel || "",
         failureReason: event.failureReason || "",
@@ -479,6 +482,7 @@ function defaultConfig() {
         rtspUrl: "",
         enabled: true,
         roi: { polygon: [] },
+        zones: [],
         frontVehicleClassIds: [0],
         captureCooldownSec: 30
       }
@@ -813,6 +817,48 @@ function normalizePolygon(value) {
     .filter((point) => point && Number.isFinite(point[0]) && Number.isFinite(point[1]));
 }
 
+const ZONE_MODES = new Set([
+  "capture_when_inside",
+  "alert_when_inside",
+  "lpr_only_inside",
+  "detect_only_inside",
+  "ignore_inside"
+]);
+
+function normalizeZone(zone, index, streamDefaults = {}) {
+  const id = String(zone?.id || `zone-${index + 1}`).trim() || `zone-${index + 1}`;
+  const mode = ZONE_MODES.has(zone?.mode) ? zone.mode : "capture_when_inside";
+  const classIds = normalizeClassIds(zone?.classIds);
+  const cooldown = zone?.cooldownSec === "" || zone?.cooldownSec === null || zone?.cooldownSec === undefined
+    ? ""
+    : Math.max(1, Number(zone.cooldownSec || streamDefaults.captureCooldownSec || 30));
+  return {
+    id,
+    name: String(zone?.name || `Zone ${index + 1}`).trim() || `Zone ${index + 1}`,
+    enabled: zone?.enabled !== false,
+    mode,
+    polygon: normalizePolygon(zone?.polygon || zone?.points || []),
+    classIds,
+    cooldownSec: cooldown
+  };
+}
+
+function normalizeZones(stream, fallbackStream) {
+  const sourceZones = Array.isArray(stream.zones) ? stream.zones : [];
+  const zones = sourceZones.map((zone, index) => normalizeZone(zone, index, stream));
+  if (zones.length) return zones;
+  const polygon = normalizePolygon(stream.roi?.polygon || fallbackStream.roi?.polygon || []);
+  if (!polygon.length) return [];
+  const classIds = normalizeClassIds(stream.frontVehicleClassIds || fallbackStream.frontVehicleClassIds);
+  return [normalizeZone({
+    id: "zone-1",
+    name: "Zone 1",
+    polygon,
+    classIds,
+    cooldownSec: stream.captureCooldownSec || fallbackStream.captureCooldownSec || 30
+  }, 0, stream)];
+}
+
 function normalizeStreams(inputStreams, fallback) {
   const sourceStreams = Array.isArray(inputStreams) ? inputStreams : null;
   const fallbackStream = {
@@ -825,7 +871,9 @@ function normalizeStreams(inputStreams, fallback) {
     captureCooldownSec: fallback.captureCooldownSec || 30
   };
   return (sourceStreams || [fallbackStream]).map((stream, index) => {
-    const polygon = normalizePolygon(stream.roi?.polygon || fallbackStream.roi.polygon);
+    const zones = normalizeZones(stream, fallbackStream);
+    const polygon = zones.find((zone) => zone.polygon.length >= 3)?.polygon
+      || normalizePolygon(stream.roi?.polygon || fallbackStream.roi.polygon);
     const classIds = normalizeClassIds(stream.frontVehicleClassIds);
     return {
       id: String(stream.id || `camera-${index + 1}`).trim() || `camera-${index + 1}`,
@@ -833,6 +881,7 @@ function normalizeStreams(inputStreams, fallback) {
       rtspUrl: String(stream.rtspUrl || "").trim(),
       enabled: stream.enabled !== false,
       roi: { polygon },
+      zones,
       frontVehicleClassIds: classIds.length ? classIds : [0],
       captureCooldownSec: Math.max(1, Number(stream.captureCooldownSec || fallbackStream.captureCooldownSec || 30))
     };

@@ -199,6 +199,7 @@ class LprRuntime:
                     "name": "Image test",
                     "rtspUrl": config["inputUri"],
                     "roi": {"polygon": []},
+                    "zones": [],
                     "frontVehicleClassIds": vehicle_ids,
                     "captureCooldownSec": 0,
                 }]
@@ -207,6 +208,7 @@ class LprRuntime:
                 "name": base.get("name", "Test input"),
                 "rtspUrl": config["inputUri"],
                 "roi": base.get("roi") or config.get("roi", {}),
+                "zones": base.get("zones") or config.get("zones", []),
                 "frontVehicleClassIds": base.get("frontVehicleClassIds", config.get("frontVehicleClassIds", [0])),
                 "captureCooldownSec": base.get("captureCooldownSec", config.get("captureCooldownSec", 30)),
             }]
@@ -218,6 +220,7 @@ class LprRuntime:
             "name": "Camera 1",
             "rtspUrl": config.get("rtspUrl", ""),
             "roi": config.get("roi", {}),
+            "zones": config.get("zones", []),
             "frontVehicleClassIds": config.get("frontVehicleClassIds", [0]),
             "captureCooldownSec": config.get("captureCooldownSec", 30),
         }]
@@ -240,6 +243,72 @@ class LprRuntime:
                 inside = not inside
             j = i
         return inside
+
+    def class_id_set(self, value):
+        if isinstance(value, list):
+            return {int(item) for item in value if str(item).strip() != ""}
+        if isinstance(value, str) and value.strip():
+            return {int(item) for item in re.split(r"[;,\\s]+", value) if item.strip().lstrip("-").isdigit()}
+        return set()
+
+    def stream_zones(self, stream_config):
+        zones = stream_config.get("zones") or []
+        normalized = []
+        for index, zone in enumerate(zones):
+            if zone.get("enabled", True) is False:
+                continue
+            mode = zone.get("mode") or "capture_when_inside"
+            if mode not in {"capture_when_inside", "alert_when_inside", "lpr_only_inside", "detect_only_inside", "ignore_inside"}:
+                mode = "capture_when_inside"
+            normalized.append({
+                "id": str(zone.get("id") or f"zone-{index + 1}"),
+                "name": zone.get("name") or f"Zone {index + 1}",
+                "mode": mode,
+                "polygon": zone.get("polygon") or zone.get("points") or [],
+                "classIds": self.class_id_set(zone.get("classIds")),
+                "cooldownSec": zone.get("cooldownSec", ""),
+            })
+        if normalized:
+            return normalized
+        polygon = stream_config.get("roi", {}).get("polygon", [])
+        if polygon:
+            return [{
+                "id": "zone-1",
+                "name": "Zone 1",
+                "mode": "capture_when_inside",
+                "polygon": polygon,
+                "classIds": self.class_id_set(stream_config.get("frontVehicleClassIds", [])),
+                "cooldownSec": stream_config.get("captureCooldownSec", 30),
+            }]
+        return [{
+            "id": "full-frame",
+            "name": "Full frame",
+            "mode": "capture_when_inside",
+            "polygon": [],
+            "classIds": set(),
+            "cooldownSec": stream_config.get("captureCooldownSec", 30),
+        }]
+
+    def zone_matches(self, zone, class_id, x, y):
+        class_ids = zone.get("classIds") or set()
+        if class_ids and int(class_id) not in class_ids:
+            return False
+        return self.point_in_polygon(zone.get("polygon") or [], x, y)
+
+    def matching_zones(self, stream_config, class_id, x, y, processor_type):
+        zones = self.stream_zones(stream_config)
+        ignored = [
+            zone for zone in zones
+            if zone.get("mode") == "ignore_inside" and self.zone_matches(zone, class_id, x, y)
+        ]
+        if ignored:
+            return []
+        allowed_modes = {"capture_when_inside", "alert_when_inside"}
+        allowed_modes.add("lpr_only_inside" if processor_type == "lpr" else "detect_only_inside")
+        return [
+            zone for zone in zones
+            if zone.get("mode") in allowed_modes and self.zone_matches(zone, class_id, x, y)
+        ]
 
     def should_capture(self, source_id, object_id, cooldown_sec, capture_kind="object"):
         now = time.time()
@@ -416,8 +485,6 @@ class LprRuntime:
             source_id = int(frame_meta.source_id)
             stream_config = self.stream_config(source_id)
             front_class_ids = self.pgie_vehicle_class_ids or set(stream_config.get("frontVehicleClassIds", [0]))
-            roi = stream_config.get("roi", {}).get("polygon", [])
-            cooldown_sec = float(stream_config.get("captureCooldownSec", 30))
             obj_list = frame_meta.obj_meta_list
             objects = []
             vehicle_metas = {}
@@ -439,47 +506,57 @@ class LprRuntime:
                 roi_point = vehicle.get("footCenter") or vehicle["center"]
                 roi_x = float(roi_point["x"])
                 roi_y = float(roi_point["y"])
-                if not self.point_in_polygon(roi, roi_x, roi_y):
-                    continue
-                if not self.should_capture(source_id, object_id, cooldown_sec):
+                zones = self.matching_zones(stream_config, vehicle["classId"], roi_x, roi_y, "lpr")
+                if not zones:
                     continue
 
-                event_id = f"{int(time.time())}_{source_id}_{frame_meta.frame_num}_{object_id}"
-                image_path = self.save_frame(gst_buffer, frame_meta, obj_meta, event_id, stream_config)
-                image_relative_path = str(Path(image_path).relative_to(self.runtime_dir)).replace("\\", "/") if image_path else None
-                plate_summaries = self.compact_plate_results(result.get("plates", []))
-                failure = self.lpr_failure(result)
-                event = {
-                    "eventType": "vehicle_capture",
-                    "processorType": self.processor_type,
-                    "eventId": event_id,
-                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "sourceId": source_id,
-                    "cameraId": stream_config.get("id", f"camera-{source_id + 1}"),
-                    "cameraName": stream_config.get("name", f"Camera {source_id + 1}"),
-                    "stream": stream_config.get("rtspUrl"),
-                    "objectId": object_id,
-                    "frameNum": int(frame_meta.frame_num),
-                    "frameWidth": int(frame_meta.source_frame_width),
-                    "frameHeight": int(frame_meta.source_frame_height),
-                    "classId": int(vehicle["classId"]),
-                    "bbox": vehicle["bbox"],
-                    "center": vehicle["center"],
-                    "footCenter": vehicle.get("footCenter"),
-                    "roiPoint": roi_point,
-                    "plateText": result.get("plateText") or "UNKNOWN",
-                    "plateStatus": result.get("plateStatus"),
-                    "plates": plate_summaries,
-                    "failedStage": failure.get("stage"),
-                    "failedModel": failure.get("model"),
-                    "failureReason": failure.get("reason"),
-                    "imagePath": image_path,
-                    "imageRelativePath": image_relative_path,
-                    "imageUrl": f"/runtime/{image_relative_path}" if image_relative_path else None,
-                    "imageSaveError": None if image_path else self.last_capture_error,
-                }
-                print(json.dumps(event, ensure_ascii=False))
-                self.save_event(event)
+                for zone in zones:
+                    cooldown_sec = float(zone.get("cooldownSec") or stream_config.get("captureCooldownSec", 30))
+                    capture_key = f"{zone.get('id')}:{object_id}"
+                    if not self.should_capture(source_id, capture_key, cooldown_sec):
+                        continue
+
+                    event_id = f"{int(time.time())}_{source_id}_{frame_meta.frame_num}_{object_id}_{zone.get('id')}"
+                    event_id = re.sub(r"[^a-zA-Z0-9_.-]+", "-", event_id)
+                    image_path = self.save_frame(gst_buffer, frame_meta, obj_meta, event_id, stream_config)
+                    image_relative_path = str(Path(image_path).relative_to(self.runtime_dir)).replace("\\", "/") if image_path else None
+                    plate_summaries = self.compact_plate_results(result.get("plates", []))
+                    failure = self.lpr_failure(result)
+                    event = {
+                        "eventType": "vehicle_capture",
+                        "processorType": self.processor_type,
+                        "eventId": event_id,
+                        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "sourceId": source_id,
+                        "cameraId": stream_config.get("id", f"camera-{source_id + 1}"),
+                        "cameraName": stream_config.get("name", f"Camera {source_id + 1}"),
+                        "stream": stream_config.get("rtspUrl"),
+                        "zoneId": zone.get("id"),
+                        "zoneName": zone.get("name"),
+                        "zoneMode": zone.get("mode"),
+                        "zonePolygon": zone.get("polygon") or [],
+                        "objectId": object_id,
+                        "frameNum": int(frame_meta.frame_num),
+                        "frameWidth": int(frame_meta.source_frame_width),
+                        "frameHeight": int(frame_meta.source_frame_height),
+                        "classId": int(vehicle["classId"]),
+                        "bbox": vehicle["bbox"],
+                        "center": vehicle["center"],
+                        "footCenter": vehicle.get("footCenter"),
+                        "roiPoint": roi_point,
+                        "plateText": result.get("plateText") or "UNKNOWN",
+                        "plateStatus": result.get("plateStatus"),
+                        "plates": plate_summaries,
+                        "failedStage": failure.get("stage"),
+                        "failedModel": failure.get("model"),
+                        "failureReason": failure.get("reason"),
+                        "imagePath": image_path,
+                        "imageRelativePath": image_relative_path,
+                        "imageUrl": f"/runtime/{image_relative_path}" if image_relative_path else None,
+                        "imageSaveError": None if image_path else self.last_capture_error,
+                    }
+                    print(json.dumps(event, ensure_ascii=False))
+                    self.save_event(event)
             frame_list = frame_list.next
         return Gst.PadProbeReturn.OK
 
@@ -490,8 +567,6 @@ class LprRuntime:
             self.update_fps(frame_meta)
             source_id = int(frame_meta.source_id)
             stream_config = self.stream_config(source_id)
-            roi = stream_config.get("roi", {}).get("polygon", [])
-            cooldown_sec = float(stream_config.get("captureCooldownSec", 30))
             obj_list = frame_meta.obj_meta_list
             while obj_list is not None:
                 obj_meta = pyds.NvDsObjectMeta.cast(obj_list.data)
@@ -502,36 +577,44 @@ class LprRuntime:
                 roi_point = payload.get("footCenter") or payload["center"]
                 roi_x = float(roi_point["x"])
                 roi_y = float(roi_point["y"])
-                capture_key = f"{payload['componentId']}:{payload['objectId']}"
-                if not self.point_in_polygon(roi, roi_x, roi_y):
-                    obj_list = obj_list.next
-                    continue
-                if not self.should_capture(source_id, capture_key, cooldown_sec, "generic_detection"):
+                zones = self.matching_zones(stream_config, payload["classId"], roi_x, roi_y, "generic_detection")
+                if not zones:
                     obj_list = obj_list.next
                     continue
 
-                event_id = f"{int(time.time())}_{source_id}_{frame_meta.frame_num}_{payload['componentId']}_{payload['objectId']}"
-                image_path = self.save_frame(gst_buffer, frame_meta, obj_meta, event_id, stream_config)
-                image_relative_path = str(Path(image_path).relative_to(self.runtime_dir)).replace("\\", "/") if image_path else None
-                event = {
-                    "eventType": "detection_capture",
-                    "processorType": self.processor_type,
-                    "eventId": event_id,
-                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "cameraId": stream_config.get("id", f"camera-{source_id + 1}"),
-                    "cameraName": stream_config.get("name", f"Camera {source_id + 1}"),
-                    "stream": stream_config.get("rtspUrl"),
-                    "frameWidth": int(frame_meta.source_frame_width),
-                    "frameHeight": int(frame_meta.source_frame_height),
-                    "roiPoint": roi_point,
-                    **payload,
-                    "imagePath": image_path,
-                    "imageRelativePath": image_relative_path,
-                    "imageUrl": f"/runtime/{image_relative_path}" if image_relative_path else None,
-                    "imageSaveError": None if image_path else self.last_capture_error,
-                }
-                print(json.dumps(event, ensure_ascii=False))
-                self.save_event(event)
+                for zone in zones:
+                    cooldown_sec = float(zone.get("cooldownSec") or stream_config.get("captureCooldownSec", 30))
+                    capture_key = f"{zone.get('id')}:{payload['componentId']}:{payload['objectId']}"
+                    if not self.should_capture(source_id, capture_key, cooldown_sec, "generic_detection"):
+                        continue
+
+                    event_id = f"{int(time.time())}_{source_id}_{frame_meta.frame_num}_{payload['componentId']}_{payload['objectId']}_{zone.get('id')}"
+                    event_id = re.sub(r"[^a-zA-Z0-9_.-]+", "-", event_id)
+                    image_path = self.save_frame(gst_buffer, frame_meta, obj_meta, event_id, stream_config)
+                    image_relative_path = str(Path(image_path).relative_to(self.runtime_dir)).replace("\\", "/") if image_path else None
+                    event = {
+                        "eventType": "detection_capture",
+                        "processorType": self.processor_type,
+                        "eventId": event_id,
+                        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "cameraId": stream_config.get("id", f"camera-{source_id + 1}"),
+                        "cameraName": stream_config.get("name", f"Camera {source_id + 1}"),
+                        "stream": stream_config.get("rtspUrl"),
+                        "zoneId": zone.get("id"),
+                        "zoneName": zone.get("name"),
+                        "zoneMode": zone.get("mode"),
+                        "zonePolygon": zone.get("polygon") or [],
+                        "frameWidth": int(frame_meta.source_frame_width),
+                        "frameHeight": int(frame_meta.source_frame_height),
+                        "roiPoint": roi_point,
+                        **payload,
+                        "imagePath": image_path,
+                        "imageRelativePath": image_relative_path,
+                        "imageUrl": f"/runtime/{image_relative_path}" if image_relative_path else None,
+                        "imageSaveError": None if image_path else self.last_capture_error,
+                    }
+                    print(json.dumps(event, ensure_ascii=False))
+                    self.save_event(event)
                 obj_list = obj_list.next
             frame_list = frame_list.next
         return Gst.PadProbeReturn.OK

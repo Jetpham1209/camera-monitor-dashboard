@@ -778,6 +778,48 @@ textarea { min-height: 120px; resize: vertical; }
   min-height: 320px;
   font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
 }
+.zone-editor {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: #fbfcff;
+}
+.compact-toolbar {
+  margin-bottom: 0;
+}
+.compact-toolbar h3 {
+  margin: 0;
+}
+.compact-toolbar p {
+  margin: 4px 0 0;
+}
+.zone-list {
+  display: grid;
+  gap: 7px;
+  max-height: 180px;
+  overflow: auto;
+}
+button.zone-chip {
+  display: grid;
+  gap: 3px;
+  justify-content: stretch;
+  border-color: var(--line);
+  background: #fff;
+  color: var(--ink);
+  text-align: left;
+}
+button.zone-chip.active {
+  border-color: var(--blue);
+  background: #eff6ff;
+  color: var(--blue);
+}
+.zone-chip span {
+  color: var(--muted);
+  font-size: 12px;
+}
 .deploy-app-list {
   display: grid;
   gap: 12px;
@@ -851,6 +893,26 @@ textarea { min-height: 120px; resize: vertical; }
   stroke: #22c55e;
   stroke-width: 3;
   vector-effect: non-scaling-stroke;
+}
+.deploy-preview-image polygon.zone-1 {
+  fill: rgba(245, 158, 11, 0.18);
+  stroke: #f59e0b;
+}
+.deploy-preview-image polygon.zone-2 {
+  fill: rgba(56, 189, 248, 0.16);
+  stroke: #38bdf8;
+}
+.deploy-preview-image polygon.zone-3 {
+  fill: rgba(168, 85, 247, 0.16);
+  stroke: #a855f7;
+}
+.deploy-preview-image polygon.zone-4 {
+  fill: rgba(239, 68, 68, 0.14);
+  stroke: #ef4444;
+}
+.deploy-preview-image polygon.zone-5 {
+  fill: rgba(20, 184, 166, 0.16);
+  stroke: #14b8a6;
 }
 .deploy-camera-preview small {
   display: block;
