@@ -32,8 +32,10 @@ services:
       AGENT_TOP_P: ${AGENT_TOP_P:-}
       AGENT_REASONING_EFFORT: ${AGENT_REASONING_EFFORT:-}
       AGENT_BASE_URL: ${AGENT_BASE_URL:-}
+      AGENT_TIME_ZONE: ${AGENT_TIME_ZONE:-Asia/Bangkok}
       AGENT_MEMORY_FILE: ${AGENT_MEMORY_FILE:-runtime/agent-memory.json}
       AGENT_SETTINGS_FILE: ${AGENT_SETTINGS_FILE:-runtime/agent-settings.json}
+      AGENT_SKILLS_DIR: ${AGENT_SKILLS_DIR:-agent-skills}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
       - ${HOST_REPO_ROOT:?Set HOST_REPO_ROOT to the absolute repo path}:${HOST_REPO_ROOT:?Set HOST_REPO_ROOT to the absolute repo path}

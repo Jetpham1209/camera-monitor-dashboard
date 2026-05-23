@@ -69,6 +69,14 @@ Agent settings duoc luu rieng trong:
 deepstream-lpr-app/runtime/agent-settings.json
 ```
 
+Agent skills duoc load tu:
+
+```text
+deepstream-lpr-app/agent-skills/*/SKILL.md
+```
+
+Hien co cac skill mac dinh cho time core, event analytics, camera health va model build debug. Agent se load skill theo trigger cua cau hoi; rieng cac cau hoi co ngay/thoi gian/so luong se duoc ep dung tool `get_current_time`, `resolve_date_expression` va `count_runtime_events` de tranh doan sai tu chat history.
+
 Mac dinh neu chua set API key, tab Agent van hoat dong o che do local summary de khong lam crash Jetson offline. Co the cau hinh truc tiep tren UI, hoac set truoc trong `.env.product`:
 
 ```bash
@@ -79,6 +87,8 @@ AGENT_TEMPERATURE=
 AGENT_MAX_TOKENS=
 AGENT_TOP_P=
 AGENT_REASONING_EFFORT=
+AGENT_TIME_ZONE=Asia/Bangkok
+AGENT_SKILLS_DIR=agent-skills
 OPENAI_API_KEY=...
 ```
 

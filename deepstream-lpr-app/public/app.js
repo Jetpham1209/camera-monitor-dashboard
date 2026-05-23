@@ -140,6 +140,7 @@ const els = {
   agentCustomModel: document.querySelector("#agentCustomModel"),
   agentApiKey: document.querySelector("#agentApiKey"),
   agentBaseUrl: document.querySelector("#agentBaseUrl"),
+  agentTimeZone: document.querySelector("#agentTimeZone"),
   agentTemperature: document.querySelector("#agentTemperature"),
   agentMaxTokens: document.querySelector("#agentMaxTokens"),
   agentTopP: document.querySelector("#agentTopP"),
@@ -497,6 +498,11 @@ function renderAgentStatus(status = {}) {
       <strong>Read only</strong>
       <small>${escapeHtml(`${status.mode || "Operator with tools"} - temp ${status.temperature ?? "-"}`)}</small>
     </article>
+    <article class="agent-status-card">
+      <span>Time core</span>
+      <strong>${escapeHtml(status.timeZone || "Asia/Bangkok")}</strong>
+      <small>${escapeHtml(status.now || "")}</small>
+    </article>
   `;
 }
 
@@ -515,6 +521,7 @@ function renderAgentSettings(settings = {}) {
   els.agentApiKey.value = "";
   els.agentClearApiKey.checked = false;
   els.agentBaseUrl.value = settings.baseUrl || "";
+  if (els.agentTimeZone) els.agentTimeZone.value = settings.timeZone || "Asia/Bangkok";
   els.agentTemperature.value = settings.temperature ?? "";
   els.agentMaxTokens.value = settings.maxTokens ?? "";
   els.agentTopP.value = settings.topP ?? "";
@@ -726,6 +733,7 @@ function readAgentSettingsForm() {
     apiKey: els.agentApiKey.value.trim(),
     clearApiKey: els.agentClearApiKey.checked,
     baseUrl: els.agentBaseUrl.value.trim(),
+    timeZone: els.agentTimeZone?.value.trim() || "Asia/Bangkok",
     temperature: els.agentTemperature.value === "" ? "" : Number(els.agentTemperature.value),
     maxTokens: els.agentMaxTokens.value === "" ? "" : Number(els.agentMaxTokens.value),
     topP: els.agentTopP.value === "" ? "" : Number(els.agentTopP.value),

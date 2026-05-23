@@ -5,6 +5,7 @@ const path = require("path");
 const DEFAULT_THREAD_ID = "default";
 const MAX_MESSAGES = 40;
 const MAX_NOTES = 80;
+const DEFAULT_AGENT_TIME_ZONE = "Asia/Bangkok";
 
 const PROVIDER_SPECS = {
   openai: {
@@ -117,6 +118,52 @@ function modelSpec(provider, model) {
   return found || { id: model, label: model, ...(spec.customModel || { family: "chat", params: [] }), custom: true };
 }
 
+function localDateKey(value = new Date(), timeZone = DEFAULT_AGENT_TIME_ZONE) {
+  const date = value instanceof Date ? value : new Date(value);
+  const parts = new Intl.DateTimeFormat("en", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const lookup = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${lookup.year}-${lookup.month}-${lookup.day}`;
+}
+
+function localDateTime(value = new Date(), timeZone = DEFAULT_AGENT_TIME_ZONE) {
+  const date = value instanceof Date ? value : new Date(value);
+  return new Intl.DateTimeFormat("sv-SE", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  }).format(date);
+}
+
+function shiftDateKey(dateKey, days) {
+  const [year, month, day] = String(dateKey || "").split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + days, 12, 0, 0));
+  return date.toISOString().slice(0, 10);
+}
+
+function normalizeDateExpression(expression = "", timeZone = DEFAULT_AGENT_TIME_ZONE) {
+  const raw = String(expression || "").trim().toLowerCase();
+  const ascii = raw.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const today = localDateKey(new Date(), timeZone);
+  if (!raw || ["today", "hom nay"].includes(ascii)) return today;
+  if (["yesterday", "hom qua"].includes(ascii)) return shiftDateKey(today, -1);
+  if (["tomorrow", "ngay mai"].includes(ascii)) return shiftDateKey(today, 1);
+  const iso = raw.match(/\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/);
+  if (iso) return `${iso[1]}-${String(iso[2]).padStart(2, "0")}-${String(iso[3]).padStart(2, "0")}`;
+  const dmy = raw.match(/\b(\d{1,2})[/-](\d{1,2})[/-](20\d{2})\b/);
+  if (dmy) return `${dmy[3]}-${String(dmy[2]).padStart(2, "0")}-${String(dmy[1]).padStart(2, "0")}`;
+  return raw;
+}
+
 function createAgentFeature(options) {
   const {
     app,
@@ -141,6 +188,11 @@ function createAgentFeature(options) {
     appRoot,
     process.env.AGENT_SETTINGS_FILE || path.join(runtimeDir, "agent-settings.json")
   );
+  const skillsDir = path.resolve(
+    appRoot,
+    process.env.AGENT_SKILLS_DIR || path.join(appRoot, "agent-skills")
+  );
+  const agentTimeZone = process.env.AGENT_TIME_ZONE || process.env.TZ || DEFAULT_AGENT_TIME_ZONE;
 
   fs.mkdirSync(path.dirname(memoryFile), { recursive: true });
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
@@ -157,6 +209,7 @@ function createAgentFeature(options) {
       topP: optionalNumber(process.env.AGENT_TOP_P, 0, 1),
       reasoningEffort: process.env.AGENT_REASONING_EFFORT || "",
       baseUrl: process.env.AGENT_BASE_URL || spec.baseUrl || "",
+      timeZone: process.env.AGENT_TIME_ZONE || process.env.TZ || DEFAULT_AGENT_TIME_ZONE,
       apiKey: process.env[spec.apiKeyEnv] || "",
       updatedAt: null
     };
@@ -183,6 +236,7 @@ function createAgentFeature(options) {
       topP: optionalNumber(stored.topP ?? defaults.topP, 0, 1),
       reasoningEffort: String(stored.reasoningEffort ?? defaults.reasoningEffort ?? "").trim(),
       baseUrl: String(stored.baseUrl || defaults.baseUrl || spec.baseUrl || "").trim(),
+      timeZone: String(stored.timeZone || defaults.timeZone || DEFAULT_AGENT_TIME_ZONE).trim(),
       hasApiKey: Boolean(apiKey),
       apiKeySource: apiKeyFromEnv ? "env" : (stored.apiKey ? "settings" : ""),
       updatedAt: stored.updatedAt || null
@@ -215,6 +269,7 @@ function createAgentFeature(options) {
       topP: optionalNumber(input.topP, 0, 1),
       reasoningEffort: String(input.reasoningEffort || "").trim(),
       baseUrl: String(input.baseUrl || current.baseUrl || spec.baseUrl || "").trim(),
+      timeZone: String(input.timeZone || current.timeZone || agentTimeZone).trim(),
       apiKey: current.apiKey || "",
       updatedAt: new Date().toISOString()
     };
@@ -245,6 +300,7 @@ function createAgentFeature(options) {
       topP: optionalNumber(input.topP, 0, 1),
       reasoningEffort: String(input.reasoningEffort || "").trim(),
       baseUrl: String(input.baseUrl || current.baseUrl || spec.baseUrl || "").trim(),
+      timeZone: String(input.timeZone || current.timeZone || agentTimeZone).trim(),
       apiKey,
       hasApiKey: Boolean(apiKey)
     };
@@ -349,9 +405,127 @@ function createAgentFeature(options) {
     };
   }
 
+  function eventDate(event, timeZone = agentTimeZone) {
+    const ts = event.ts || event.timestamp || event.createdAt || event.time || "";
+    if (!ts) return "";
+    return localDateKey(ts, timeZone);
+  }
+
+  function eventLabel(event) {
+    return String(event.label || event.classLabel || event.objectLabel || event.objectClass || event.className || event.plateText || event.classId || "unknown");
+  }
+
+  function matchesText(value, expected) {
+    if (!expected) return true;
+    return String(value || "").toLowerCase() === String(expected || "").toLowerCase();
+  }
+
+  async function countRuntimeEvents({ date = "", startDate = "", endDate = "", camera = "", label = "", eventType = "", timeZone = agentTimeZone, limit = 10000 } = {}) {
+    const resolvedDate = date ? normalizeDateExpression(date, timeZone) : "";
+    const resolvedStart = startDate ? normalizeDateExpression(startDate, timeZone) : resolvedDate;
+    const resolvedEnd = endDate ? normalizeDateExpression(endDate, timeZone) : resolvedDate;
+    const events = await readRuntimeEvents(Math.min(Number(limit) || 10000, 50000));
+    const filtered = [];
+    const byDate = {};
+    const byCamera = {};
+    const byLabel = {};
+    const byEventType = {};
+    for (const event of events) {
+      const dateKey = eventDate(event, timeZone);
+      const cameraValue = String(event.cameraName || event.cameraId || event.sourceId || "unknown");
+      const labelValue = eventLabel(event);
+      const eventTypeValue = String(event.eventType || event.type || "unknown");
+      if (resolvedStart && dateKey < resolvedStart) continue;
+      if (resolvedEnd && dateKey > resolvedEnd) continue;
+      if (!matchesText(cameraValue, camera)) continue;
+      if (!matchesText(labelValue, label)) continue;
+      if (!matchesText(eventTypeValue, eventType)) continue;
+      filtered.push(event);
+      byDate[dateKey] = (byDate[dateKey] || 0) + 1;
+      byCamera[cameraValue] = (byCamera[cameraValue] || 0) + 1;
+      byLabel[labelValue] = (byLabel[labelValue] || 0) + 1;
+      byEventType[eventTypeValue] = (byEventType[eventTypeValue] || 0) + 1;
+    }
+    return {
+      count: filtered.length,
+      filters: {
+        date: resolvedDate || null,
+        startDate: resolvedStart || null,
+        endDate: resolvedEnd || null,
+        camera: camera || null,
+        label: label || null,
+        eventType: eventType || null,
+        timeZone
+      },
+      totals: { byDate, byCamera, byLabel, byEventType },
+      samples: filtered.slice(-5).map((event) => ({
+        eventType: event.eventType || event.type || "",
+        ts: event.ts || event.timestamp || event.createdAt || "",
+        localDate: eventDate(event, timeZone),
+        cameraId: event.cameraId,
+        cameraName: event.cameraName,
+        label: eventLabel(event),
+        confidence: event.confidence,
+        imageUrl: event.imageUrl || null
+      }))
+    };
+  }
+
+  async function loadAgentSkills() {
+    let entries = [];
+    try {
+      entries = await fsp.readdir(skillsDir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    const skills = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const file = path.join(skillsDir, entry.name, "SKILL.md");
+      try {
+        const content = await fsp.readFile(file, "utf8");
+        const firstHeading = content.match(/^#\s+(.+)$/m)?.[1] || entry.name;
+        const description = content.match(/^description:\s*(.+)$/mi)?.[1] || "";
+        const triggers = (content.match(/^triggers:\s*(.+)$/mi)?.[1] || "")
+          .split(",")
+          .map((item) => item.trim().toLowerCase())
+          .filter(Boolean);
+        skills.push({
+          id: entry.name,
+          name: firstHeading,
+          description,
+          triggers,
+          content: content.slice(0, 6000)
+        });
+      } catch {
+        // Ignore malformed skill folders; the UI can still operate.
+      }
+    }
+    return skills;
+  }
+
+  function selectSkillsForMessage(skills, message) {
+    const raw = String(message || "").toLowerCase();
+    const selected = skills.filter((skill) => {
+      if (!skill.triggers?.length) return false;
+      return skill.triggers.some((trigger) => raw.includes(trigger));
+    });
+    return selected.length ? selected : skills.filter((skill) => ["time-core", "event-analytics", "camera-health"].includes(skill.id));
+  }
+
+  function skillPrompt(skills) {
+    if (!skills.length) return "No skills loaded.";
+    return skills.map((skill) => [
+      `## Skill: ${skill.name} (${skill.id})`,
+      skill.description ? `Description: ${skill.description}` : "",
+      skill.content
+    ].filter(Boolean).join("\n")).join("\n\n");
+  }
+
   async function status() {
     const settings = await readAgentSettings();
     const spec = providerSpec(settings.provider);
+    const skills = await loadAgentSkills();
     return {
       enabled: settings.enabled,
       provider: settings.provider,
@@ -366,21 +540,82 @@ function createAgentFeature(options) {
       topP: settings.topP,
       reasoningEffort: settings.reasoningEffort,
       baseUrl: settings.baseUrl,
+      timeZone: settings.timeZone || agentTimeZone,
+      now: localDateTime(new Date(), settings.timeZone || agentTimeZone),
+      skills: skills.map((skill) => ({ id: skill.id, name: skill.name, description: skill.description })),
       memoryFile: path.relative(appRoot, memoryFile).replace(/\\/g, "/"),
       settingsFile: path.relative(appRoot, settingsFile).replace(/\\/g, "/"),
+      skillsDir: path.relative(appRoot, skillsDir).replace(/\\/g, "/"),
       mode: "read-only operator with persistent memory"
     };
   }
 
-  async function createTools(threadId) {
+  async function createTools(threadId, settings = {}) {
     const { tool } = require("@langchain/core/tools");
     const { z } = require("zod");
+    const defaultToolTimeZone = settings.timeZone || agentTimeZone;
 
     return [
+      tool(async ({ timeZone = defaultToolTimeZone } = {}) => compactJson({
+        timeZone,
+        now: localDateTime(new Date(), timeZone),
+        today: localDateKey(new Date(), timeZone),
+        yesterday: shiftDateKey(localDateKey(new Date(), timeZone), -1),
+        tomorrow: shiftDateKey(localDateKey(new Date(), timeZone), 1)
+      }), {
+        name: "get_current_time",
+        description: "Return the current local time and date keys for the configured agent timezone.",
+        schema: z.object({ timeZone: z.string().optional() })
+      }),
+      tool(async ({ expression = "", timeZone = defaultToolTimeZone }) => compactJson({
+        expression,
+        timeZone,
+        date: normalizeDateExpression(expression, timeZone),
+        now: localDateTime(new Date(), timeZone)
+      }), {
+        name: "resolve_date_expression",
+        description: "Resolve relative date text such as today, yesterday, hom nay, hom qua, ngay mai to yyyy-mm-dd.",
+        schema: z.object({
+          expression: z.string().optional(),
+          timeZone: z.string().optional()
+        })
+      }),
       tool(async () => compactJson(await appSnapshot(), 9000), {
         name: "get_app_snapshot",
         description: "Read the current Jetson Console setup: cameras, deploy apps, DeepStream state, model groups, recent events and captures.",
         schema: z.object({})
+      }),
+      tool(async ({
+        date = "",
+        startDate = "",
+        endDate = "",
+        camera = "",
+        label = "",
+        eventType = "",
+        timeZone = defaultToolTimeZone,
+        limit = 10000
+      }) => compactJson(await countRuntimeEvents({
+        date,
+        startDate,
+        endDate,
+        camera,
+        label,
+        eventType,
+        timeZone,
+        limit
+      }), 12000), {
+        name: "count_runtime_events",
+        description: "Deterministically count DeepStream runtime events from events.jsonl by local date, camera, label and event type. Use this for any count/statistics question.",
+        schema: z.object({
+          date: z.string().optional().describe("A date expression or yyyy-mm-dd, such as today, yesterday, hom nay, hom qua."),
+          startDate: z.string().optional().describe("Optional start date expression or yyyy-mm-dd."),
+          endDate: z.string().optional().describe("Optional end date expression or yyyy-mm-dd."),
+          camera: z.string().optional().describe("Camera name/id/source id filter. Exact match, case-insensitive."),
+          label: z.string().optional().describe("Object label/class filter. Exact match, case-insensitive."),
+          eventType: z.string().optional().describe("Event type filter. Exact match, case-insensitive."),
+          timeZone: z.string().optional(),
+          limit: z.number().optional().describe("Maximum event lines to inspect, capped at 50000.")
+        })
       }),
       tool(async ({ limit = 50 }) => compactJson(await readRuntimeEvents(Math.min(Number(limit) || 50, 200)), 9000), {
         name: "get_recent_events",
@@ -414,6 +649,26 @@ function createAgentFeature(options) {
         description: "Read recent docker logs for the active DeepStream container.",
         schema: z.object({ lines: z.number().optional().describe("Tail line count, capped at 300.") })
       }),
+      tool(async ({ lines = 80 } = {}) => {
+        const [runtimeStatus, container, recentEvents, logs] = await Promise.all([
+          readRuntimeStatus().catch((error) => ({ state: "unknown", error: error.message })),
+          inspectContainer("deepstream-lpr").catch((error) => ({ exists: false, running: false, error: error.message })),
+          readRuntimeEvents(20).catch(() => []),
+          runCommand("docker", ["logs", "--tail", String(Math.min(Number(lines) || 80, 200)), "deepstream-lpr"], { cwd: appRoot })
+            .catch((error) => ({ code: 1, output: error.message }))
+        ]);
+        return compactJson({
+          container,
+          runtimeStatus,
+          recentEventCount: recentEvents.length,
+          recentEvents: recentEvents.slice(-5),
+          logTail: tailOutput(logs.output || "", 9000)
+        }, 12000);
+      }, {
+        name: "get_deepstream_health",
+        description: "Summarize DeepStream container health, runtime status, recent events and log tail.",
+        schema: z.object({ lines: z.number().optional().describe("Docker log tail line count, capped at 200.") })
+      }),
       tool(async ({ note }) => {
         await saveNote(threadId, note, "agent-tool");
         return "Stored this stable preference/note in agent memory.";
@@ -425,8 +680,10 @@ function createAgentFeature(options) {
     ];
   }
 
-  function systemPrompt(thread) {
+  function systemPrompt(thread, selectedSkills = [], settings = {}) {
     const notes = (thread.notes || []).map((item) => `- ${item.note}`).join("\n") || "- No long-term notes yet.";
+    const timeZone = settings.timeZone || agentTimeZone;
+    const today = localDateKey(new Date(), timeZone);
     return [
       "You are the Jetson Console Operator Agent for a DeepStream camera dashboard.",
       "Your job is to help the user manage app tasks, debug camera/model/deploy issues, and explain next actions clearly.",
@@ -434,6 +691,14 @@ function createAgentFeature(options) {
       "When the user asks for an action that changes the system, propose a precise checklist and name the dashboard button/API route they should use.",
       "Keep answers concise and operational. Reply in Vietnamese unless the user asks otherwise.",
       "Mask or avoid repeating secrets, tokens and RTSP passwords.",
+      "",
+      `Current local time: ${localDateTime(new Date(), timeZone)} (${timeZone}).`,
+      `Date keys: today=${today}, yesterday=${shiftDateKey(today, -1)}, tomorrow=${shiftDateKey(today, 1)}.`,
+      "For any question about time, dates, today/yesterday/tomorrow, counts, totals, statistics or 'bao nhieu', you MUST call get_current_time/resolve_date_expression and count_runtime_events. Do not infer counts from recent events or chat history.",
+      "When reporting event counts, include the filters and timezone used.",
+      "",
+      "Loaded operational skills:",
+      skillPrompt(selectedSkills),
       "",
       "Long-term memory notes:",
       notes
@@ -533,9 +798,11 @@ function createAgentFeature(options) {
       return { answer, toolCalls: [], snapshot, thread: (await getThread(state.threadId)).thread, status: await status() };
     }
 
+    const allSkills = await loadAgentSkills();
+    const selectedSkills = selectSkillsForMessage(allSkills, message);
     const { createReactAgent } = require("@langchain/langgraph/prebuilt");
     const model = await createChatModel(settings);
-    const tools = await createTools(state.threadId);
+    const tools = await createTools(state.threadId, settings);
     const agent = createReactAgent({ llm: model, tools });
     const history = lastItems(updatedState.thread.messages || [], 20).map((item) => ({
       role: item.role,
@@ -543,7 +810,7 @@ function createAgentFeature(options) {
     }));
     const result = await agent.invoke({
       messages: [
-        { role: "system", content: systemPrompt(updatedState.thread) },
+        { role: "system", content: systemPrompt(updatedState.thread, selectedSkills, settings) },
         ...history
       ]
     });
@@ -561,12 +828,31 @@ function createAgentFeature(options) {
         content: typeof item.content === "string" ? item.content.slice(0, 1200) : ""
       }));
     await saveMessage(state.threadId, { role: "assistant", content: answer });
-    return { answer, toolCalls, thread: (await getThread(state.threadId)).thread, status: await status() };
+    return {
+      answer,
+      toolCalls,
+      selectedSkills: selectedSkills.map((skill) => ({ id: skill.id, name: skill.name, description: skill.description })),
+      thread: (await getThread(state.threadId)).thread,
+      status: await status()
+    };
   }
 
   function mount() {
     app.get("/api/agent/status", async (_req, res) => {
       res.json(await status());
+    });
+
+    app.get("/api/agent/skills", async (_req, res) => {
+      const skills = await loadAgentSkills();
+      res.json({
+        timeZone: (await readAgentSettings()).timeZone || agentTimeZone,
+        skills: skills.map((skill) => ({
+          id: skill.id,
+          name: skill.name,
+          description: skill.description,
+          triggers: skill.triggers
+        }))
+      });
     });
 
     app.get("/api/agent/settings", async (_req, res) => {
