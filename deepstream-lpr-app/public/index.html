@@ -377,7 +377,7 @@
           </div>
           <div class="actions inline-actions">
             <button id="refreshAgentBtn" type="button" class="secondary">Refresh</button>
-            <button id="clearAgentMemoryBtn" type="button" class="danger">Clear memory</button>
+            <button id="clearAgentMemoryBtn" type="button" class="danger">Clear chat</button>
           </div>
         </div>
         <div id="agentStatus" class="agent-status"></div>
@@ -428,13 +428,10 @@
               <input id="agentEnabled" type="checkbox" />
               Enabled
             </label>
-            <label class="checkbox-row">
-              <input id="agentClearApiKey" type="checkbox" />
-              Clear stored API key
-            </label>
             <div class="agent-settings-actions">
               <button id="saveAgentSettingsBtn" type="submit">Save settings</button>
               <button id="testAgentKeyBtn" type="button" class="secondary">Test key</button>
+              <button id="agentClearApiKey" type="button" class="danger">Clear stored API key</button>
               <span id="agentSettingsHint" class="agent-settings-hint"></span>
             </div>
           </form>
@@ -450,9 +447,14 @@
           <aside class="agent-side-panel">
             <article>
               <div class="panel-toolbar compact">
-                <h3>Memory</h3>
-                <button id="saveAgentNoteBtn" type="button" class="secondary">Save note</button>
+                <h3>Memory inspector</h3>
+                <div class="actions inline-actions">
+                  <button id="saveAgentNoteBtn" type="button" class="secondary">Save note</button>
+                  <button id="clearAgentNotesBtn" type="button" class="danger">Clear notes</button>
+                  <button id="clearAgentLearnedMemoryBtn" type="button" class="danger">Clear learned</button>
+                </div>
               </div>
+              <p class="muted">Notes la ghi chu ban luu thu cong. Pending memories la nhung dieu agent de xuat, chi duoc dung sau khi ban approve.</p>
               <textarea id="agentNoteInput" rows="3" placeholder="Luu preference/ghi chu van hanh on dinh cho agent..."></textarea>
               <div id="agentMemoryList" class="agent-memory-list"></div>
             </article>

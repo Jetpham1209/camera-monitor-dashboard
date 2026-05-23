@@ -124,7 +124,7 @@ button.sidebar-link.active {
 }
 .agent-status {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }
@@ -294,6 +294,31 @@ button.sidebar-link.active {
   border-radius: 8px;
   padding: 9px;
   background: #f8fafc;
+}
+.agent-memory-policy {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  padding: 9px;
+  background: #eff6ff;
+}
+.agent-memory-policy span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.agent-memory-list h4 {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--ink);
+}
+.agent-memory-note.warning {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+.agent-memory-note.success {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
 }
 .agent-memory-note span,
 .agent-memory-note small,

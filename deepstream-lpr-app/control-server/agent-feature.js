@@ -83,6 +83,8 @@ function createFallbackMemory() {
       [DEFAULT_THREAD_ID]: {
         messages: [],
         notes: [],
+        memories: [],
+        pendingMemories: [],
         updatedAt: new Date().toISOString()
       }
     }
@@ -325,6 +327,10 @@ function createAgentFeature(options) {
     const memory = await readMemory();
     memory.threads = memory.threads || {};
     memory.threads[id] = memory.threads[id] || { messages: [], notes: [], updatedAt: new Date().toISOString() };
+    memory.threads[id].messages = memory.threads[id].messages || [];
+    memory.threads[id].notes = memory.threads[id].notes || [];
+    memory.threads[id].memories = memory.threads[id].memories || [];
+    memory.threads[id].pendingMemories = memory.threads[id].pendingMemories || [];
     return { memory, threadId: id, thread: memory.threads[id] };
   }
 
@@ -349,11 +355,82 @@ function createAgentFeature(options) {
     return state.thread;
   }
 
-  async function clearThread(threadId) {
+  async function proposeMemory(threadId, input = {}) {
+    const state = await getThread(threadId);
+    const text = maskSecrets(String(input.text || input.note || "").trim()).slice(0, 1000);
+    if (!text) return state.thread;
+    const category = String(input.category || "operational_fact").trim().slice(0, 80);
+    const reason = maskSecrets(String(input.reason || "").trim()).slice(0, 500);
+    const existing = [...(state.thread.memories || []), ...(state.thread.pendingMemories || [])]
+      .some((item) => String(item.text || "").toLowerCase() === text.toLowerCase());
+    if (existing) return state.thread;
+    state.thread.pendingMemories = lastItems([
+      ...(state.thread.pendingMemories || []),
+      {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        category,
+        text,
+        reason,
+        source: "agent-suggested",
+        status: "pending",
+        createdAt: new Date().toISOString()
+      }
+    ], MAX_NOTES);
+    state.thread.updatedAt = new Date().toISOString();
+    await writeMemory(state.memory);
+    return state.thread;
+  }
+
+  async function decideMemory(threadId, id, decision = "approve") {
+    const state = await getThread(threadId);
+    const pending = state.thread.pendingMemories || [];
+    const index = pending.findIndex((item) => item.id === id);
+    if (index < 0) return state.thread;
+    const [item] = pending.splice(index, 1);
+    if (decision === "approve") {
+      state.thread.memories = lastItems([
+        ...(state.thread.memories || []),
+        {
+          ...item,
+          status: "approved",
+          approvedAt: new Date().toISOString()
+        }
+      ], MAX_NOTES);
+    }
+    state.thread.pendingMemories = pending;
+    state.thread.updatedAt = new Date().toISOString();
+    await writeMemory(state.memory);
+    return state.thread;
+  }
+
+  async function deleteMemoryItem(threadId, id, kind = "memory") {
+    const state = await getThread(threadId);
+    if (kind === "note") {
+      state.thread.notes = (state.thread.notes || []).filter((item) => item.id !== id);
+    } else if (kind === "pending") {
+      state.thread.pendingMemories = (state.thread.pendingMemories || []).filter((item) => item.id !== id);
+    } else {
+      state.thread.memories = (state.thread.memories || []).filter((item) => item.id !== id);
+    }
+    state.thread.updatedAt = new Date().toISOString();
+    await writeMemory(state.memory);
+    return state.thread;
+  }
+
+  async function clearThread(threadId, scope = "messages") {
     const id = safeThreadId(threadId);
     const memory = await readMemory();
     memory.threads = memory.threads || {};
-    memory.threads[id] = { messages: [], notes: [], updatedAt: new Date().toISOString() };
+    const current = memory.threads[id] || { messages: [], notes: [], memories: [], pendingMemories: [] };
+    if (scope === "all") {
+      memory.threads[id] = { messages: [], notes: [], memories: [], pendingMemories: [], updatedAt: new Date().toISOString() };
+    } else if (scope === "notes") {
+      memory.threads[id] = { ...current, notes: [], updatedAt: new Date().toISOString() };
+    } else if (scope === "memories") {
+      memory.threads[id] = { ...current, memories: [], pendingMemories: [], updatedAt: new Date().toISOString() };
+    } else {
+      memory.threads[id] = { ...current, messages: [], updatedAt: new Date().toISOString() };
+    }
     await writeMemory(memory);
     return memory.threads[id];
   }
@@ -670,11 +747,15 @@ function createAgentFeature(options) {
         schema: z.object({ lines: z.number().optional().describe("Docker log tail line count, capped at 200.") })
       }),
       tool(async ({ note }) => {
-        await saveNote(threadId, note, "agent-tool");
-        return "Stored this stable preference/note in agent memory.";
+        await proposeMemory(threadId, {
+          text: note,
+          category: "operational_fact",
+          reason: "The agent considered this useful as long-term operational memory."
+        });
+        return "Proposed this as long-term memory. It will only be used after the user approves it in the Memory inspector.";
       }, {
         name: "remember_note",
-        description: "Persist stable user preferences or operational facts. Do not store passwords, API keys, RTSP credentials or secrets.",
+        description: "Propose stable user preferences or operational facts for long-term memory approval. Do not store passwords, API keys, RTSP credentials or secrets.",
         schema: z.object({ note: z.string().describe("A short stable note to remember.") })
       })
     ];
@@ -682,6 +763,7 @@ function createAgentFeature(options) {
 
   function systemPrompt(thread, selectedSkills = [], settings = {}) {
     const notes = (thread.notes || []).map((item) => `- ${item.note}`).join("\n") || "- No long-term notes yet.";
+    const memories = (thread.memories || []).map((item) => `- [${item.category || "memory"}] ${item.text}`).join("\n") || "- No approved learned memories yet.";
     const timeZone = settings.timeZone || agentTimeZone;
     const today = localDateKey(new Date(), timeZone);
     return [
@@ -701,7 +783,12 @@ function createAgentFeature(options) {
       skillPrompt(selectedSkills),
       "",
       "Long-term memory notes:",
-      notes
+      notes,
+      "",
+      "Approved learned memories:",
+      memories,
+      "",
+      "Memory policy: You may propose new stable operational memories with remember_note, but those memories are pending until the user approves them. Never treat pending memories as truth."
     ].join("\n");
   }
 
@@ -882,18 +969,43 @@ function createAgentFeature(options) {
         threadId: state.threadId,
         messages: state.thread.messages || [],
         notes: state.thread.notes || [],
+        memories: state.thread.memories || [],
+        pendingMemories: state.thread.pendingMemories || [],
+        policy: {
+          mode: "suggest-before-saving",
+          chatHistory: "Used as short-term context for the current thread.",
+          notes: "Manual long-term notes saved directly by the user.",
+          learnedMemories: "Agent-suggested memories require user approval before use."
+        },
         updatedAt: state.thread.updatedAt || null
       });
     });
 
     app.delete("/api/agent/memory", async (req, res) => {
-      const thread = await clearThread(req.query.threadId);
-      res.json({ threadId: safeThreadId(req.query.threadId), ...thread });
+      const scope = ["messages", "notes", "memories", "all"].includes(String(req.query.scope || ""))
+        ? String(req.query.scope)
+        : "messages";
+      const thread = await clearThread(req.query.threadId, scope);
+      res.json({ threadId: safeThreadId(req.query.threadId), scope, ...thread });
     });
 
     app.post("/api/agent/memory/notes", async (req, res) => {
       const state = await saveNote(req.body?.threadId, req.body?.note, "user");
-      res.json({ threadId: safeThreadId(req.body?.threadId), notes: state.notes || [] });
+      res.json({ threadId: safeThreadId(req.body?.threadId), ...state });
+    });
+
+    app.post("/api/agent/memory/decide", async (req, res) => {
+      const decision = req.body?.decision === "reject" ? "reject" : "approve";
+      const state = await decideMemory(req.body?.threadId, String(req.body?.id || ""), decision);
+      res.json({ threadId: safeThreadId(req.body?.threadId), decision, ...state });
+    });
+
+    app.delete("/api/agent/memory/items/:id", async (req, res) => {
+      const kind = ["note", "memory", "pending"].includes(String(req.query.kind || ""))
+        ? String(req.query.kind)
+        : "memory";
+      const state = await deleteMemoryItem(req.query.threadId, req.params.id, kind);
+      res.json({ threadId: safeThreadId(req.query.threadId), kind, ...state });
     });
 
     app.post("/api/agent/chat", async (req, res) => {

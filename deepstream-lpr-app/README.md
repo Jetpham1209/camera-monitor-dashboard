@@ -63,6 +63,14 @@ Memory cua agent duoc luu persistent trong:
 deepstream-lpr-app/runtime/agent-memory.json
 ```
 
+Memory co 2 lop:
+
+- Chat history: ngu canh hoi dap gan day trong tab Agent. Nut **Clear chat** chi xoa lop nay.
+- Long-term notes: ghi chu/preference van hanh do user bam **Save note** de agent ghi nho lau dai, vi du "camera lobby hay dung model X" hoac "khi hoi thong ke thi uu tien label person". Nut **Clear notes** moi xoa lop nay.
+- Learned memories: agent co the de xuat memory moi bang tool `remember_note`, nhung memory nay o trang thai pending cho den khi user bam **Approve** trong Memory inspector. Day la policy mac dinh de tranh agent tu ghi nho sai.
+
+Memory architecture hien tai dung LangGraph/LangChain cho agent runtime va local JSON store cho memory. Ly do: Jetson can offline-first, de backup/debug, khong can them vector database cho giai doan dau. Neu sau nay can semantic recall nhieu hon, co the thay storage layer bang SQLite/vector store ma van giu UI approval/inspector nay.
+
 Agent settings duoc luu rieng trong:
 
 ```text

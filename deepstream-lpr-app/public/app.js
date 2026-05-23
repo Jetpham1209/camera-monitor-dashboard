@@ -130,6 +130,8 @@ const els = {
   agentSendBtn: document.querySelector("#agentSendBtn"),
   refreshAgentBtn: document.querySelector("#refreshAgentBtn"),
   clearAgentMemoryBtn: document.querySelector("#clearAgentMemoryBtn"),
+  clearAgentNotesBtn: document.querySelector("#clearAgentNotesBtn"),
+  clearAgentLearnedMemoryBtn: document.querySelector("#clearAgentLearnedMemoryBtn"),
   agentNoteInput: document.querySelector("#agentNoteInput"),
   saveAgentNoteBtn: document.querySelector("#saveAgentNoteBtn"),
   agentMemoryList: document.querySelector("#agentMemoryList"),
@@ -519,7 +521,6 @@ function renderAgentSettings(settings = {}) {
   els.agentEnabled.checked = settings.enabled !== false;
   els.agentCustomModel.value = "";
   els.agentApiKey.value = "";
-  els.agentClearApiKey.checked = false;
   els.agentBaseUrl.value = settings.baseUrl || "";
   if (els.agentTimeZone) els.agentTimeZone.value = settings.timeZone || "Asia/Bangkok";
   els.agentTemperature.value = settings.temperature ?? "";
@@ -616,17 +617,48 @@ function renderAgentMessages() {
 function renderAgentMemory(memory = {}) {
   if (!els.agentMemoryList) return;
   const notes = memory.notes || [];
-  if (!notes.length) {
-    els.agentMemoryList.innerHTML = '<div class="empty">No long-term memory notes yet.</div>';
-    return;
-  }
-  els.agentMemoryList.innerHTML = notes.slice().reverse().map((item) => `
+  const pending = memory.pendingMemories || [];
+  const learned = memory.memories || [];
+  const policy = memory.policy || {};
+  const noteMarkup = notes.length ? notes.slice().reverse().map((item) => `
     <div class="agent-memory-note">
       <strong>${escapeHtml(item.source || "note")}</strong>
       <span>${escapeHtml(item.note || "")}</span>
       <small>${escapeHtml(item.createdAt || "")}</small>
+      <button type="button" class="secondary" data-memory-action="delete-note" data-memory-id="${escapeHtml(item.id)}">Delete</button>
     </div>
-  `).join("");
+  `).join("") : '<div class="empty">No manual notes yet.</div>';
+  const pendingMarkup = pending.length ? pending.slice().reverse().map((item) => `
+    <div class="agent-memory-note warning">
+      <strong>pending - ${escapeHtml(item.category || "memory")}</strong>
+      <span>${escapeHtml(item.text || "")}</span>
+      ${item.reason ? `<small>${escapeHtml(item.reason)}</small>` : ""}
+      <div class="actions inline-actions">
+        <button type="button" class="secondary" data-memory-action="approve" data-memory-id="${escapeHtml(item.id)}">Approve</button>
+        <button type="button" class="danger" data-memory-action="reject" data-memory-id="${escapeHtml(item.id)}">Reject</button>
+      </div>
+    </div>
+  `).join("") : '<div class="empty">No pending memory suggestions.</div>';
+  const learnedMarkup = learned.length ? learned.slice().reverse().map((item) => `
+    <div class="agent-memory-note success">
+      <strong>${escapeHtml(item.category || "memory")}</strong>
+      <span>${escapeHtml(item.text || "")}</span>
+      <small>${escapeHtml(item.approvedAt || item.createdAt || "")}</small>
+      <button type="button" class="secondary" data-memory-action="delete-memory" data-memory-id="${escapeHtml(item.id)}">Delete</button>
+    </div>
+  `).join("") : '<div class="empty">No approved learned memories yet.</div>';
+  els.agentMemoryList.innerHTML = `
+    <div class="agent-memory-policy">
+      <strong>${escapeHtml(policy.mode || "suggest-before-saving")}</strong>
+      <span>${escapeHtml(policy.learnedMemories || "Agent suggestions require approval before use.")}</span>
+    </div>
+    <h4>Pending memories</h4>
+    ${pendingMarkup}
+    <h4>Approved memories</h4>
+    ${learnedMarkup}
+    <h4>Manual notes</h4>
+    ${noteMarkup}
+  `;
 }
 
 function renderAgentToolTrace(toolCalls = []) {
@@ -683,14 +715,37 @@ async function sendAgentMessage(event) {
   print(result);
 }
 
-async function clearAgentMemory() {
-  const result = await withTask("agent-memory", els.clearAgentMemoryBtn, "Clearing...", async () => {
-    return await api(`/api/agent/memory?threadId=${encodeURIComponent(agentThreadId)}`, { method: "DELETE" });
+async function clearAgentMemory(scope = "messages") {
+  const button = scope === "notes"
+    ? els.clearAgentNotesBtn
+    : (scope === "memories" ? els.clearAgentLearnedMemoryBtn : els.clearAgentMemoryBtn);
+  const label = scope === "notes"
+    ? "Clearing notes..."
+    : (scope === "memories" ? "Clearing learned memories..." : "Clearing chat...");
+  const result = await withTask("agent-memory", button, label, async () => {
+    return await api(`/api/agent/memory?threadId=${encodeURIComponent(agentThreadId)}&scope=${encodeURIComponent(scope)}`, { method: "DELETE" });
   });
   agentMessages = result.messages || [];
   renderAgentMessages();
   renderAgentMemory(result);
-  renderAgentToolTrace([]);
+  if (scope === "messages") renderAgentToolTrace([]);
+  print(result);
+}
+
+async function decideAgentMemory(id, decision) {
+  const result = await api("/api/agent/memory/decide", {
+    method: "POST",
+    body: JSON.stringify({ threadId: agentThreadId, id, decision })
+  });
+  renderAgentMemory(result);
+  print(result);
+}
+
+async function deleteAgentMemoryItem(id, kind) {
+  const result = await api(`/api/agent/memory/items/${encodeURIComponent(id)}?threadId=${encodeURIComponent(agentThreadId)}&kind=${encodeURIComponent(kind)}`, {
+    method: "DELETE"
+  });
+  renderAgentMemory(result);
   print(result);
 }
 
@@ -731,7 +786,7 @@ function readAgentSettingsForm() {
     provider: els.agentProvider.value,
     model,
     apiKey: els.agentApiKey.value.trim(),
-    clearApiKey: els.agentClearApiKey.checked,
+    clearApiKey: false,
     baseUrl: els.agentBaseUrl.value.trim(),
     timeZone: els.agentTimeZone?.value.trim() || "Asia/Bangkok",
     temperature: els.agentTemperature.value === "" ? "" : Number(els.agentTemperature.value),
@@ -739,6 +794,19 @@ function readAgentSettingsForm() {
     topP: els.agentTopP.value === "" ? "" : Number(els.agentTopP.value),
     reasoningEffort: els.agentReasoningEffort.value
   };
+}
+
+async function clearStoredAgentApiKey() {
+  const payload = { ...readAgentSettingsForm(), apiKey: "", clearApiKey: true };
+  const result = await withTask("agent-settings", els.agentClearApiKey, "Clearing key...", async () => {
+    return await api("/api/agent/settings", {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    });
+  });
+  renderAgentSettings(result);
+  renderAgentStatus(await api("/api/agent/status"));
+  print(result);
 }
 
 async function testAgentKey() {
@@ -2988,10 +3056,36 @@ els.runTestVideoBtn.addEventListener("click", () => runTestMedia("video", els.ru
 els.copyOutputBtn.addEventListener("click", () => copyOutput().catch((error) => print(error.message)));
 els.toggleOutputBtn.addEventListener("click", toggleOutput);
 els.agentForm?.addEventListener("submit", (event) => sendAgentMessage(event).catch((error) => print(error.message)));
+els.agentInput?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    els.agentForm?.requestSubmit();
+  }
+});
 els.refreshAgentBtn?.addEventListener("click", () => refreshAgent().catch((error) => print(error.message)));
 els.clearAgentMemoryBtn?.addEventListener("click", () => clearAgentMemory().catch((error) => print(error.message)));
+els.clearAgentNotesBtn?.addEventListener("click", () => clearAgentMemory("notes").catch((error) => print(error.message)));
+els.clearAgentLearnedMemoryBtn?.addEventListener("click", () => clearAgentMemory("memories").catch((error) => print(error.message)));
 els.saveAgentNoteBtn?.addEventListener("click", () => saveAgentNote().catch((error) => print(error.message)));
+els.agentMemoryList?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-memory-action]");
+  if (!button) return;
+  const id = button.dataset.memoryId;
+  const action = button.dataset.memoryAction;
+  if (!id) return;
+  if (action === "approve" || action === "reject") {
+    decideAgentMemory(id, action).catch((error) => print(error.message));
+  } else if (action === "delete-note") {
+    deleteAgentMemoryItem(id, "note").catch((error) => print(error.message));
+  } else if (action === "delete-memory") {
+    deleteAgentMemoryItem(id, "memory").catch((error) => print(error.message));
+  }
+});
 els.agentSettingsForm?.addEventListener("submit", (event) => saveAgentSettings(event).catch((error) => print(error.message)));
+els.agentClearApiKey?.addEventListener("click", () => clearStoredAgentApiKey().catch((error) => {
+  els.agentSettingsHint.textContent = error.message;
+  print(error.message);
+}));
 els.testAgentKeyBtn?.addEventListener("click", () => testAgentKey().catch((error) => {
   els.agentSettingsHint.textContent = error.message;
   print(error.message);
