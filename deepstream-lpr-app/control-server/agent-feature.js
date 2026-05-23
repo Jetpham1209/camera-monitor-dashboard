@@ -187,6 +187,28 @@ function createAgentFeature(options) {
     return publicAgentSettings();
   }
 
+  async function settingsFromInput(input = {}) {
+    const current = await readAgentSettings({ includeSecret: true });
+    const provider = normalizeProvider(input.provider || current.provider);
+    const spec = providerSpec(provider);
+    let apiKey = current.apiKey || "";
+    if (Object.prototype.hasOwnProperty.call(input, "apiKey") && String(input.apiKey || "").trim()) {
+      apiKey = String(input.apiKey).trim();
+    }
+    if (input.clearApiKey) apiKey = "";
+    return {
+      enabled: input.enabled === undefined ? current.enabled : Boolean(input.enabled),
+      provider,
+      model: String(input.model || current.model || spec.defaultModel).trim(),
+      temperature: clampNumber(input.temperature, current.temperature, 0, 2),
+      maxTokens: clampNumber(input.maxTokens, current.maxTokens, 128, 8000),
+      topP: clampNumber(input.topP, current.topP, 0, 1),
+      baseUrl: String(input.baseUrl || current.baseUrl || spec.baseUrl || "").trim(),
+      apiKey,
+      hasApiKey: Boolean(apiKey)
+    };
+  }
+
   async function readMemory() {
     try {
       const raw = JSON.parse(await fsp.readFile(memoryFile, "utf8"));
@@ -395,8 +417,48 @@ function createAgentFeature(options) {
       temperature: settings.temperature,
       maxTokens: settings.maxTokens,
       topP: settings.topP,
-      apiKey: settings.apiKey
+      apiKey: settings.apiKey,
+      timeout: 20000
     });
+  }
+
+  async function testAgentSettings(input = {}) {
+    const startedAt = Date.now();
+    const settings = await settingsFromInput(input);
+    const spec = providerSpec(settings.provider);
+    if (spec.needsApiKey && !settings.apiKey) {
+      return {
+        ok: false,
+        provider: settings.provider,
+        model: settings.model,
+        durationMs: Date.now() - startedAt,
+        message: "No API key available for this provider."
+      };
+    }
+    try {
+      const model = await createChatModel(settings);
+      const response = await Promise.race([
+        model.invoke("Reply with exactly: OK"),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Provider test timed out after 20s.")), 20000))
+      ]);
+      const content = typeof response?.content === "string" ? response.content : JSON.stringify(response?.content || "");
+      return {
+        ok: true,
+        provider: settings.provider,
+        model: settings.model,
+        durationMs: Date.now() - startedAt,
+        message: "Provider test succeeded.",
+        sample: maskSecrets(content).slice(0, 200)
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        provider: settings.provider,
+        model: settings.model,
+        durationMs: Date.now() - startedAt,
+        message: maskSecrets(error.message || "Provider test failed.")
+      };
+    }
   }
 
   async function invokeAgent({ threadId, message }) {
@@ -468,6 +530,15 @@ function createAgentFeature(options) {
         res.json(await saveAgentSettings(req.body || {}));
       } catch (error) {
         res.status(400).json({ error: error.message || "Could not save agent settings." });
+      }
+    });
+
+    app.post("/api/agent/settings/test", async (req, res) => {
+      try {
+        const result = await testAgentSettings(req.body || {});
+        res.status(result.ok ? 200 : 400).json(result);
+      } catch (error) {
+        res.status(500).json({ ok: false, message: maskSecrets(error.message || "Agent settings test failed.") });
       }
     });
 

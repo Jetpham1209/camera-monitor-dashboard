@@ -187,6 +187,9 @@ button.sidebar-link.active {
   gap: 12px;
   flex-wrap: wrap;
 }
+.agent-secret-input {
+  -webkit-text-security: disc;
+}
 .agent-settings-hint {
   color: var(--muted);
   font-size: 12px;

@@ -146,6 +146,7 @@ const els = {
   agentEnabled: document.querySelector("#agentEnabled"),
   agentClearApiKey: document.querySelector("#agentClearApiKey"),
   saveAgentSettingsBtn: document.querySelector("#saveAgentSettingsBtn"),
+  testAgentKeyBtn: document.querySelector("#testAgentKeyBtn"),
   agentSettingsHint: document.querySelector("#agentSettingsHint")
 };
 
@@ -654,27 +655,44 @@ async function saveAgentNote() {
 
 async function saveAgentSettings(event) {
   event.preventDefault();
-  const selectedModel = els.agentModel.value;
-  const customModel = els.agentCustomModel.value.trim();
-  const model = selectedModel === "__custom__" ? customModel : selectedModel;
+  const payload = readAgentSettingsForm();
   const result = await withTask("agent-settings", els.saveAgentSettingsBtn, "Saving settings...", async () => {
     return await api("/api/agent/settings", {
       method: "PUT",
-      body: JSON.stringify({
-        enabled: els.agentEnabled.checked,
-        provider: els.agentProvider.value,
-        model,
-        apiKey: els.agentApiKey.value.trim(),
-        clearApiKey: els.agentClearApiKey.checked,
-        baseUrl: els.agentBaseUrl.value.trim(),
-        temperature: Number(els.agentTemperature.value),
-        maxTokens: Number(els.agentMaxTokens.value),
-        topP: Number(els.agentTopP.value)
-      })
+      body: JSON.stringify(payload)
     });
   });
   renderAgentSettings(result);
   renderAgentStatus(await api("/api/agent/status"));
+  print(result);
+}
+
+function readAgentSettingsForm() {
+  const selectedModel = els.agentModel.value;
+  const customModel = els.agentCustomModel.value.trim();
+  const model = selectedModel === "__custom__" ? customModel : selectedModel;
+  return {
+    enabled: els.agentEnabled.checked,
+    provider: els.agentProvider.value,
+    model,
+    apiKey: els.agentApiKey.value.trim(),
+    clearApiKey: els.agentClearApiKey.checked,
+    baseUrl: els.agentBaseUrl.value.trim(),
+    temperature: Number(els.agentTemperature.value),
+    maxTokens: Number(els.agentMaxTokens.value),
+    topP: Number(els.agentTopP.value)
+  };
+}
+
+async function testAgentKey() {
+  const payload = readAgentSettingsForm();
+  const result = await withTask("agent-settings", els.testAgentKeyBtn, "Testing key...", async () => {
+    return await api("/api/agent/settings/test", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  });
+  els.agentSettingsHint.textContent = `${result.message} (${result.durationMs} ms)`;
   print(result);
 }
 
@@ -2917,8 +2935,15 @@ els.refreshAgentBtn?.addEventListener("click", () => refreshAgent().catch((error
 els.clearAgentMemoryBtn?.addEventListener("click", () => clearAgentMemory().catch((error) => print(error.message)));
 els.saveAgentNoteBtn?.addEventListener("click", () => saveAgentNote().catch((error) => print(error.message)));
 els.agentSettingsForm?.addEventListener("submit", (event) => saveAgentSettings(event).catch((error) => print(error.message)));
+els.testAgentKeyBtn?.addEventListener("click", () => testAgentKey().catch((error) => {
+  els.agentSettingsHint.textContent = error.message;
+  print(error.message);
+}));
 els.agentProvider?.addEventListener("change", renderAgentModelOptions);
 els.agentModel?.addEventListener("change", () => {
   if (els.agentModel.value === "__custom__") els.agentCustomModel.focus();
+});
+els.agentApiKey?.addEventListener("input", () => {
+  els.agentApiKey.type = "password";
 });
 init().catch((error) => print(error.message));

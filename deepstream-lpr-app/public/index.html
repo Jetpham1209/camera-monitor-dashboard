@@ -398,7 +398,7 @@
             </label>
             <label>
               API key
-              <input id="agentApiKey" type="password" placeholder="De trong de giu key hien tai" autocomplete="off" />
+              <input id="agentApiKey" class="agent-secret-input" type="password" placeholder="De trong de giu key hien tai" autocomplete="new-password" spellcheck="false" autocapitalize="off" />
             </label>
             <label>
               Base URL
@@ -426,6 +426,7 @@
             </label>
             <div class="agent-settings-actions">
               <button id="saveAgentSettingsBtn" type="submit">Save settings</button>
+              <button id="testAgentKeyBtn" type="button" class="secondary">Test key</button>
               <span id="agentSettingsHint" class="agent-settings-hint"></span>
             </div>
           </form>
