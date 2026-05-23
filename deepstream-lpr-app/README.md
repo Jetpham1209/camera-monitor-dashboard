@@ -99,6 +99,13 @@ chmod +x deepstream-lpr-app/update-product.sh
 deepstream-lpr-app/update-product.sh
 ```
 
+Lenh update product se tu `git pull`, rebuild control Docker image va restart container. Dung lenh nay thay cho `npm install` hay `pm2 restart` tren host Jetson:
+
+```bash
+cd ~/camera-monitor-dashboard
+bash deepstream-lpr-app/update-product.sh
+```
+
 Chi kiem tra moi truong, khong start service:
 
 ```bash
@@ -307,6 +314,8 @@ docker login nvcr.io
 Khong cai `torch`, `onnx`, `ultralytics` truc tiep tren host Jetson. Cac package nay nam trong model-builder image.
 
 Khong cai `pyds` truc tiep tren host Jetson. Runtime image mac dinh duoc build tu:
+
+Khong can cai `node`, `npm`, hay `pm2` tren host Jetson cho product Docker. Control UI chay trong container `deepstream-lpr-control`; cac dependency Node/LangChain/Agent se duoc cai bang `npm ci` trong Docker image khi chay `install.sh` hoac `update-product.sh`.
 
 ```text
 nvcr.io/nvidia/deepstream:7.0-triton-multiarch

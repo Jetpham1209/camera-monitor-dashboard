@@ -24,6 +24,17 @@ services:
       L4T_VERSION: ${L4T_VERSION:-unknown}
       DEEPSTREAM_YOLO_REPO: ${DEEPSTREAM_YOLO_REPO:-https://github.com/marcoslucianops/DeepStream-Yolo.git}
       DEEPSTREAM_YOLO_REF: ${DEEPSTREAM_YOLO_REF:-2894babce8e75c49115dbe0c7b516289ed853565}
+      AGENT_ENABLED: ${AGENT_ENABLED:-1}
+      AGENT_PROVIDER: ${AGENT_PROVIDER:-openai}
+      AGENT_MODEL: ${AGENT_MODEL:-gpt-4.1-mini}
+      AGENT_TEMPERATURE: ${AGENT_TEMPERATURE:-}
+      AGENT_MAX_TOKENS: ${AGENT_MAX_TOKENS:-}
+      AGENT_TOP_P: ${AGENT_TOP_P:-}
+      AGENT_REASONING_EFFORT: ${AGENT_REASONING_EFFORT:-}
+      AGENT_BASE_URL: ${AGENT_BASE_URL:-}
+      AGENT_MEMORY_FILE: ${AGENT_MEMORY_FILE:-runtime/agent-memory.json}
+      AGENT_SETTINGS_FILE: ${AGENT_SETTINGS_FILE:-runtime/agent-settings.json}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
       - ${HOST_REPO_ROOT:?Set HOST_REPO_ROOT to the absolute repo path}:${HOST_REPO_ROOT:?Set HOST_REPO_ROOT to the absolute repo path}
       - /var/run/docker.sock:/var/run/docker.sock
