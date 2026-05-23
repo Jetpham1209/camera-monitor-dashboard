@@ -267,13 +267,308 @@ h3 { margin: 0; font-size: 16px; }
 .monitor-panel {
   min-height: calc(100vh - 128px);
 }
-.camera-monitor-frame {
-  display: block;
-  width: 100%;
-  min-height: min(1020px, calc(100vh - 236px));
+.monitor-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+.monitor-stats article,
+.monitor-camera-panel,
+.monitor-viewer,
+.monitor-detail-block {
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #f5f7fb;
+  background: #fbfcff;
+}
+.monitor-stats article {
+  min-height: 84px;
+  display: grid;
+  align-content: space-between;
+  gap: 8px;
+  padding: 12px;
+}
+.monitor-stats span,
+.monitor-camera-row small,
+.monitor-camera-row em,
+.monitor-subhead span,
+.monitor-view-head p,
+.monitor-detail-list span,
+.monitor-detail-list a,
+.monitor-field-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+.monitor-stats strong {
+  font-size: 25px;
+  line-height: 1;
+}
+.monitor-layout {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.34fr) minmax(0, 1fr);
+  gap: 12px;
+  min-height: 610px;
+}
+.monitor-camera-panel {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+.monitor-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  padding: 12px;
+}
+.monitor-camera-list {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+button.monitor-camera-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 8px;
+  border-color: var(--line);
+  background: #fff;
+  color: var(--ink);
+  padding: 11px;
+  text-align: left;
+}
+button.monitor-camera-row.active {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+.monitor-camera-row span {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.monitor-camera-row strong,
+.monitor-camera-row small,
+.monitor-view-head p,
+.monitor-detail-list a {
+  overflow-wrap: anywhere;
+}
+.monitor-camera-row em {
+  grid-column: 1 / -1;
+  font-style: normal;
+}
+.monitor-badge {
+  align-self: start;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.monitor-badge.online {
+  background: #dcfce7;
+  color: var(--good);
+}
+.monitor-badge.offline {
+  background: #fee2e2;
+  color: #991b1b;
+}
+.monitor-badge.unknown {
+  background: #fef3c7;
+  color: var(--warn);
+}
+.monitor-empty {
+  display: none;
+  color: var(--muted);
+  text-align: center;
+  padding: 24px;
+}
+.monitor-empty.visible {
+  display: grid;
+  place-items: center;
+}
+.monitor-viewer {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 14px;
+  background: #fff;
+}
+.monitor-viewer-empty {
+  min-height: 580px;
+  display: grid;
+  place-items: center;
+}
+.monitor-view-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.monitor-view-head h3 {
+  margin-bottom: 5px;
+  font-size: 21px;
+}
+.monitor-view-head p {
+  margin: 0;
+}
+.monitor-video {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid #111827;
+  border-radius: 8px;
+  background: #101828;
+  aspect-ratio: 16 / 9;
+}
+.monitor-video video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #101828;
+  object-fit: contain;
+}
+.monitor-video div {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: #d0d5dd;
+  text-align: center;
+  pointer-events: none;
+}
+.monitor-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.62fr);
+  gap: 12px;
+}
+.monitor-detail-block {
+  min-width: 0;
+  padding: 12px;
+}
+.monitor-detail-block h4 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+.monitor-detail-list {
+  display: grid;
+  gap: 8px;
+}
+.monitor-detail-list article {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px;
+  background: #fff;
+}
+.monitor-detail-list strong {
+  font-size: 13px;
+}
+.monitor-capture-row button {
+  justify-self: start;
+  min-height: 32px;
+  padding: 6px 9px;
+  font-size: 12px;
+}
+.monitor-form-error,
+.monitor-form-success {
+  min-height: 18px;
+  margin: 0;
+  font-size: 13px;
+}
+.monitor-form-error {
+  color: #b42318;
+}
+.monitor-form-success {
+  color: var(--good);
+}
+.monitor-field-hint {
+  min-height: 18px;
+  margin: -4px 0 0;
+}
+.monitor-connection-state {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: #fef3c7;
+  color: var(--warn);
+  font-size: 12px;
+  font-weight: 800;
+}
+.monitor-connection-state[data-connected="1"] {
+  background: #dcfce7;
+  color: var(--good);
+}
+.monitor-dialog-card,
+.monitor-frame-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  background: #fff;
+}
+.monitor-dialog-card {
+  width: min(560px, calc(100vw - 32px));
+}
+.monitor-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.monitor-dialog-head h3 {
+  margin: 0;
+}
+dialog {
+  max-width: calc(100% - 24px);
+  border: 0;
+  border-radius: 8px;
+  padding: 0;
+  box-shadow: 0 22px 70px rgba(15, 23, 42, 0.26);
+}
+dialog::backdrop {
+  background: rgba(15, 23, 42, 0.44);
+}
+.monitor-frame-dialog {
+  width: min(1280px, calc(100vw - 32px));
+}
+.monitor-shape-tools {
+  align-items: center;
+}
+.monitor-frame-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 0.42fr);
+  gap: 12px;
+  align-items: start;
+}
+.monitor-canvas-wrap {
+  min-height: 420px;
+  max-height: 72vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #101828;
+  padding: 10px;
+}
+#monitorAnnotationCanvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  background: #111827;
+  cursor: crosshair;
+}
+.monitor-coordinate-panel textarea {
+  min-height: 420px;
+  background: #fbfcff;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
 }
 .panel-toolbar {
   display: flex;
@@ -1191,7 +1486,11 @@ pre {
   .deploy-preview-grid,
   .deploy-app-head,
   .dashboard-kpis,
-  .dashboard-grid {
+  .dashboard-grid,
+  .monitor-stats,
+  .monitor-layout,
+  .monitor-detail-grid,
+  .monitor-frame-layout {
     grid-template-columns: 1fr;
   }
   .model-name-field {
@@ -1212,7 +1511,9 @@ pre {
   }
   .workspace-header,
   .dashboard-hero,
-  .panel-toolbar {
+  .panel-toolbar,
+  .monitor-view-head,
+  .monitor-dialog-head {
     align-items: stretch;
     flex-direction: column;
   }
@@ -1222,5 +1523,15 @@ pre {
   .model-file-row {
     align-items: stretch;
     flex-direction: column;
+  }
+  .monitor-layout {
+    min-height: 0;
+  }
+  .monitor-viewer-empty {
+    min-height: 320px;
+  }
+  .monitor-canvas-wrap,
+  .monitor-coordinate-panel textarea {
+    min-height: 300px;
   }
 }

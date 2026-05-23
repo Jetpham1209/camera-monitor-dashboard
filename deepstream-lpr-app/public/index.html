@@ -59,14 +59,95 @@
                 <h2>Camera Monitor</h2>
                 <p>Theo doi camera RTSP, stream HLS, capture frame va Telegram alert trong Jetson Console.</p>
               </div>
-              <a class="button-link secondary" href="/camera-monitor/" target="_blank" rel="noreferrer">Open full screen</a>
+              <div class="actions inline-actions">
+                <button id="monitorRefreshBtn" type="button" class="secondary">Refresh</button>
+                <button id="monitorTelegramBtn" type="button" class="secondary">Telegram</button>
+                <button id="monitorAddBtn" type="button">Add camera</button>
+                <a class="button-link secondary" href="/camera-monitor/" target="_blank" rel="noreferrer">Open full screen</a>
+              </div>
             </div>
-            <iframe
-              class="camera-monitor-frame"
-              src="/camera-monitor/"
-              title="Camera Monitor"
-            ></iframe>
+            <div class="monitor-stats" aria-label="Camera monitor overview">
+              <article><span>Total cameras</span><strong id="monitorTotalCount">0</strong></article>
+              <article><span>Online</span><strong id="monitorOnlineCount">0</strong></article>
+              <article><span>Offline</span><strong id="monitorOfflineCount">0</strong></article>
+              <article><span>Streaming</span><strong id="monitorStreamingCount">0</strong></article>
+            </div>
+            <div class="monitor-layout">
+              <aside class="monitor-camera-panel">
+                <div class="monitor-subhead">
+                  <strong>Monitor cameras</strong>
+                  <span id="monitorSocketState">Connecting</span>
+                </div>
+                <div id="monitorCameraList" class="monitor-camera-list"></div>
+                <div id="monitorEmptyState" class="monitor-empty">No camera monitor configured yet.</div>
+              </aside>
+              <section id="monitorViewer" class="monitor-viewer">
+                <div class="monitor-empty monitor-viewer-empty">Select a monitor camera to stream, capture and inspect outages.</div>
+              </section>
+            </div>
           </section>
+
+          <dialog id="monitorCameraDialog">
+            <form method="dialog" class="monitor-dialog-card" id="monitorCameraForm">
+              <div class="monitor-dialog-head">
+                <h3 id="monitorCameraDialogTitle">Add camera</h3>
+                <button id="monitorCloseCameraDialogBtn" type="button" class="secondary">Close</button>
+              </div>
+              <input id="monitorCameraId" type="hidden" />
+              <label>Camera name <input id="monitorCameraName" required placeholder="Gate camera" autocomplete="off" /></label>
+              <label>RTSP URL <input id="monitorCameraRtsp" required placeholder="rtsp://user:pass@host:554/stream1" autocomplete="off" /></label>
+              <label>Check interval (seconds) <input id="monitorCameraInterval" type="number" min="1" max="300" value="1" /></label>
+              <label class="inline-check"><input id="monitorCameraEnabled" type="checkbox" checked /> Enable periodic monitor</label>
+              <p id="monitorCameraError" class="monitor-form-error"></p>
+              <div class="actions inline-actions">
+                <button id="monitorDeleteCameraBtn" type="button" class="danger">Delete</button>
+                <button type="submit">Save</button>
+              </div>
+            </form>
+          </dialog>
+
+          <dialog id="monitorTelegramDialog">
+            <form method="dialog" class="monitor-dialog-card" id="monitorTelegramForm">
+              <div class="monitor-dialog-head">
+                <h3>Telegram connection</h3>
+                <button id="monitorCloseTelegramDialogBtn" type="button" class="secondary">Close</button>
+              </div>
+              <div id="monitorTelegramStatus" class="monitor-connection-state">Not checked</div>
+              <label>Bot token <input id="monitorTelegramToken" type="password" placeholder="123456789:bot-token" autocomplete="off" /></label>
+              <p id="monitorTelegramTokenHint" class="monitor-field-hint"></p>
+              <label>Chat ID <input id="monitorTelegramChatId" placeholder="-1001234567890" autocomplete="off" /></label>
+              <label>Timezone <input id="monitorTelegramTimeZone" value="Asia/Bangkok" autocomplete="off" /></label>
+              <label>Telegram API timeout (ms) <input id="monitorTelegramTimeout" type="number" min="1000" max="60000" value="10000" /></label>
+              <p id="monitorTelegramError" class="monitor-form-error"></p>
+              <p id="monitorTelegramSuccess" class="monitor-form-success"></p>
+              <div class="actions inline-actions">
+                <button id="monitorTestTelegramBtn" type="button" class="secondary">Test</button>
+                <button type="submit">Save</button>
+              </div>
+            </form>
+          </dialog>
+
+          <dialog id="monitorFrameDialog" class="monitor-frame-dialog">
+            <div class="monitor-frame-card">
+              <div class="monitor-dialog-head">
+                <h3 id="monitorFrameTitle">Frame capture</h3>
+                <button id="monitorCloseFrameBtn" type="button" class="secondary">Close</button>
+              </div>
+              <div class="actions inline-actions monitor-shape-tools">
+                <button type="button" data-monitor-shape-tool="rectangle">Rectangle</button>
+                <button type="button" data-monitor-shape-tool="circle" class="secondary">Circle</button>
+                <button type="button" data-monitor-shape-tool="polygon" class="secondary">Polygon</button>
+                <button id="monitorFinishPolygonBtn" type="button" class="secondary">Finish polygon</button>
+                <button id="monitorUndoShapeBtn" type="button" class="secondary">Undo</button>
+                <button id="monitorClearShapesBtn" type="button" class="secondary">Clear</button>
+                <button id="monitorCopyCoordinatesBtn" type="button">Copy JSON</button>
+              </div>
+              <div class="monitor-frame-layout">
+                <div class="monitor-canvas-wrap"><canvas id="monitorAnnotationCanvas"></canvas></div>
+                <label class="monitor-coordinate-panel">Shape coordinates JSON <textarea id="monitorCoordinateOutput" readonly spellcheck="false"></textarea></label>
+              </div>
+            </div>
+          </dialog>
         </section>
 
         <section class="view" data-view-section="cameras">
@@ -288,6 +369,8 @@
       </section>
     </main>
 
+    <script src="/camera-monitor/vendor/hls.min.js"></script>
     <script src="/app.js"></script>
+    <script src="/camera-monitor.js"></script>
   </body>
 </html>
