@@ -8,6 +8,7 @@ const http = require("http");
 const net = require("net");
 const ffmpegStatic = require("ffmpeg-static");
 const { createCameraMonitorFeature } = require("./camera-monitor-feature");
+const { createAgentFeature } = require("./agent-feature");
 
 const APP_ROOT = path.resolve(__dirname, "..");
 const REPO_ROOT = path.resolve(APP_ROOT, "..");
@@ -2542,6 +2543,21 @@ const cameraMonitorFeature = createCameraMonitorFeature({
   repoRoot: REPO_ROOT,
   ffmpegPath: ffmpegExecutable()
 });
+const agentFeature = createAgentFeature({
+  app,
+  appRoot: APP_ROOT,
+  runtimeDir: RUNTIME_DIR,
+  getConfig,
+  readRuntimeEvents,
+  readRuntimeStatus,
+  inspectContainer,
+  listRuntimeResults,
+  listMonitorCaptures,
+  listModelGroups,
+  runCommand,
+  tailOutput
+});
+agentFeature.mount();
 app.use(express.static(PUBLIC_DIR));
 app.use("/models", express.static(MODELS_DIR));
 app.use("/runtime", express.static(RUNTIME_DIR));

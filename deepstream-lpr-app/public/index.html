@@ -20,6 +20,7 @@
           <button type="button" class="sidebar-link" data-nav-view="deploy">Deploy</button>
           <button type="button" class="sidebar-link" data-nav-view="models">Model Factory</button>
           <button type="button" class="sidebar-link" data-nav-view="tests">Test Lab</button>
+          <button type="button" class="sidebar-link" data-nav-view="agent">Agent</button>
           <button type="button" class="sidebar-link" data-nav-view="activity">Activity</button>
         </nav>
         <div class="sidebar-note">
@@ -363,6 +364,47 @@
         <h2>Test Results</h2>
         <div id="testResults" class="test-results">
           <div class="empty">No test result yet.</div>
+        </div>
+      </section>
+        </section>
+
+        <section class="view" data-view-section="agent">
+      <section class="panel">
+        <div class="panel-toolbar">
+          <div>
+            <h2>Operator Agent</h2>
+            <p>Chat voi agent de doc trang thai camera, model, deploy, logs va ket qua runtime. Agent chi doc thong tin va de xuat thao tac.</p>
+          </div>
+          <div class="actions inline-actions">
+            <button id="refreshAgentBtn" type="button" class="secondary">Refresh</button>
+            <button id="clearAgentMemoryBtn" type="button" class="danger">Clear memory</button>
+          </div>
+        </div>
+        <div id="agentStatus" class="agent-status"></div>
+        <div class="agent-layout">
+          <section class="agent-chat-panel">
+            <div id="agentMessages" class="agent-messages" aria-live="polite"></div>
+            <form id="agentForm" class="agent-composer">
+              <textarea id="agentInput" rows="3" placeholder="Hoi agent ve camera, model, deploy, FPS, logs hoac ket qua capture..."></textarea>
+              <button id="agentSendBtn" type="submit">Send</button>
+            </form>
+          </section>
+          <aside class="agent-side-panel">
+            <article>
+              <div class="panel-toolbar compact">
+                <h3>Memory</h3>
+                <button id="saveAgentNoteBtn" type="button" class="secondary">Save note</button>
+              </div>
+              <textarea id="agentNoteInput" rows="3" placeholder="Luu preference/ghi chu van hanh on dinh cho agent..."></textarea>
+              <div id="agentMemoryList" class="agent-memory-list"></div>
+            </article>
+            <article>
+              <h3>Tool trace</h3>
+              <div id="agentToolTrace" class="agent-tool-trace">
+                <div class="empty">No tool call yet.</div>
+              </div>
+            </article>
+          </aside>
         </div>
       </section>
         </section>

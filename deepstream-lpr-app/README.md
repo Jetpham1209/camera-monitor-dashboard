@@ -53,6 +53,31 @@ http://<ip-jetson>:5190
 
 Jetson Console la web app product duy nhat tren port nay. Sidebar `Camera Monitor` mo lai luong monitor RTSP cu trong cung server tai `/camera-monitor/`; khong can start them dashboard monitor port `5174` khi chay product Docker.
 
+### Operator Agent
+
+Sidebar `Agent` cung cap mot operator agent de hoi dap ve camera, model library, deploy status, FPS, logs, events va result captures. Agent duoc thiet ke read-only: no co the doc trang thai va de xuat buoc thao tac, nhung khong tu deploy/stop/delete.
+
+Memory cua agent duoc luu persistent trong:
+
+```text
+deepstream-lpr-app/runtime/agent-memory.json
+```
+
+Mac dinh neu chua set API key, tab Agent van hoat dong o che do local summary de khong lam crash Jetson offline. De bat LangGraph/LangChain agent that, them vao `.env.product`:
+
+```bash
+AGENT_ENABLED=1
+AGENT_PROVIDER=openai
+AGENT_MODEL=gpt-4.1-mini
+OPENAI_API_KEY=...
+```
+
+Sau do restart product:
+
+```bash
+deepstream-lpr-app/update-product.sh
+```
+
 Neu user hien tai chua co quyen Docker, script se dung `sudo docker compose`.
 
 Update tren Jetson da clone repo:

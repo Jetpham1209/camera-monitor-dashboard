@@ -122,7 +122,18 @@ const els = {
   ocrMinWidthRatio: document.querySelector("#ocrMinWidthRatio"),
   ocrMaxWidthRatio: document.querySelector("#ocrMaxWidthRatio"),
   ocrMinHeightRatio: document.querySelector("#ocrMinHeightRatio"),
-  ocrMaxHeightRatio: document.querySelector("#ocrMaxHeightRatio")
+  ocrMaxHeightRatio: document.querySelector("#ocrMaxHeightRatio"),
+  agentStatus: document.querySelector("#agentStatus"),
+  agentMessages: document.querySelector("#agentMessages"),
+  agentForm: document.querySelector("#agentForm"),
+  agentInput: document.querySelector("#agentInput"),
+  agentSendBtn: document.querySelector("#agentSendBtn"),
+  refreshAgentBtn: document.querySelector("#refreshAgentBtn"),
+  clearAgentMemoryBtn: document.querySelector("#clearAgentMemoryBtn"),
+  agentNoteInput: document.querySelector("#agentNoteInput"),
+  saveAgentNoteBtn: document.querySelector("#saveAgentNoteBtn"),
+  agentMemoryList: document.querySelector("#agentMemoryList"),
+  agentToolTrace: document.querySelector("#agentToolTrace")
 };
 
 let cameraDrafts = [];
@@ -142,6 +153,8 @@ const modelFiles = new Map();
 let modelLibraryGroups = [];
 let deployStatusPollTimer = null;
 let deployStatusPollInFlight = false;
+const agentThreadId = "default";
+let agentMessages = [];
 
 function print(value) {
   els.output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -230,6 +243,7 @@ const dashboardViewTitles = {
   deploy: "Deploy Settings",
   models: "Model Factory",
   tests: "Test Lab",
+  agent: "Operator Agent",
   activity: "Activity"
 };
 
@@ -243,6 +257,7 @@ function selectDashboardView(view = "dashboard") {
   });
   if (els.workspaceTitle) els.workspaceTitle.textContent = dashboardViewTitles[next];
   if (next === "dashboard") renderMainDashboard();
+  if (next === "agent") refreshAgent().catch((error) => setTaskStatus("agent", "failed", error.message));
 }
 
 function dashboardTag(label, tone = "") {
@@ -444,6 +459,142 @@ async function apiText(path) {
   const body = await response.text();
   if (!response.ok) throw new Error(body || `HTTP ${response.status}`);
   return body;
+}
+
+function renderAgentStatus(status = {}) {
+  if (!els.agentStatus) return;
+  const configured = Boolean(status.configured);
+  const enabled = status.enabled !== false;
+  els.agentStatus.innerHTML = `
+    <article class="agent-status-card ${configured ? "success" : "warning"}">
+      <span>LLM</span>
+      <strong>${enabled ? escapeHtml(status.provider || "unknown") : "disabled"}</strong>
+      <small>${configured ? escapeHtml(status.model || "") : "Set OPENAI_API_KEY to enable LangGraph reasoning."}</small>
+    </article>
+    <article class="agent-status-card">
+      <span>Memory</span>
+      <strong>Persistent</strong>
+      <small>${escapeHtml(status.memoryFile || "runtime/agent-memory.json")}</small>
+    </article>
+    <article class="agent-status-card">
+      <span>Mode</span>
+      <strong>Read only</strong>
+      <small>${escapeHtml(status.mode || "Operator with tools")}</small>
+    </article>
+  `;
+}
+
+function renderAgentMessages() {
+  if (!els.agentMessages) return;
+  if (!agentMessages.length) {
+    els.agentMessages.innerHTML = `
+      <div class="agent-empty">
+        <strong>Agent san sang ho tro van hanh.</strong>
+        <span>Thu hoi: "Camera nao dang mat FPS?", "Model nao da build?", "Tai sao deploy khong co result?"</span>
+      </div>
+    `;
+    return;
+  }
+  els.agentMessages.innerHTML = agentMessages.map((message) => `
+    <article class="agent-message ${message.role}">
+      <span>${message.role === "assistant" ? "Agent" : "You"}</span>
+      <div>${escapeHtml(message.content).replace(/\n/g, "<br />")}</div>
+    </article>
+  `).join("");
+  els.agentMessages.scrollTop = els.agentMessages.scrollHeight;
+}
+
+function renderAgentMemory(memory = {}) {
+  if (!els.agentMemoryList) return;
+  const notes = memory.notes || [];
+  if (!notes.length) {
+    els.agentMemoryList.innerHTML = '<div class="empty">No long-term memory notes yet.</div>';
+    return;
+  }
+  els.agentMemoryList.innerHTML = notes.slice().reverse().map((item) => `
+    <div class="agent-memory-note">
+      <strong>${escapeHtml(item.source || "note")}</strong>
+      <span>${escapeHtml(item.note || "")}</span>
+      <small>${escapeHtml(item.createdAt || "")}</small>
+    </div>
+  `).join("");
+}
+
+function renderAgentToolTrace(toolCalls = []) {
+  if (!els.agentToolTrace) return;
+  if (!toolCalls.length) {
+    els.agentToolTrace.innerHTML = '<div class="empty">No tool call yet.</div>';
+    return;
+  }
+  els.agentToolTrace.innerHTML = toolCalls.map((item) => `
+    <div class="agent-tool-item">
+      <strong>${escapeHtml(item.name || item.type || "tool")}</strong>
+      ${(item.toolCalls || []).map((call) => `<span>${escapeHtml(call.name || call.type || "call")}</span>`).join("")}
+      ${item.content ? `<pre>${escapeHtml(item.content)}</pre>` : ""}
+    </div>
+  `).join("");
+}
+
+async function refreshAgent() {
+  const [status, memory] = await Promise.all([
+    api("/api/agent/status"),
+    api(`/api/agent/memory?threadId=${encodeURIComponent(agentThreadId)}`)
+  ]);
+  renderAgentStatus(status);
+  agentMessages = memory.messages || [];
+  renderAgentMessages();
+  renderAgentMemory(memory);
+  return { status, memory };
+}
+
+async function sendAgentMessage(event) {
+  event.preventDefault();
+  const message = els.agentInput.value.trim();
+  if (!message) return;
+  const localUserMessage = { role: "user", content: message, createdAt: new Date().toISOString() };
+  agentMessages.push(localUserMessage);
+  els.agentInput.value = "";
+  renderAgentMessages();
+  const result = await withTask("agent", els.agentSendBtn, "Thinking...", async () => {
+    return await api("/api/agent/chat", {
+      method: "POST",
+      body: JSON.stringify({ threadId: agentThreadId, message })
+    });
+  });
+  agentMessages = result.thread?.messages || [
+    ...agentMessages,
+    { role: "assistant", content: result.answer || "", createdAt: new Date().toISOString() }
+  ];
+  renderAgentStatus(result.status || {});
+  renderAgentMessages();
+  renderAgentMemory(result.thread || {});
+  renderAgentToolTrace(result.toolCalls || []);
+  print(result);
+}
+
+async function clearAgentMemory() {
+  const result = await withTask("agent-memory", els.clearAgentMemoryBtn, "Clearing...", async () => {
+    return await api(`/api/agent/memory?threadId=${encodeURIComponent(agentThreadId)}`, { method: "DELETE" });
+  });
+  agentMessages = result.messages || [];
+  renderAgentMessages();
+  renderAgentMemory(result);
+  renderAgentToolTrace([]);
+  print(result);
+}
+
+async function saveAgentNote() {
+  const note = els.agentNoteInput.value.trim();
+  if (!note) return;
+  const result = await withTask("agent-memory", els.saveAgentNoteBtn, "Saving note...", async () => {
+    return await api("/api/agent/memory/notes", {
+      method: "POST",
+      body: JSON.stringify({ threadId: agentThreadId, note })
+    });
+  });
+  els.agentNoteInput.value = "";
+  renderAgentMemory(result);
+  print(result);
 }
 
 function sleep(ms) {
@@ -2584,6 +2735,7 @@ async function init() {
   renderConfig(config);
   await loadDeployCaptures().catch((error) => setTaskStatus("deploy-previews", "failed", error.message));
   await refreshDeployStatus().catch(() => {});
+  await refreshAgent().catch((error) => setTaskStatus("agent", "failed", error.message));
   startDeployStatusPolling();
 }
 
@@ -2679,4 +2831,8 @@ els.runTestVideoBtn.addEventListener("click", () => runTestMedia("video", els.ru
 }));
 els.copyOutputBtn.addEventListener("click", () => copyOutput().catch((error) => print(error.message)));
 els.toggleOutputBtn.addEventListener("click", toggleOutput);
+els.agentForm?.addEventListener("submit", (event) => sendAgentMessage(event).catch((error) => print(error.message)));
+els.refreshAgentBtn?.addEventListener("click", () => refreshAgent().catch((error) => print(error.message)));
+els.clearAgentMemoryBtn?.addEventListener("click", () => clearAgentMemory().catch((error) => print(error.message)));
+els.saveAgentNoteBtn?.addEventListener("click", () => saveAgentNote().catch((error) => print(error.message)));
 init().catch((error) => print(error.message));
