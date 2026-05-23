@@ -133,7 +133,20 @@ const els = {
   agentNoteInput: document.querySelector("#agentNoteInput"),
   saveAgentNoteBtn: document.querySelector("#saveAgentNoteBtn"),
   agentMemoryList: document.querySelector("#agentMemoryList"),
-  agentToolTrace: document.querySelector("#agentToolTrace")
+  agentToolTrace: document.querySelector("#agentToolTrace"),
+  agentSettingsForm: document.querySelector("#agentSettingsForm"),
+  agentProvider: document.querySelector("#agentProvider"),
+  agentModel: document.querySelector("#agentModel"),
+  agentCustomModel: document.querySelector("#agentCustomModel"),
+  agentApiKey: document.querySelector("#agentApiKey"),
+  agentBaseUrl: document.querySelector("#agentBaseUrl"),
+  agentTemperature: document.querySelector("#agentTemperature"),
+  agentMaxTokens: document.querySelector("#agentMaxTokens"),
+  agentTopP: document.querySelector("#agentTopP"),
+  agentEnabled: document.querySelector("#agentEnabled"),
+  agentClearApiKey: document.querySelector("#agentClearApiKey"),
+  saveAgentSettingsBtn: document.querySelector("#saveAgentSettingsBtn"),
+  agentSettingsHint: document.querySelector("#agentSettingsHint")
 };
 
 let cameraDrafts = [];
@@ -155,6 +168,7 @@ let deployStatusPollTimer = null;
 let deployStatusPollInFlight = false;
 const agentThreadId = "default";
 let agentMessages = [];
+let agentSettings = null;
 
 function print(value) {
   els.output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -468,8 +482,8 @@ function renderAgentStatus(status = {}) {
   els.agentStatus.innerHTML = `
     <article class="agent-status-card ${configured ? "success" : "warning"}">
       <span>LLM</span>
-      <strong>${enabled ? escapeHtml(status.provider || "unknown") : "disabled"}</strong>
-      <small>${configured ? escapeHtml(status.model || "") : "Set OPENAI_API_KEY to enable LangGraph reasoning."}</small>
+      <strong>${enabled ? escapeHtml(status.providerLabel || status.provider || "unknown") : "disabled"}</strong>
+      <small>${configured ? escapeHtml(status.model || "") : "Set provider credentials in Agent Settings."}</small>
     </article>
     <article class="agent-status-card">
       <span>Memory</span>
@@ -479,9 +493,48 @@ function renderAgentStatus(status = {}) {
     <article class="agent-status-card">
       <span>Mode</span>
       <strong>Read only</strong>
-      <small>${escapeHtml(status.mode || "Operator with tools")}</small>
+      <small>${escapeHtml(`${status.mode || "Operator with tools"} - temp ${status.temperature ?? "-"}`)}</small>
     </article>
   `;
+}
+
+function renderAgentSettings(settings = {}) {
+  if (!els.agentSettingsForm) return;
+  agentSettings = settings;
+  const providers = settings.providers || {};
+  const providerIds = Object.keys(providers);
+  els.agentProvider.innerHTML = providerIds.map((id) => `
+    <option value="${escapeHtml(id)}">${escapeHtml(providers[id].label || id)}</option>
+  `).join("");
+  els.agentProvider.value = settings.provider || "openai";
+  renderAgentModelOptions();
+  els.agentEnabled.checked = settings.enabled !== false;
+  els.agentCustomModel.value = "";
+  els.agentApiKey.value = "";
+  els.agentClearApiKey.checked = false;
+  els.agentBaseUrl.value = settings.baseUrl || "";
+  els.agentTemperature.value = settings.temperature ?? 0.2;
+  els.agentMaxTokens.value = settings.maxTokens ?? 1200;
+  els.agentTopP.value = settings.topP ?? 1;
+  els.agentSettingsHint.textContent = settings.hasApiKey
+    ? `API key set (${settings.apiKeySource || "settings"}). Leave blank to keep it.`
+    : "No API key stored for this provider.";
+}
+
+function renderAgentModelOptions() {
+  if (!agentSettings || !els.agentModel) return;
+  const provider = els.agentProvider.value || agentSettings.provider || "openai";
+  const spec = agentSettings.providers?.[provider] || {};
+  const models = spec.models || [];
+  const currentModel = agentSettings.provider === provider ? agentSettings.model : spec.defaultModel;
+  const hasCurrent = models.includes(currentModel);
+  els.agentModel.innerHTML = [
+    ...models.map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`),
+    `<option value="__custom__">Custom...</option>`
+  ].join("");
+  els.agentModel.value = hasCurrent ? currentModel : "__custom__";
+  els.agentCustomModel.value = hasCurrent ? "" : (currentModel || "");
+  if (els.agentBaseUrl && spec.baseUrl && !els.agentBaseUrl.value) els.agentBaseUrl.value = spec.baseUrl;
 }
 
 function renderAgentMessages() {
@@ -536,15 +589,17 @@ function renderAgentToolTrace(toolCalls = []) {
 }
 
 async function refreshAgent() {
-  const [status, memory] = await Promise.all([
+  const [status, memory, settings] = await Promise.all([
     api("/api/agent/status"),
-    api(`/api/agent/memory?threadId=${encodeURIComponent(agentThreadId)}`)
+    api(`/api/agent/memory?threadId=${encodeURIComponent(agentThreadId)}`),
+    api("/api/agent/settings")
   ]);
   renderAgentStatus(status);
+  renderAgentSettings(settings);
   agentMessages = memory.messages || [];
   renderAgentMessages();
   renderAgentMemory(memory);
-  return { status, memory };
+  return { status, memory, settings };
 }
 
 async function sendAgentMessage(event) {
@@ -594,6 +649,32 @@ async function saveAgentNote() {
   });
   els.agentNoteInput.value = "";
   renderAgentMemory(result);
+  print(result);
+}
+
+async function saveAgentSettings(event) {
+  event.preventDefault();
+  const selectedModel = els.agentModel.value;
+  const customModel = els.agentCustomModel.value.trim();
+  const model = selectedModel === "__custom__" ? customModel : selectedModel;
+  const result = await withTask("agent-settings", els.saveAgentSettingsBtn, "Saving settings...", async () => {
+    return await api("/api/agent/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        enabled: els.agentEnabled.checked,
+        provider: els.agentProvider.value,
+        model,
+        apiKey: els.agentApiKey.value.trim(),
+        clearApiKey: els.agentClearApiKey.checked,
+        baseUrl: els.agentBaseUrl.value.trim(),
+        temperature: Number(els.agentTemperature.value),
+        maxTokens: Number(els.agentMaxTokens.value),
+        topP: Number(els.agentTopP.value)
+      })
+    });
+  });
+  renderAgentSettings(result);
+  renderAgentStatus(await api("/api/agent/status"));
   print(result);
 }
 
@@ -2835,4 +2916,9 @@ els.agentForm?.addEventListener("submit", (event) => sendAgentMessage(event).cat
 els.refreshAgentBtn?.addEventListener("click", () => refreshAgent().catch((error) => print(error.message)));
 els.clearAgentMemoryBtn?.addEventListener("click", () => clearAgentMemory().catch((error) => print(error.message)));
 els.saveAgentNoteBtn?.addEventListener("click", () => saveAgentNote().catch((error) => print(error.message)));
+els.agentSettingsForm?.addEventListener("submit", (event) => saveAgentSettings(event).catch((error) => print(error.message)));
+els.agentProvider?.addEventListener("change", renderAgentModelOptions);
+els.agentModel?.addEventListener("change", () => {
+  if (els.agentModel.value === "__custom__") els.agentCustomModel.focus();
+});
 init().catch((error) => print(error.message));

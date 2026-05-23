@@ -6,6 +6,23 @@ const DEFAULT_THREAD_ID = "default";
 const MAX_MESSAGES = 40;
 const MAX_NOTES = 80;
 
+const PROVIDER_SPECS = {
+  openai: {
+    label: "OpenAI",
+    needsApiKey: true,
+    apiKeyEnv: "OPENAI_API_KEY",
+    defaultModel: "gpt-4.1-mini",
+    models: ["gpt-4.1-mini", "gpt-4.1", "gpt-4o-mini", "gpt-4o", "o4-mini"]
+  },
+  ollama: {
+    label: "Ollama",
+    needsApiKey: false,
+    defaultModel: "llama3.1",
+    baseUrl: "http://localhost:11434",
+    models: ["llama3.1", "llama3.2", "qwen2.5", "gemma3", "mistral"]
+  }
+};
+
 function maskSecrets(value) {
   let text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   text = text.replace(/(rtsp:\/\/)([^:\s/@]+):([^@\s]+)@/gi, "$1***:***@");
@@ -48,6 +65,21 @@ function createFallbackMemory() {
   };
 }
 
+function normalizeProvider(value) {
+  const provider = String(value || "").trim().toLowerCase();
+  return PROVIDER_SPECS[provider] ? provider : "openai";
+}
+
+function providerSpec(provider) {
+  return PROVIDER_SPECS[normalizeProvider(provider)] || PROVIDER_SPECS.openai;
+}
+
+function clampNumber(value, fallback, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, number));
+}
+
 function createAgentFeature(options) {
   const {
     app,
@@ -68,11 +100,92 @@ function createAgentFeature(options) {
     appRoot,
     process.env.AGENT_MEMORY_FILE || path.join(runtimeDir, "agent-memory.json")
   );
-  const provider = String(process.env.AGENT_PROVIDER || "openai").toLowerCase();
-  const modelName = process.env.AGENT_MODEL || "gpt-4.1-mini";
-  const enabled = process.env.AGENT_ENABLED !== "0";
+  const settingsFile = path.resolve(
+    appRoot,
+    process.env.AGENT_SETTINGS_FILE || path.join(runtimeDir, "agent-settings.json")
+  );
 
   fs.mkdirSync(path.dirname(memoryFile), { recursive: true });
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+
+  function defaultSettings() {
+    const provider = normalizeProvider(process.env.AGENT_PROVIDER || "openai");
+    const spec = providerSpec(provider);
+    return {
+      enabled: process.env.AGENT_ENABLED !== "0",
+      provider,
+      model: process.env.AGENT_MODEL || spec.defaultModel,
+      temperature: clampNumber(process.env.AGENT_TEMPERATURE, 0.2, 0, 2),
+      maxTokens: clampNumber(process.env.AGENT_MAX_TOKENS, 1200, 128, 8000),
+      topP: clampNumber(process.env.AGENT_TOP_P, 1, 0, 1),
+      baseUrl: process.env.AGENT_BASE_URL || spec.baseUrl || "",
+      apiKey: process.env[spec.apiKeyEnv] || "",
+      updatedAt: null
+    };
+  }
+
+  async function readAgentSettings({ includeSecret = false } = {}) {
+    const defaults = defaultSettings();
+    let stored = {};
+    try {
+      stored = JSON.parse(await fsp.readFile(settingsFile, "utf8"));
+    } catch {
+      stored = {};
+    }
+    const provider = normalizeProvider(stored.provider || defaults.provider);
+    const spec = providerSpec(provider);
+    const apiKeyFromEnv = spec.apiKeyEnv ? process.env[spec.apiKeyEnv] : "";
+    const apiKey = apiKeyFromEnv || stored.apiKey || "";
+    const settings = {
+      enabled: stored.enabled ?? defaults.enabled,
+      provider,
+      model: String(stored.model || defaults.model || spec.defaultModel).trim(),
+      temperature: clampNumber(stored.temperature, defaults.temperature, 0, 2),
+      maxTokens: clampNumber(stored.maxTokens, defaults.maxTokens, 128, 8000),
+      topP: clampNumber(stored.topP, defaults.topP, 0, 1),
+      baseUrl: String(stored.baseUrl || defaults.baseUrl || spec.baseUrl || "").trim(),
+      hasApiKey: Boolean(apiKey),
+      apiKeySource: apiKeyFromEnv ? "env" : (stored.apiKey ? "settings" : ""),
+      updatedAt: stored.updatedAt || null
+    };
+    if (includeSecret) settings.apiKey = apiKey;
+    return settings;
+  }
+
+  async function publicAgentSettings() {
+    const settings = await readAgentSettings();
+    return {
+      ...settings,
+      apiKeyMasked: settings.hasApiKey ? "********" : "",
+      apiKey: undefined,
+      providers: PROVIDER_SPECS,
+      settingsFile: path.relative(appRoot, settingsFile).replace(/\\/g, "/")
+    };
+  }
+
+  async function saveAgentSettings(input = {}) {
+    const current = await readAgentSettings({ includeSecret: true });
+    const provider = normalizeProvider(input.provider || current.provider);
+    const spec = providerSpec(provider);
+    const next = {
+      enabled: input.enabled === undefined ? current.enabled : Boolean(input.enabled),
+      provider,
+      model: String(input.model || current.model || spec.defaultModel).trim(),
+      temperature: clampNumber(input.temperature, current.temperature, 0, 2),
+      maxTokens: clampNumber(input.maxTokens, current.maxTokens, 128, 8000),
+      topP: clampNumber(input.topP, current.topP, 0, 1),
+      baseUrl: String(input.baseUrl || current.baseUrl || spec.baseUrl || "").trim(),
+      apiKey: current.apiKey || "",
+      updatedAt: new Date().toISOString()
+    };
+    if (Object.prototype.hasOwnProperty.call(input, "apiKey") && String(input.apiKey || "").trim()) {
+      next.apiKey = String(input.apiKey).trim();
+    }
+    if (input.clearApiKey) next.apiKey = "";
+    await fsp.mkdir(path.dirname(settingsFile), { recursive: true });
+    await fsp.writeFile(settingsFile, `${JSON.stringify(next, null, 2)}\n`);
+    return publicAgentSettings();
+  }
 
   async function readMemory() {
     try {
@@ -173,13 +286,23 @@ function createAgentFeature(options) {
     };
   }
 
-  function status() {
+  async function status() {
+    const settings = await readAgentSettings();
+    const spec = providerSpec(settings.provider);
     return {
-      enabled,
-      provider,
-      model: modelName,
-      configured: enabled && provider === "openai" && Boolean(process.env.OPENAI_API_KEY),
+      enabled: settings.enabled,
+      provider: settings.provider,
+      providerLabel: spec.label,
+      model: settings.model,
+      configured: settings.enabled && (!spec.needsApiKey || settings.hasApiKey),
+      hasApiKey: settings.hasApiKey,
+      apiKeySource: settings.apiKeySource,
+      temperature: settings.temperature,
+      maxTokens: settings.maxTokens,
+      topP: settings.topP,
+      baseUrl: settings.baseUrl,
       memoryFile: path.relative(appRoot, memoryFile).replace(/\\/g, "/"),
+      settingsFile: path.relative(appRoot, settingsFile).replace(/\\/g, "/"),
       mode: "read-only operator with persistent memory"
     };
   }
@@ -255,37 +378,53 @@ function createAgentFeature(options) {
     ].join("\n");
   }
 
+  async function createChatModel(settings) {
+    const spec = providerSpec(settings.provider);
+    if (settings.provider === "ollama") {
+      const { ChatOllama } = await import("@langchain/ollama");
+      return new ChatOllama({
+        model: settings.model || spec.defaultModel,
+        baseUrl: settings.baseUrl || spec.baseUrl,
+        temperature: settings.temperature,
+        numPredict: settings.maxTokens
+      });
+    }
+    const { ChatOpenAI } = await import("@langchain/openai");
+    return new ChatOpenAI({
+      model: settings.model || spec.defaultModel,
+      temperature: settings.temperature,
+      maxTokens: settings.maxTokens,
+      topP: settings.topP,
+      apiKey: settings.apiKey
+    });
+  }
+
   async function invokeAgent({ threadId, message }) {
+    const settings = await readAgentSettings({ includeSecret: true });
+    const spec = providerSpec(settings.provider);
     const state = await getThread(threadId);
     await saveMessage(state.threadId, { role: "user", content: message });
     const updatedState = await getThread(state.threadId);
 
-    if (!enabled) {
-      const answer = "Agent đang bị tắt bằng `AGENT_ENABLED=0`. Memory vẫn hoạt động, nhưng mình chưa gọi LLM/tool agent.";
+    if (!settings.enabled) {
+      const answer = "Agent dang bi tat trong Agent Settings. Memory van hoat dong, nhung minh chua goi LLM/tool agent.";
       await saveMessage(state.threadId, { role: "assistant", content: answer });
-      return { answer, toolCalls: [], thread: (await getThread(state.threadId)).thread, status: status() };
+      return { answer, toolCalls: [], thread: (await getThread(state.threadId)).thread, status: await status() };
     }
-    if (provider !== "openai" || !process.env.OPENAI_API_KEY) {
+    if (spec.needsApiKey && !settings.apiKey) {
       const snapshot = await appSnapshot();
       const answer = [
-        "Agent backend đã sẵn sàng, nhưng chưa có `OPENAI_API_KEY` nên mình đang chạy ở chế độ local summary.",
+        `Agent backend da san sang, nhung provider ${spec.label} chua co API key nen minh dang chay o che do local summary.`,
         "",
-        `Hiện có ${(snapshot.cameras || []).length} camera, container DeepStream: ${snapshot.container?.running ? "running" : "not running"}, trạng thái pipeline: ${snapshot.runtimeStatus?.state || "unknown"}.`,
-        "Để bật agent LangGraph thật, set `AGENT_ENABLED=1`, `AGENT_PROVIDER=openai`, `OPENAI_API_KEY` và restart control server."
+        `Hien co ${(snapshot.cameras || []).length} camera, container DeepStream: ${snapshot.container?.running ? "running" : "not running"}, trang thai pipeline: ${snapshot.runtimeStatus?.state || "unknown"}.`,
+        "Hay vao tab Agent > Settings de them API key."
       ].join("\n");
       await saveMessage(state.threadId, { role: "assistant", content: answer });
-      return { answer, toolCalls: [], snapshot, thread: (await getThread(state.threadId)).thread, status: status() };
+      return { answer, toolCalls: [], snapshot, thread: (await getThread(state.threadId)).thread, status: await status() };
     }
 
-    const [{ ChatOpenAI }, { createReactAgent }] = await Promise.all([
-      import("@langchain/openai"),
-      import("@langchain/langgraph/prebuilt")
-    ]);
-    const model = new ChatOpenAI({
-      model: modelName,
-      temperature: Number(process.env.AGENT_TEMPERATURE || 0.2),
-      apiKey: process.env.OPENAI_API_KEY
-    });
+    const { createReactAgent } = await import("@langchain/langgraph/prebuilt");
+    const model = await createChatModel(settings);
     const tools = await createTools(state.threadId);
     const agent = createReactAgent({ llm: model, tools });
     const history = lastItems(updatedState.thread.messages || [], 20).map((item) => ({
@@ -312,12 +451,24 @@ function createAgentFeature(options) {
         content: typeof item.content === "string" ? item.content.slice(0, 1200) : ""
       }));
     await saveMessage(state.threadId, { role: "assistant", content: answer });
-    return { answer, toolCalls, thread: (await getThread(state.threadId)).thread, status: status() };
+    return { answer, toolCalls, thread: (await getThread(state.threadId)).thread, status: await status() };
   }
 
   function mount() {
-    app.get("/api/agent/status", (_req, res) => {
-      res.json(status());
+    app.get("/api/agent/status", async (_req, res) => {
+      res.json(await status());
+    });
+
+    app.get("/api/agent/settings", async (_req, res) => {
+      res.json(await publicAgentSettings());
+    });
+
+    app.put("/api/agent/settings", async (req, res) => {
+      try {
+        res.json(await saveAgentSettings(req.body || {}));
+      } catch (error) {
+        res.status(400).json({ error: error.message || "Could not save agent settings." });
+      }
     });
 
     app.get("/api/agent/memory", async (req, res) => {
@@ -351,7 +502,7 @@ function createAgentFeature(options) {
     });
   }
 
-  return { mount, status, readMemory };
+  return { mount, status, readMemory, readAgentSettings };
 }
 
 module.exports = { createAgentFeature, maskSecrets };

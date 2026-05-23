@@ -381,6 +381,55 @@
           </div>
         </div>
         <div id="agentStatus" class="agent-status"></div>
+        <details class="agent-settings-panel" open>
+          <summary>Agent Settings</summary>
+          <form id="agentSettingsForm" class="agent-settings-grid">
+            <label>
+              Provider
+              <select id="agentProvider"></select>
+            </label>
+            <label>
+              Model
+              <select id="agentModel"></select>
+            </label>
+            <label>
+              Custom model
+              <input id="agentCustomModel" type="text" placeholder="vd: gpt-4.1-mini hoac llama3.1" />
+            </label>
+            <label>
+              API key
+              <input id="agentApiKey" type="password" placeholder="De trong de giu key hien tai" autocomplete="off" />
+            </label>
+            <label>
+              Base URL
+              <input id="agentBaseUrl" type="text" placeholder="vd: http://localhost:11434 cho Ollama" />
+            </label>
+            <label>
+              Temperature
+              <input id="agentTemperature" type="number" min="0" max="2" step="0.05" />
+            </label>
+            <label>
+              Max tokens
+              <input id="agentMaxTokens" type="number" min="128" max="8000" step="128" />
+            </label>
+            <label>
+              Top P
+              <input id="agentTopP" type="number" min="0" max="1" step="0.05" />
+            </label>
+            <label class="checkbox-row">
+              <input id="agentEnabled" type="checkbox" />
+              Enabled
+            </label>
+            <label class="checkbox-row">
+              <input id="agentClearApiKey" type="checkbox" />
+              Clear stored API key
+            </label>
+            <div class="agent-settings-actions">
+              <button id="saveAgentSettingsBtn" type="submit">Save settings</button>
+              <span id="agentSettingsHint" class="agent-settings-hint"></span>
+            </div>
+          </form>
+        </details>
         <div class="agent-layout">
           <section class="agent-chat-panel">
             <div id="agentMessages" class="agent-messages" aria-live="polite"></div>

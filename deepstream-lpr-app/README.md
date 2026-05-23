@@ -55,7 +55,7 @@ Jetson Console la web app product duy nhat tren port nay. Sidebar `Camera Monito
 
 ### Operator Agent
 
-Sidebar `Agent` cung cap mot operator agent de hoi dap ve camera, model library, deploy status, FPS, logs, events va result captures. Agent duoc thiet ke read-only: no co the doc trang thai va de xuat buoc thao tac, nhung khong tu deploy/stop/delete.
+Sidebar `Agent` cung cap mot operator agent de hoi dap ve camera, model library, deploy status, FPS, logs, events va result captures. Agent duoc thiet ke read-only: no co the doc trang thai va de xuat buoc thao tac, nhung khong tu deploy/stop/delete. Trong tab nay co **Agent Settings** de chon provider, model, API key/base URL va cac tham so LLM nhu temperature, max tokens, top P.
 
 Memory cua agent duoc luu persistent trong:
 
@@ -63,12 +63,21 @@ Memory cua agent duoc luu persistent trong:
 deepstream-lpr-app/runtime/agent-memory.json
 ```
 
-Mac dinh neu chua set API key, tab Agent van hoat dong o che do local summary de khong lam crash Jetson offline. De bat LangGraph/LangChain agent that, them vao `.env.product`:
+Agent settings duoc luu rieng trong:
+
+```text
+deepstream-lpr-app/runtime/agent-settings.json
+```
+
+Mac dinh neu chua set API key, tab Agent van hoat dong o che do local summary de khong lam crash Jetson offline. Co the cau hinh truc tiep tren UI, hoac set truoc trong `.env.product`:
 
 ```bash
 AGENT_ENABLED=1
 AGENT_PROVIDER=openai
 AGENT_MODEL=gpt-4.1-mini
+AGENT_TEMPERATURE=0.2
+AGENT_MAX_TOKENS=1200
+AGENT_TOP_P=1
 OPENAI_API_KEY=...
 ```
 

@@ -154,6 +154,43 @@ button.sidebar-link.active {
   font-size: 18px;
   overflow-wrap: anywhere;
 }
+.agent-settings-panel {
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+.agent-settings-panel summary {
+  cursor: pointer;
+  padding: 12px 14px;
+  color: var(--ink);
+  font-weight: 800;
+}
+.agent-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding: 14px;
+}
+.agent-settings-grid label {
+  min-width: 0;
+}
+.agent-settings-grid .checkbox-row {
+  align-self: end;
+  min-height: 42px;
+}
+.agent-settings-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.agent-settings-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
 .agent-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.6fr);
@@ -1696,6 +1733,7 @@ pre {
   .dashboard-kpis,
   .dashboard-grid,
   .agent-status,
+  .agent-settings-grid,
   .agent-layout,
   .monitor-stats,
   .monitor-layout,
