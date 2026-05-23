@@ -143,6 +143,7 @@ const els = {
   agentTemperature: document.querySelector("#agentTemperature"),
   agentMaxTokens: document.querySelector("#agentMaxTokens"),
   agentTopP: document.querySelector("#agentTopP"),
+  agentReasoningEffort: document.querySelector("#agentReasoningEffort"),
   agentEnabled: document.querySelector("#agentEnabled"),
   agentClearApiKey: document.querySelector("#agentClearApiKey"),
   saveAgentSettingsBtn: document.querySelector("#saveAgentSettingsBtn"),
@@ -514,12 +515,25 @@ function renderAgentSettings(settings = {}) {
   els.agentApiKey.value = "";
   els.agentClearApiKey.checked = false;
   els.agentBaseUrl.value = settings.baseUrl || "";
-  els.agentTemperature.value = settings.temperature ?? 0.2;
-  els.agentMaxTokens.value = settings.maxTokens ?? 1200;
-  els.agentTopP.value = settings.topP ?? 1;
+  els.agentTemperature.value = settings.temperature ?? "";
+  els.agentMaxTokens.value = settings.maxTokens ?? "";
+  els.agentTopP.value = settings.topP ?? "";
+  updateAgentParamVisibility();
   els.agentSettingsHint.textContent = settings.hasApiKey
     ? `API key set (${settings.apiKeySource || "settings"}). Leave blank to keep it.`
     : "No API key stored for this provider.";
+}
+
+function currentAgentModelSpec() {
+  if (!agentSettings) return {};
+  const provider = els.agentProvider.value || agentSettings.provider || "openai";
+  const spec = agentSettings.providers?.[provider] || {};
+  const selectedModel = els.agentModel.value;
+  const modelId = selectedModel === "__custom__"
+    ? (els.agentCustomModel.value.trim() || spec.defaultModel)
+    : selectedModel;
+  return (spec.models || []).find((model) => model.id === modelId)
+    || { id: modelId, ...(spec.customModel || { family: "chat", params: [] }), custom: true };
 }
 
 function renderAgentModelOptions() {
@@ -528,14 +542,48 @@ function renderAgentModelOptions() {
   const spec = agentSettings.providers?.[provider] || {};
   const models = spec.models || [];
   const currentModel = agentSettings.provider === provider ? agentSettings.model : spec.defaultModel;
-  const hasCurrent = models.includes(currentModel);
+  const modelIds = models.map((model) => typeof model === "string" ? model : model.id);
+  const hasCurrent = modelIds.includes(currentModel);
   els.agentModel.innerHTML = [
-    ...models.map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`),
+    ...models.map((model) => {
+      const item = typeof model === "string" ? { id: model, label: model } : model;
+      return `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label || item.id)}</option>`;
+    }),
     `<option value="__custom__">Custom...</option>`
   ].join("");
   els.agentModel.value = hasCurrent ? currentModel : "__custom__";
   els.agentCustomModel.value = hasCurrent ? "" : (currentModel || "");
-  if (els.agentBaseUrl && spec.baseUrl && !els.agentBaseUrl.value) els.agentBaseUrl.value = spec.baseUrl;
+  els.agentBaseUrl.placeholder = spec.baseUrlPlaceholder || "Provider default";
+  if (els.agentBaseUrl && spec.baseUrl && !els.agentBaseUrl.value && provider === "ollama") els.agentBaseUrl.value = spec.baseUrl;
+  updateAgentParamVisibility();
+}
+
+function updateAgentParamVisibility() {
+  if (!agentSettings) return;
+  const model = currentAgentModelSpec();
+  const params = new Set(model.params || []);
+  document.querySelectorAll("[data-agent-param]").forEach((field) => {
+    const param = field.dataset.agentParam;
+    const visible = params.has(param);
+    field.hidden = !visible;
+    field.querySelectorAll("input, select").forEach((input) => {
+      input.disabled = !visible;
+    });
+  });
+  if (els.agentReasoningEffort) {
+    const efforts = model.reasoningEfforts || ["low", "medium", "high"];
+    els.agentReasoningEffort.innerHTML = [
+      `<option value="">Provider default${model.defaultReasoningEffort ? ` (${escapeHtml(model.defaultReasoningEffort)})` : ""}</option>`,
+      ...efforts.map((effort) => `<option value="${escapeHtml(effort)}">${escapeHtml(effort)}</option>`)
+    ].join("");
+    els.agentReasoningEffort.value = agentSettings.reasoningEffort || "";
+  }
+  const summary = model.family === "reasoning"
+    ? "Reasoning model: sampling params hidden; use reasoning effort when needed."
+    : "Chat model: sampling params are optional; blank means provider default.";
+  if (els.agentSettingsHint && !agentSettings.hasApiKey) {
+    els.agentSettingsHint.textContent = summary;
+  }
 }
 
 function renderAgentMessages() {
@@ -678,9 +726,10 @@ function readAgentSettingsForm() {
     apiKey: els.agentApiKey.value.trim(),
     clearApiKey: els.agentClearApiKey.checked,
     baseUrl: els.agentBaseUrl.value.trim(),
-    temperature: Number(els.agentTemperature.value),
-    maxTokens: Number(els.agentMaxTokens.value),
-    topP: Number(els.agentTopP.value)
+    temperature: els.agentTemperature.value === "" ? "" : Number(els.agentTemperature.value),
+    maxTokens: els.agentMaxTokens.value === "" ? "" : Number(els.agentMaxTokens.value),
+    topP: els.agentTopP.value === "" ? "" : Number(els.agentTopP.value),
+    reasoningEffort: els.agentReasoningEffort.value
   };
 }
 
@@ -2942,7 +2991,9 @@ els.testAgentKeyBtn?.addEventListener("click", () => testAgentKey().catch((error
 els.agentProvider?.addEventListener("change", renderAgentModelOptions);
 els.agentModel?.addEventListener("change", () => {
   if (els.agentModel.value === "__custom__") els.agentCustomModel.focus();
+  updateAgentParamVisibility();
 });
+els.agentCustomModel?.addEventListener("input", updateAgentParamVisibility);
 els.agentApiKey?.addEventListener("input", () => {
   els.agentApiKey.type = "password";
 });

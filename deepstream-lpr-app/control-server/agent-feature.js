@@ -12,14 +12,37 @@ const PROVIDER_SPECS = {
     needsApiKey: true,
     apiKeyEnv: "OPENAI_API_KEY",
     defaultModel: "gpt-4.1-mini",
-    models: ["gpt-4.1-mini", "gpt-4.1", "gpt-4o-mini", "gpt-4o", "o4-mini"]
+    baseUrlLabel: "Base URL",
+    baseUrlPlaceholder: "Provider default: https://api.openai.com/v1",
+    models: [
+      { id: "gpt-5.1", label: "GPT-5.1", family: "reasoning", params: ["maxTokens", "reasoningEffort"], reasoningEfforts: ["none", "low", "medium", "high"], defaultReasoningEffort: "none" },
+      { id: "gpt-5.1-mini", label: "GPT-5.1 Mini", family: "reasoning", params: ["maxTokens", "reasoningEffort"], reasoningEfforts: ["none", "low", "medium", "high"], defaultReasoningEffort: "none" },
+      { id: "gpt-5", label: "GPT-5", family: "reasoning", params: ["maxTokens", "reasoningEffort"], reasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "medium" },
+      { id: "gpt-5-mini", label: "GPT-5 Mini", family: "reasoning", params: ["maxTokens", "reasoningEffort"], reasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "medium" },
+      { id: "gpt-5-nano", label: "GPT-5 Nano", family: "reasoning", params: ["maxTokens", "reasoningEffort"], reasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "medium" },
+      { id: "o4-mini", label: "o4-mini", family: "reasoning", params: ["maxTokens", "reasoningEffort"], reasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "medium" },
+      { id: "gpt-4.1-mini", label: "GPT-4.1 Mini", family: "chat", params: ["temperature", "maxTokens", "topP"] },
+      { id: "gpt-4.1", label: "GPT-4.1", family: "chat", params: ["temperature", "maxTokens", "topP"] },
+      { id: "gpt-4o-mini", label: "GPT-4o Mini", family: "chat", params: ["temperature", "maxTokens", "topP"] },
+      { id: "gpt-4o", label: "GPT-4o", family: "chat", params: ["temperature", "maxTokens", "topP"] }
+    ],
+    customModel: { family: "chat", params: ["temperature", "maxTokens", "topP"] }
   },
   ollama: {
     label: "Ollama",
     needsApiKey: false,
     defaultModel: "llama3.1",
     baseUrl: "http://localhost:11434",
-    models: ["llama3.1", "llama3.2", "qwen2.5", "gemma3", "mistral"]
+    baseUrlLabel: "Base URL",
+    baseUrlPlaceholder: "Provider default: http://localhost:11434",
+    models: [
+      { id: "llama3.1", label: "Llama 3.1", family: "chat", params: ["temperature", "maxTokens", "topP"] },
+      { id: "llama3.2", label: "Llama 3.2", family: "chat", params: ["temperature", "maxTokens", "topP"] },
+      { id: "qwen2.5", label: "Qwen 2.5", family: "chat", params: ["temperature", "maxTokens", "topP"] },
+      { id: "gemma3", label: "Gemma 3", family: "chat", params: ["temperature", "maxTokens", "topP"] },
+      { id: "mistral", label: "Mistral", family: "chat", params: ["temperature", "maxTokens", "topP"] }
+    ],
+    customModel: { family: "chat", params: ["temperature", "maxTokens", "topP"] }
   }
 };
 
@@ -75,9 +98,23 @@ function providerSpec(provider) {
 }
 
 function clampNumber(value, fallback, min, max) {
+  if (value === "" || value === null || value === undefined) return fallback;
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.min(max, Math.max(min, number));
+}
+
+function optionalNumber(value, min, max) {
+  if (value === "" || value === null || value === undefined) return null;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  return Math.min(max, Math.max(min, number));
+}
+
+function modelSpec(provider, model) {
+  const spec = providerSpec(provider);
+  const found = (spec.models || []).find((item) => item.id === model);
+  return found || { id: model, label: model, ...(spec.customModel || { family: "chat", params: [] }), custom: true };
 }
 
 function createAgentFeature(options) {
@@ -115,9 +152,10 @@ function createAgentFeature(options) {
       enabled: process.env.AGENT_ENABLED !== "0",
       provider,
       model: process.env.AGENT_MODEL || spec.defaultModel,
-      temperature: clampNumber(process.env.AGENT_TEMPERATURE, 0.2, 0, 2),
-      maxTokens: clampNumber(process.env.AGENT_MAX_TOKENS, 1200, 128, 8000),
-      topP: clampNumber(process.env.AGENT_TOP_P, 1, 0, 1),
+      temperature: optionalNumber(process.env.AGENT_TEMPERATURE, 0, 2),
+      maxTokens: optionalNumber(process.env.AGENT_MAX_TOKENS, 128, 8000),
+      topP: optionalNumber(process.env.AGENT_TOP_P, 0, 1),
+      reasoningEffort: process.env.AGENT_REASONING_EFFORT || "",
       baseUrl: process.env.AGENT_BASE_URL || spec.baseUrl || "",
       apiKey: process.env[spec.apiKeyEnv] || "",
       updatedAt: null
@@ -140,9 +178,10 @@ function createAgentFeature(options) {
       enabled: stored.enabled ?? defaults.enabled,
       provider,
       model: String(stored.model || defaults.model || spec.defaultModel).trim(),
-      temperature: clampNumber(stored.temperature, defaults.temperature, 0, 2),
-      maxTokens: clampNumber(stored.maxTokens, defaults.maxTokens, 128, 8000),
-      topP: clampNumber(stored.topP, defaults.topP, 0, 1),
+      temperature: optionalNumber(stored.temperature ?? defaults.temperature, 0, 2),
+      maxTokens: optionalNumber(stored.maxTokens ?? defaults.maxTokens, 128, 8000),
+      topP: optionalNumber(stored.topP ?? defaults.topP, 0, 1),
+      reasoningEffort: String(stored.reasoningEffort ?? defaults.reasoningEffort ?? "").trim(),
       baseUrl: String(stored.baseUrl || defaults.baseUrl || spec.baseUrl || "").trim(),
       hasApiKey: Boolean(apiKey),
       apiKeySource: apiKeyFromEnv ? "env" : (stored.apiKey ? "settings" : ""),
@@ -171,9 +210,10 @@ function createAgentFeature(options) {
       enabled: input.enabled === undefined ? current.enabled : Boolean(input.enabled),
       provider,
       model: String(input.model || current.model || spec.defaultModel).trim(),
-      temperature: clampNumber(input.temperature, current.temperature, 0, 2),
-      maxTokens: clampNumber(input.maxTokens, current.maxTokens, 128, 8000),
-      topP: clampNumber(input.topP, current.topP, 0, 1),
+      temperature: optionalNumber(input.temperature, 0, 2),
+      maxTokens: optionalNumber(input.maxTokens, 128, 8000),
+      topP: optionalNumber(input.topP, 0, 1),
+      reasoningEffort: String(input.reasoningEffort || "").trim(),
       baseUrl: String(input.baseUrl || current.baseUrl || spec.baseUrl || "").trim(),
       apiKey: current.apiKey || "",
       updatedAt: new Date().toISOString()
@@ -200,9 +240,10 @@ function createAgentFeature(options) {
       enabled: input.enabled === undefined ? current.enabled : Boolean(input.enabled),
       provider,
       model: String(input.model || current.model || spec.defaultModel).trim(),
-      temperature: clampNumber(input.temperature, current.temperature, 0, 2),
-      maxTokens: clampNumber(input.maxTokens, current.maxTokens, 128, 8000),
-      topP: clampNumber(input.topP, current.topP, 0, 1),
+      temperature: optionalNumber(input.temperature, 0, 2),
+      maxTokens: optionalNumber(input.maxTokens, 128, 8000),
+      topP: optionalNumber(input.topP, 0, 1),
+      reasoningEffort: String(input.reasoningEffort || "").trim(),
       baseUrl: String(input.baseUrl || current.baseUrl || spec.baseUrl || "").trim(),
       apiKey,
       hasApiKey: Boolean(apiKey)
@@ -316,12 +357,14 @@ function createAgentFeature(options) {
       provider: settings.provider,
       providerLabel: spec.label,
       model: settings.model,
+      modelSpec: modelSpec(settings.provider, settings.model),
       configured: settings.enabled && (!spec.needsApiKey || settings.hasApiKey),
       hasApiKey: settings.hasApiKey,
       apiKeySource: settings.apiKeySource,
       temperature: settings.temperature,
       maxTokens: settings.maxTokens,
       topP: settings.topP,
+      reasoningEffort: settings.reasoningEffort,
       baseUrl: settings.baseUrl,
       memoryFile: path.relative(appRoot, memoryFile).replace(/\\/g, "/"),
       settingsFile: path.relative(appRoot, settingsFile).replace(/\\/g, "/"),
@@ -330,11 +373,8 @@ function createAgentFeature(options) {
   }
 
   async function createTools(threadId) {
-    const [{ tool }, zod] = await Promise.all([
-      import("@langchain/core/tools"),
-      import("zod")
-    ]);
-    const { z } = zod;
+    const { tool } = require("@langchain/core/tools");
+    const { z } = require("zod");
 
     return [
       tool(async () => compactJson(await appSnapshot(), 9000), {
@@ -402,24 +442,32 @@ function createAgentFeature(options) {
 
   async function createChatModel(settings) {
     const spec = providerSpec(settings.provider);
+    const currentModelSpec = modelSpec(settings.provider, settings.model);
     if (settings.provider === "ollama") {
-      const { ChatOllama } = await import("@langchain/ollama");
-      return new ChatOllama({
+      const { ChatOllama } = require("@langchain/ollama");
+      const options = {
         model: settings.model || spec.defaultModel,
-        baseUrl: settings.baseUrl || spec.baseUrl,
-        temperature: settings.temperature,
-        numPredict: settings.maxTokens
-      });
+        baseUrl: settings.baseUrl || spec.baseUrl
+      };
+      if (currentModelSpec.params?.includes("temperature") && settings.temperature !== null) options.temperature = settings.temperature;
+      if (currentModelSpec.params?.includes("maxTokens") && settings.maxTokens !== null) options.numPredict = settings.maxTokens;
+      if (currentModelSpec.params?.includes("topP") && settings.topP !== null) options.topP = settings.topP;
+      return new ChatOllama(options);
     }
-    const { ChatOpenAI } = await import("@langchain/openai");
-    return new ChatOpenAI({
+    const { ChatOpenAI } = require("@langchain/openai");
+    const options = {
       model: settings.model || spec.defaultModel,
-      temperature: settings.temperature,
-      maxTokens: settings.maxTokens,
-      topP: settings.topP,
       apiKey: settings.apiKey,
       timeout: 20000
-    });
+    };
+    if (settings.baseUrl) options.configuration = { baseURL: settings.baseUrl };
+    if (currentModelSpec.params?.includes("temperature") && settings.temperature !== null) options.temperature = settings.temperature;
+    if (currentModelSpec.params?.includes("maxTokens") && settings.maxTokens !== null) options.maxTokens = settings.maxTokens;
+    if (currentModelSpec.params?.includes("topP") && settings.topP !== null) options.topP = settings.topP;
+    if (currentModelSpec.params?.includes("reasoningEffort") && settings.reasoningEffort) {
+      options.reasoning = { effort: settings.reasoningEffort };
+    }
+    return new ChatOpenAI(options);
   }
 
   async function testAgentSettings(input = {}) {
@@ -485,7 +533,7 @@ function createAgentFeature(options) {
       return { answer, toolCalls: [], snapshot, thread: (await getThread(state.threadId)).thread, status: await status() };
     }
 
-    const { createReactAgent } = await import("@langchain/langgraph/prebuilt");
+    const { createReactAgent } = require("@langchain/langgraph/prebuilt");
     const model = await createChatModel(settings);
     const tools = await createTools(state.threadId);
     const agent = createReactAgent({ llm: model, tools });

@@ -75,11 +75,14 @@ Mac dinh neu chua set API key, tab Agent van hoat dong o che do local summary de
 AGENT_ENABLED=1
 AGENT_PROVIDER=openai
 AGENT_MODEL=gpt-4.1-mini
-AGENT_TEMPERATURE=0.2
-AGENT_MAX_TOKENS=1200
-AGENT_TOP_P=1
+AGENT_TEMPERATURE=
+AGENT_MAX_TOKENS=
+AGENT_TOP_P=
+AGENT_REASONING_EFFORT=
 OPENAI_API_KEY=...
 ```
+
+Neu cac tham so LLM de trong, provider se dung default cua chinh provider/model. UI se chi hien cac tham so phu hop voi model dang chon, vi reasoning model va chat model khong dung chung mot bo option.
 
 Sau do restart product:
 
