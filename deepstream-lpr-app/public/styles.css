@@ -1031,6 +1031,32 @@ button.zone-chip.active {
   color: var(--muted);
   font-size: 12px;
 }
+.rule-chip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px;
+  background: #fff;
+}
+.rule-chip div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.rule-chip span,
+.rule-chip em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+button.small-button {
+  min-height: 32px;
+  padding: 6px 9px;
+  font-size: 12px;
+}
 .deploy-app-list {
   display: grid;
   gap: 12px;

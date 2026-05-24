@@ -49,6 +49,7 @@ class LprRuntime:
         self.last_capture_error = ""
         self.streams = self.normalize_streams(config)
         self.captured = {}
+        self.object_zone_history = {}
         self.started_at = time.time()
         self.fps_stats = {}
         self.last_status_write = 0.0
@@ -289,11 +290,57 @@ class LprRuntime:
             "cooldownSec": stream_config.get("captureCooldownSec", 30),
         }]
 
+    def stream_rules(self, stream_config):
+        rules = stream_config.get("rules") or []
+        normalized = []
+        for index, rule in enumerate(rules):
+            if rule.get("enabled", True) is False:
+                continue
+            rule_type = rule.get("type") or "sequence"
+            if rule_type != "sequence":
+                continue
+            first_zone_id = str(rule.get("firstZoneId") or "").strip()
+            second_zone_id = str(rule.get("secondZoneId") or "").strip()
+            if not first_zone_id or not second_zone_id or first_zone_id == second_zone_id:
+                continue
+            action = rule.get("action") or "capture"
+            if action not in {"capture", "ignore"}:
+                action = "capture"
+            reverse_action = rule.get("reverseAction") or "ignore"
+            if reverse_action not in {"capture", "ignore"}:
+                reverse_action = "ignore"
+            normalized.append({
+                "id": str(rule.get("id") or f"rule-{index + 1}"),
+                "name": rule.get("name") or f"Rule {index + 1}",
+                "type": "sequence",
+                "firstZoneId": first_zone_id,
+                "secondZoneId": second_zone_id,
+                "action": action,
+                "reverseAction": reverse_action,
+                "maxTimeSec": float(rule.get("maxTimeSec") or 5),
+                "cooldownSec": rule.get("cooldownSec", ""),
+                "classIds": self.class_id_set(rule.get("classIds")),
+            })
+        return normalized
+
     def zone_matches(self, zone, class_id, x, y):
         class_ids = zone.get("classIds") or set()
         if class_ids and int(class_id) not in class_ids:
             return False
         return self.point_in_polygon(zone.get("polygon") or [], x, y)
+
+    def all_matching_zones(self, stream_config, class_id, x, y):
+        zones = self.stream_zones(stream_config)
+        ignored = [
+            zone for zone in zones
+            if zone.get("mode") == "ignore_inside" and self.zone_matches(zone, class_id, x, y)
+        ]
+        if ignored:
+            return []
+        return [
+            zone for zone in zones
+            if zone.get("mode") != "ignore_inside" and self.zone_matches(zone, class_id, x, y)
+        ]
 
     def matching_zones(self, stream_config, class_id, x, y, processor_type):
         zones = self.stream_zones(stream_config)
@@ -318,6 +365,67 @@ class LprRuntime:
             return False
         self.captured[key] = now
         return True
+
+    def update_object_zone_history(self, source_id, object_key, zones):
+        now = time.time()
+        key = (source_id, object_key)
+        history = self.object_zone_history.setdefault(key, [])
+        seen_now = {zone.get("id") for zone in zones}
+        for zone in zones:
+            zone_id = zone.get("id")
+            if not zone_id:
+                continue
+            if history and history[-1].get("zoneId") == zone_id:
+                continue
+            history.append({
+                "zoneId": zone_id,
+                "zoneName": zone.get("name"),
+                "ts": now
+            })
+        self.object_zone_history[key] = [
+            item for item in history[-20:]
+            if now - float(item.get("ts") or now) <= 120 or item.get("zoneId") in seen_now
+        ]
+        return self.object_zone_history[key]
+
+    def sequence_rule_action(self, rule, history, current_zone_id):
+        now = time.time()
+        first = rule.get("firstZoneId")
+        second = rule.get("secondZoneId")
+        max_time = float(rule.get("maxTimeSec") or 5)
+        if current_zone_id == second:
+            for item in reversed(history):
+                if item.get("zoneId") == first and now - float(item.get("ts") or 0) <= max_time:
+                    return rule.get("action") or "capture", "forward"
+        if current_zone_id == first:
+            for item in reversed(history):
+                if item.get("zoneId") == second and now - float(item.get("ts") or 0) <= max_time:
+                    return rule.get("reverseAction") or "ignore", "reverse"
+        return None, None
+
+    def rule_capture_targets(self, stream_config, source_id, object_key, class_id, zones):
+        rules = self.stream_rules(stream_config)
+        if not rules:
+            return []
+        history = self.update_object_zone_history(source_id, object_key, zones)
+        targets = []
+        zones_by_id = {zone.get("id"): zone for zone in zones}
+        for rule in rules:
+            class_ids = rule.get("classIds") or set()
+            if class_ids and int(class_id) not in class_ids:
+                continue
+            for zone in zones:
+                action, direction = self.sequence_rule_action(rule, history, zone.get("id"))
+                if action != "capture":
+                    continue
+                cooldown_sec = float(rule.get("cooldownSec") or zone.get("cooldownSec") or stream_config.get("captureCooldownSec", 30))
+                targets.append({
+                    "zone": zones_by_id.get(zone.get("id"), zone),
+                    "rule": rule,
+                    "direction": direction,
+                    "cooldownSec": cooldown_sec,
+                })
+        return targets
 
     def extract_plate_text(self, obj_meta):
         labels = self.extract_classifier_labels(obj_meta)
@@ -506,17 +614,30 @@ class LprRuntime:
                 roi_point = vehicle.get("footCenter") or vehicle["center"]
                 roi_x = float(roi_point["x"])
                 roi_y = float(roi_point["y"])
-                zones = self.matching_zones(stream_config, vehicle["classId"], roi_x, roi_y, "lpr")
-                if not zones:
-                    continue
+                rules = self.stream_rules(stream_config)
+                if rules:
+                    rule_zones = self.all_matching_zones(stream_config, vehicle["classId"], roi_x, roi_y)
+                    if not rule_zones:
+                        continue
+                    rule_targets = self.rule_capture_targets(stream_config, source_id, object_id, vehicle["classId"], rule_zones)
+                    if not rule_targets:
+                        continue
+                    capture_targets = rule_targets
+                else:
+                    zones = self.matching_zones(stream_config, vehicle["classId"], roi_x, roi_y, "lpr")
+                    if not zones:
+                        continue
+                    capture_targets = [{"zone": zone, "rule": None, "direction": "", "cooldownSec": float(zone.get("cooldownSec") or stream_config.get("captureCooldownSec", 30))} for zone in zones]
 
-                for zone in zones:
-                    cooldown_sec = float(zone.get("cooldownSec") or stream_config.get("captureCooldownSec", 30))
-                    capture_key = f"{zone.get('id')}:{object_id}"
+                for target in capture_targets:
+                    zone = target["zone"]
+                    rule = target.get("rule")
+                    cooldown_sec = float(target.get("cooldownSec") or zone.get("cooldownSec") or stream_config.get("captureCooldownSec", 30))
+                    capture_key = f"{zone.get('id')}:{rule.get('id') if rule else 'default'}:{object_id}"
                     if not self.should_capture(source_id, capture_key, cooldown_sec):
                         continue
 
-                    event_id = f"{int(time.time())}_{source_id}_{frame_meta.frame_num}_{object_id}_{zone.get('id')}"
+                    event_id = f"{int(time.time())}_{source_id}_{frame_meta.frame_num}_{object_id}_{zone.get('id')}_{rule.get('id') if rule else 'default'}"
                     event_id = re.sub(r"[^a-zA-Z0-9_.-]+", "-", event_id)
                     image_path = self.save_frame(gst_buffer, frame_meta, obj_meta, event_id, stream_config)
                     image_relative_path = str(Path(image_path).relative_to(self.runtime_dir)).replace("\\", "/") if image_path else None
@@ -535,6 +656,10 @@ class LprRuntime:
                         "zoneName": zone.get("name"),
                         "zoneMode": zone.get("mode"),
                         "zonePolygon": zone.get("polygon") or [],
+                        "ruleId": rule.get("id") if rule else None,
+                        "ruleName": rule.get("name") if rule else None,
+                        "ruleType": rule.get("type") if rule else None,
+                        "ruleDirection": target.get("direction") if rule else None,
                         "objectId": object_id,
                         "frameNum": int(frame_meta.frame_num),
                         "frameWidth": int(frame_meta.source_frame_width),
@@ -577,18 +702,34 @@ class LprRuntime:
                 roi_point = payload.get("footCenter") or payload["center"]
                 roi_x = float(roi_point["x"])
                 roi_y = float(roi_point["y"])
-                zones = self.matching_zones(stream_config, payload["classId"], roi_x, roi_y, "generic_detection")
-                if not zones:
-                    obj_list = obj_list.next
-                    continue
+                object_key = f"{payload['componentId']}:{payload['objectId']}"
+                rules = self.stream_rules(stream_config)
+                if rules:
+                    rule_zones = self.all_matching_zones(stream_config, payload["classId"], roi_x, roi_y)
+                    if not rule_zones:
+                        obj_list = obj_list.next
+                        continue
+                    rule_targets = self.rule_capture_targets(stream_config, source_id, object_key, payload["classId"], rule_zones)
+                    if not rule_targets:
+                        obj_list = obj_list.next
+                        continue
+                    capture_targets = rule_targets
+                else:
+                    zones = self.matching_zones(stream_config, payload["classId"], roi_x, roi_y, "generic_detection")
+                    if not zones:
+                        obj_list = obj_list.next
+                        continue
+                    capture_targets = [{"zone": zone, "rule": None, "direction": "", "cooldownSec": float(zone.get("cooldownSec") or stream_config.get("captureCooldownSec", 30))} for zone in zones]
 
-                for zone in zones:
-                    cooldown_sec = float(zone.get("cooldownSec") or stream_config.get("captureCooldownSec", 30))
-                    capture_key = f"{zone.get('id')}:{payload['componentId']}:{payload['objectId']}"
+                for target in capture_targets:
+                    zone = target["zone"]
+                    rule = target.get("rule")
+                    cooldown_sec = float(target.get("cooldownSec") or zone.get("cooldownSec") or stream_config.get("captureCooldownSec", 30))
+                    capture_key = f"{zone.get('id')}:{rule.get('id') if rule else 'default'}:{payload['componentId']}:{payload['objectId']}"
                     if not self.should_capture(source_id, capture_key, cooldown_sec, "generic_detection"):
                         continue
 
-                    event_id = f"{int(time.time())}_{source_id}_{frame_meta.frame_num}_{payload['componentId']}_{payload['objectId']}_{zone.get('id')}"
+                    event_id = f"{int(time.time())}_{source_id}_{frame_meta.frame_num}_{payload['componentId']}_{payload['objectId']}_{zone.get('id')}_{rule.get('id') if rule else 'default'}"
                     event_id = re.sub(r"[^a-zA-Z0-9_.-]+", "-", event_id)
                     image_path = self.save_frame(gst_buffer, frame_meta, obj_meta, event_id, stream_config)
                     image_relative_path = str(Path(image_path).relative_to(self.runtime_dir)).replace("\\", "/") if image_path else None
@@ -604,6 +745,10 @@ class LprRuntime:
                         "zoneName": zone.get("name"),
                         "zoneMode": zone.get("mode"),
                         "zonePolygon": zone.get("polygon") or [],
+                        "ruleId": rule.get("id") if rule else None,
+                        "ruleName": rule.get("name") if rule else None,
+                        "ruleType": rule.get("type") if rule else None,
+                        "ruleDirection": target.get("direction") if rule else None,
                         "frameWidth": int(frame_meta.source_frame_width),
                         "frameHeight": int(frame_meta.source_frame_height),
                         "roiPoint": roi_point,

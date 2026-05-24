@@ -484,6 +484,7 @@ function defaultConfig() {
         enabled: true,
         roi: { polygon: [] },
         zones: [],
+        rules: [],
         frontVehicleClassIds: [0],
         captureCooldownSec: 30
       }
@@ -860,6 +861,39 @@ function normalizeZones(stream, fallbackStream) {
   }, 0, stream)];
 }
 
+function normalizeRule(rule, index, zones = [], streamDefaults = {}) {
+  const id = String(rule?.id || `rule-${index + 1}`).trim() || `rule-${index + 1}`;
+  const zoneIds = new Set(zones.map((zone) => zone.id));
+  const firstZoneId = String(rule?.firstZoneId || "").trim();
+  const secondZoneId = String(rule?.secondZoneId || "").trim();
+  const type = rule?.type === "sequence" ? "sequence" : "sequence";
+  const action = ["capture", "ignore"].includes(rule?.action) ? rule.action : "capture";
+  const reverseAction = ["capture", "ignore"].includes(rule?.reverseAction) ? rule.reverseAction : "ignore";
+  const cooldown = rule?.cooldownSec === "" || rule?.cooldownSec === null || rule?.cooldownSec === undefined
+    ? ""
+    : Math.max(1, Number(rule.cooldownSec || streamDefaults.captureCooldownSec || 30));
+  return {
+    id,
+    name: String(rule?.name || `Rule ${index + 1}`).trim() || `Rule ${index + 1}`,
+    enabled: rule?.enabled !== false,
+    type,
+    firstZoneId: zoneIds.has(firstZoneId) ? firstZoneId : firstZoneId,
+    secondZoneId: zoneIds.has(secondZoneId) ? secondZoneId : secondZoneId,
+    action,
+    reverseAction,
+    maxTimeSec: Math.max(1, Number(rule?.maxTimeSec || 5)),
+    cooldownSec: cooldown,
+    classIds: normalizeClassIds(rule?.classIds)
+  };
+}
+
+function normalizeRules(stream, zones) {
+  const sourceRules = Array.isArray(stream.rules) ? stream.rules : [];
+  return sourceRules
+    .map((rule, index) => normalizeRule(rule, index, zones, stream))
+    .filter((rule) => rule.firstZoneId && rule.secondZoneId && rule.firstZoneId !== rule.secondZoneId);
+}
+
 function normalizeStreams(inputStreams, fallback) {
   const sourceStreams = Array.isArray(inputStreams) ? inputStreams : null;
   const fallbackStream = {
@@ -873,6 +907,7 @@ function normalizeStreams(inputStreams, fallback) {
   };
   return (sourceStreams || [fallbackStream]).map((stream, index) => {
     const zones = normalizeZones(stream, fallbackStream);
+    const rules = normalizeRules(stream, zones);
     const polygon = zones.find((zone) => zone.polygon.length >= 3)?.polygon
       || normalizePolygon(stream.roi?.polygon || fallbackStream.roi.polygon);
     const classIds = normalizeClassIds(stream.frontVehicleClassIds);
@@ -883,6 +918,7 @@ function normalizeStreams(inputStreams, fallback) {
       enabled: stream.enabled !== false,
       roi: { polygon },
       zones,
+      rules,
       frontVehicleClassIds: classIds.length ? classIds : [0],
       captureCooldownSec: Math.max(1, Number(stream.captureCooldownSec || fallbackStream.captureCooldownSec || 30))
     };
