@@ -1093,6 +1093,8 @@ button.small-button {
   gap: 12px;
 }
 .deploy-camera-preview {
+  display: grid;
+  gap: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 10px;
@@ -1150,6 +1152,32 @@ button.small-button {
 .deploy-preview-image polygon.zone-5 {
   fill: rgba(20, 184, 166, 0.16);
   stroke: #14b8a6;
+}
+.deploy-zone-config,
+.deploy-rule-config {
+  display: grid;
+  gap: 9px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+.deploy-zone-row {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px;
+  background: #fbfcff;
+}
+.deploy-zone-row-head,
+.deploy-label-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.compact-label-options {
+  max-height: 118px;
+  overflow: auto;
 }
 .deploy-camera-preview small {
   display: block;

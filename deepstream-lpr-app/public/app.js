@@ -843,7 +843,7 @@ function formConfig() {
   const selectedCameraIds = new Set(activeDeployApp.cameraIds || []);
   return {
     streams: cameras.map((camera) => ({
-      ...camera,
+      ...applyDeployCameraSettings(camera, activeDeployApp),
       enabled: camera.enabled !== false && selectedCameraIds.has(camera.id)
     })),
     streamWidth: Number(els.streamWidth.value),
@@ -1211,9 +1211,53 @@ function defaultDeployApp(index = 0, cameras = []) {
     name: `DeepStream App ${index + 1}`,
     active: index === 0,
     cameraIds: cameras.filter((camera) => camera.enabled !== false).map((camera) => camera.id),
+    cameraSettings: {},
     processorType: "lpr",
     pipelineStages: defaultPipelineStages(),
     selectedModels: {}
+  };
+}
+
+function primaryStageForApp(app = {}) {
+  const stages = normalizePipelineStages(app.pipelineStages || stagesFromSelectedModels(app.selectedModels)).filter((stage) => stage.enabled);
+  return stages.find((stage) => !stage.operateOnGieId || Number(stage.gieId) === 1) || stages[0] || null;
+}
+
+function primaryStageModelFile(app = {}) {
+  const stage = primaryStageForApp(app);
+  return stage ? findModelFile(stage.modelGroup, stage.selectedModel) : null;
+}
+
+function deployCameraSettings(app = {}, camera = {}) {
+  const saved = app.cameraSettings?.[camera.id] || {};
+  const zones = cameraZones(camera).map((zone, index) => {
+    const override = Array.isArray(saved.zones)
+      ? saved.zones.find((item) => item.id === zone.id) || saved.zones[index] || {}
+      : {};
+    return normalizeZone({
+      ...zone,
+      ...override,
+      id: zone.id,
+      name: zone.name,
+      polygon: zone.polygon
+    }, index, camera);
+  });
+  const rules = cameraRules({ rules: saved.rules || camera.rules || [], zones }, zones);
+  return { zones, rules };
+}
+
+function applyDeployCameraSettings(camera = {}, app = {}) {
+  const settings = deployCameraSettings(app, camera);
+  const zones = settings.zones.map((zone, index) => normalizeZone({
+    ...zone,
+    polygon: cameraZones(camera)[index]?.polygon || zone.polygon,
+    name: cameraZones(camera)[index]?.name || zone.name
+  }, index, camera));
+  return {
+    ...camera,
+    zones,
+    rules: settings.rules,
+    roi: { polygon: primaryZonePolygon({ ...camera, zones }) }
   };
 }
 
@@ -1282,8 +1326,7 @@ function resetCameraSetting() {
 
 function updateCameraSettingStatus() {
   const camera = readCameraSetting();
-  const ruleSummary = camera.rules?.length ? `, ${camera.rules.length} rule${camera.rules.length === 1 ? "" : "s"}` : "";
-  els.cameraSettingRoiSummary.innerHTML = `<b>ROI setting</b> ${escapeHtml(zoneSummary(camera.zones) + ruleSummary)}`;
+  els.cameraSettingRoiSummary.innerHTML = `<b>ROI setting</b> ${escapeHtml(zoneSummary(camera.zones))}`;
   els.cameraSettingFrameSize.innerHTML = `<b>Frame size</b> ${escapeHtml(frameSizeSummary(camera.id))}`;
 }
 
@@ -1395,11 +1438,13 @@ function readDeployApps(cameras = readCameraCards()) {
       .map((input) => input.value)
       .filter((cameraId) => cameraIds.has(cameraId));
     const pipelineStages = readPipelineStages(card.querySelector("[data-deploy-stage-list]"));
+    const previousSettings = deployApps.find((app) => app.id === id)?.cameraSettings || {};
     return {
       id,
       name: card.querySelector("[data-deploy-field='name']").value.trim() || `DeepStream App ${index + 1}`,
       active: card.querySelector("[data-deploy-active]")?.checked || false,
       cameraIds: cameraSelections,
+      cameraSettings: { ...previousSettings, ...readDeployCameraSettings(card, cameras) },
       processorType: normalizeProcessorType(card.querySelector("[data-deploy-field='processorType']")?.value),
       pipelineStages,
       selectedModels: selectedModelsFromStages(pipelineStages)
@@ -1408,6 +1453,32 @@ function readDeployApps(cameras = readCameraCards()) {
   if (!apps.some((app) => app.active)) apps[0].active = true;
   apps = apps.map((app, index) => ({ ...app, active: index === apps.findIndex((item) => item.active) }));
   return apps;
+}
+
+function readDeployCameraSettings(card, cameras = readCameraCards()) {
+  const settings = {};
+  card.querySelectorAll("[data-deploy-preview-camera]").forEach((preview) => {
+    const cameraId = preview.dataset.deployPreviewCamera;
+    const camera = cameras.find((item) => item.id === cameraId);
+    if (!camera) return;
+    const zoneRows = [...preview.querySelectorAll("[data-deploy-zone-row]")];
+    const zones = zoneRows.map((row, index) => {
+      const field = (key) => row.querySelector(`[data-deploy-zone-field="${key}"]`);
+      const base = cameraZones(camera)[index] || {};
+      return normalizeZone({
+        id: field("id")?.value || base.id || `zone-${index + 1}`,
+        name: base.name || `Zone ${index + 1}`,
+        polygon: base.polygon || [],
+        enabled: field("enabled")?.checked !== false,
+        mode: field("mode")?.value || base.mode,
+        classIds: field("classIdsText")?.value || field("classIds")?.value || "",
+        cooldownSec: field("cooldownSec")?.value || ""
+      }, index, camera);
+    });
+    const rules = parseRulesValue(preview.querySelector("[data-deploy-camera-rules]")?.value).map((rule, index) => normalizeRule(rule, index, zones));
+    settings[cameraId] = { zones, rules };
+  });
+  return settings;
 }
 
 function renderDeployApps(apps = [], cameras = readCameraCards()) {
@@ -1419,6 +1490,7 @@ function renderDeployApps(apps = [], cameras = readCameraCards()) {
     ...app,
     active: app.active || (!existing.some((item) => item.active) && index === 0),
     cameraIds: Array.isArray(app.cameraIds) && app.cameraIds.length ? app.cameraIds : defaultDeployApp(index, normalizedCameras).cameraIds,
+    cameraSettings: app.cameraSettings || {},
     pipelineStages: normalizePipelineStages(app.pipelineStages || stagesFromSelectedModels(app.selectedModels)),
     selectedModels: selectedModelsFromStages(app.pipelineStages || stagesFromSelectedModels(app.selectedModels))
   }));
@@ -1472,7 +1544,7 @@ function renderDeployAppCard(app, index, cameras) {
         `).join("")}
       </div>
       <div class="deploy-preview-grid">
-        ${selectedCameras.length ? selectedCameras.map((camera) => renderDeployCameraPreview(camera)).join("") : '<div class="empty">Chon it nhat mot camera cho app nay.</div>'}
+        ${selectedCameras.length ? selectedCameras.map((camera) => renderDeployCameraPreview(camera, app, index)).join("") : '<div class="empty">Chon it nhat mot camera cho app nay.</div>'}
       </div>
     </article>
   `;
@@ -1482,9 +1554,12 @@ function latestCaptureForCamera(cameraId) {
   return deployCaptures.find((capture) => capture.cameraId === cameraId);
 }
 
-function renderDeployCameraPreview(camera) {
-  const zones = cameraZones(camera);
+function renderDeployCameraPreview(camera, app = {}, appIndex = 0) {
+  const settings = deployCameraSettings(app, camera);
+  const zones = settings.zones;
   const capture = latestCaptureForCamera(camera.id);
+  const modelFile = primaryStageModelFile(app);
+  const labels = modelFile?.labels || [];
   return `
     <article class="deploy-camera-preview" data-deploy-preview-camera="${escapeHtml(camera.id)}">
       <div class="deploy-preview-head">
@@ -1506,7 +1581,100 @@ function renderDeployCameraPreview(camera) {
         </div>
         <small>${escapeHtml(new Date(capture.updatedAt || capture.createdAt).toLocaleString())} - ${escapeHtml(zoneSummary(zones))}</small>
       ` : `<div class="empty">Chua co frame mau. Bam Capture sample de lay anh tu camera.</div>`}
+      <div class="deploy-zone-config">
+        <div class="stage-section-head">
+          <strong>Zone deploy logic</strong>
+          <small>${labels.length ? `${escapeHtml(modelFile.displayName || modelFile.name)} labels` : "No primary-stage labels loaded"}</small>
+        </div>
+        ${zones.map((zone, zoneIndex) => renderDeployZoneRow(zone, zoneIndex, labels)).join("")}
+      </div>
+      <input data-deploy-camera-rules type="hidden" value="${escapeHtml(JSON.stringify(settings.rules))}" />
+      ${renderDeployRuleEditor(camera, settings, appIndex)}
     </article>
+  `;
+}
+
+function renderDeployZoneRow(zone, zoneIndex, labels = []) {
+  const selected = new Set(String(zone.classIds || "").split(/[;,]/).map((item) => item.trim()).filter(Boolean));
+  return `
+    <div class="deploy-zone-row" data-deploy-zone-row>
+      <input data-deploy-zone-field="id" type="hidden" value="${escapeHtml(zone.id)}" />
+      <div class="deploy-zone-row-head">
+        <strong>${escapeHtml(zone.name || zone.id)}</strong>
+        <label class="inline-check"><input data-deploy-zone-field="enabled" type="checkbox" ${zone.enabled !== false ? "checked" : ""} /> enabled</label>
+      </div>
+      <div class="grid">
+        <label>Logic mode
+          <select data-deploy-zone-field="mode">
+            ${["capture_when_inside", "alert_when_inside", "lpr_only_inside", "detect_only_inside", "ignore_inside"].map((mode) => `
+              <option value="${mode}" ${zone.mode === mode ? "selected" : ""}>${escapeHtml(zoneModeLabel(mode))}</option>
+            `).join("")}
+          </select>
+        </label>
+        <label>Cooldown seconds <input data-deploy-zone-field="cooldownSec" type="number" min="1" value="${escapeHtml(zone.cooldownSec || "")}" placeholder="camera default" /></label>
+      </div>
+      <input data-deploy-zone-field="classIds" type="hidden" value="${escapeHtml(zone.classIds || "")}" />
+      <label>Desired class IDs <input data-deploy-zone-field="classIdsText" value="${escapeHtml(zone.classIds || "")}" placeholder="blank = all selected primary labels" /></label>
+      ${labels.length ? `
+        <div class="stage-label-tools deploy-label-tools">
+          <small>${labels.length} labels</small>
+          <button type="button" class="secondary small-button" data-select-all-zone-labels>Select all</button>
+        </div>
+        <div class="stage-label-options compact-label-options">
+          ${labels.map((label, index) => `
+            <label class="class-chip">
+              <input data-zone-class-option type="checkbox" value="${index}" ${selected.has(String(index)) ? "checked" : ""} />
+              <span>${index}: ${escapeHtml(label)}</span>
+            </label>
+          `).join("")}
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
+function renderDeployRuleEditor(camera, settings, appIndex = 0) {
+  const zones = settings.zones || [];
+  const zoneOptions = (selectedId = "") => zones.length
+    ? zones.map((zone) => `<option value="${escapeHtml(zone.id)}" ${zone.id === selectedId ? "selected" : ""}>${escapeHtml(zone.name || zone.id)}</option>`).join("")
+    : '<option value="">No zone</option>';
+  return `
+    <div class="deploy-rule-config">
+      <div class="stage-section-head">
+        <strong>Sequence rules</strong>
+        <small>Default neu khong co rule: capture theo zone logic.</small>
+      </div>
+      <div class="grid">
+        <label>Rule name <input data-rule-draft="name" placeholder="Zone 1 to Zone 2" /></label>
+        <label>First zone <select data-rule-draft="firstZoneId">${zoneOptions(zones[0]?.id || "")}</select></label>
+        <label>Then zone <select data-rule-draft="secondZoneId">${zoneOptions(zones[1]?.id || zones[0]?.id || "")}</select></label>
+        <label>Max seconds <input data-rule-draft="maxTimeSec" type="number" min="1" value="5" /></label>
+        <label>Reverse direction
+          <select data-rule-draft="reverseAction">
+            <option value="ignore">Ignore</option>
+            <option value="capture">Capture</option>
+          </select>
+        </label>
+        <label>Rule class IDs <input data-rule-draft="classIds" placeholder="blank = all desired zone labels" /></label>
+        <label>Cooldown seconds <input data-rule-draft="cooldownSec" type="number" min="1" placeholder="zone/camera default" /></label>
+        <label class="inline-check"><input data-rule-draft="enabled" type="checkbox" checked /> enabled</label>
+      </div>
+      <div class="actions inline-actions">
+        <button type="button" data-add-deploy-rule="${escapeHtml(camera.id)}" data-app-index="${appIndex}">Add sequence rule</button>
+      </div>
+      <div class="zone-list">
+        ${settings.rules?.length ? settings.rules.map((rule, index) => `
+          <div class="rule-chip">
+            <div>
+              <strong>${escapeHtml(rule.name || rule.id)}</strong>
+              <span>${escapeHtml(rule.firstZoneId)} -> ${escapeHtml(rule.secondZoneId)} - reverse ${escapeHtml(rule.reverseAction)} - ${escapeHtml(rule.maxTimeSec)}s</span>
+              <em>${rule.enabled === false ? "disabled" : "enabled"}</em>
+            </div>
+            <button type="button" class="danger small-button" data-delete-deploy-rule="${index}" data-camera-id="${escapeHtml(camera.id)}">Delete</button>
+          </div>
+        `).join("") : '<div class="empty">No custom rules for this camera.</div>'}
+      </div>
+    </div>
   `;
 }
 
@@ -1549,7 +1717,7 @@ function stageRowsMarkup(stages = []) {
       <div class="grid">
         <label>GIE ID <input data-stage-field="gieId" type="number" value="${escapeHtml(stage.gieId)}" /></label>
         <label>Operate on GIE ID <input data-stage-field="operateOnGieId" value="${escapeHtml(stage.operateOnGieId)}" placeholder="blank for PGIE" /></label>
-        <label>Selected class IDs <input data-stage-field="operateOnClassIdsText" value="${escapeHtml(stage.operateOnClassIds)}" placeholder="0;1 or blank" /></label>
+        <label>Stage class IDs (global) <input data-stage-field="operateOnClassIdsText" value="${escapeHtml(stage.operateOnClassIds)}" placeholder="blank = all labels from this stage" /></label>
       </div>
       <input data-stage-field="operateOnClassIds" type="hidden" value="${escapeHtml(stage.operateOnClassIds)}" />
       <div class="stage-label-picker" data-stage-label-picker>
@@ -1624,7 +1792,7 @@ function hydrateStageLabelPickers(root = document) {
     }
     picker.innerHTML = `
       <div class="stage-label-head">
-        <strong>Class IDs</strong>
+        <strong>Global stage labels</strong>
         <div class="stage-label-tools">
           <small>${escapeHtml(file.displayName || file.name)} - ${labels.length} labels</small>
           <button type="button" class="secondary" data-select-all-stage-labels>Select all</button>
@@ -1838,6 +2006,95 @@ function attachDeployAppHandlers() {
       renderDeployApps(readDeployApps(), readCameraCards());
     });
   });
+  document.querySelectorAll("[data-zone-class-option]").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => syncDeployZoneClassOptions(checkbox.closest("[data-deploy-zone-row]")));
+  });
+  document.querySelectorAll("[data-select-all-zone-labels]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const row = button.closest("[data-deploy-zone-row]");
+      row?.querySelectorAll("[data-zone-class-option]").forEach((checkbox) => {
+        checkbox.checked = true;
+      });
+      syncDeployZoneClassOptions(row);
+      renderDeployApps(readDeployApps(), readCameraCards());
+    });
+  });
+  document.querySelectorAll("[data-add-deploy-rule]").forEach((button) => {
+    button.addEventListener("click", () => addDeploySequenceRule(button));
+  });
+  document.querySelectorAll("[data-delete-deploy-rule]").forEach((button) => {
+    button.addEventListener("click", () => deleteDeploySequenceRule(button));
+  });
+}
+
+function syncDeployZoneClassOptions(row) {
+  if (!row) return;
+  const hidden = row.querySelector("[data-deploy-zone-field='classIds']");
+  const textInput = row.querySelector("[data-deploy-zone-field='classIdsText']");
+  if (!hidden || !textInput) return;
+  const checked = [...row.querySelectorAll("[data-zone-class-option]:checked")].map((item) => item.value);
+  if (checked.length) {
+    hidden.value = checked.join(";");
+    textInput.value = hidden.value;
+  } else {
+    hidden.value = textInput.value;
+  }
+}
+
+function addDeploySequenceRule(button) {
+  const card = button.closest("[data-deploy-app-card]");
+  const preview = button.closest("[data-deploy-preview-camera]");
+  const cameraId = button.dataset.addDeployRule;
+  if (!card || !preview || !cameraId) return;
+  const apps = readDeployApps();
+  const appIndex = [...document.querySelectorAll("[data-deploy-app-card]")].indexOf(card);
+  const app = apps[appIndex];
+  if (!app) return;
+  const settings = app.cameraSettings?.[cameraId] || { zones: [], rules: [] };
+  if ((settings.zones || []).length < 2) return print("Can it nhat 2 zone de tao sequence rule.");
+  const draft = (key) => preview.querySelector(`[data-rule-draft="${key}"]`);
+  const firstZoneId = draft("firstZoneId")?.value || "";
+  const secondZoneId = draft("secondZoneId")?.value || "";
+  if (!firstZoneId || !secondZoneId || firstZoneId === secondZoneId) {
+    return print("First zone va then zone phai khac nhau.");
+  }
+  const rules = [...(settings.rules || [])];
+  rules.push(normalizeRule({
+    id: `rule-${Date.now()}`,
+    name: draft("name")?.value || `${firstZoneId} to ${secondZoneId}`,
+    enabled: draft("enabled")?.checked !== false,
+    type: "sequence",
+    firstZoneId,
+    secondZoneId,
+    action: "capture",
+    reverseAction: draft("reverseAction")?.value || "ignore",
+    maxTimeSec: draft("maxTimeSec")?.value || 5,
+    classIds: draft("classIds")?.value || "",
+    cooldownSec: draft("cooldownSec")?.value || ""
+  }, rules.length, settings.zones));
+  app.cameraSettings = {
+    ...(app.cameraSettings || {}),
+    [cameraId]: { ...settings, rules }
+  };
+  renderDeployApps(apps, readCameraCards());
+}
+
+function deleteDeploySequenceRule(button) {
+  const card = button.closest("[data-deploy-app-card]");
+  const cameraId = button.dataset.cameraId;
+  if (!card || !cameraId) return;
+  const apps = readDeployApps();
+  const appIndex = [...document.querySelectorAll("[data-deploy-app-card]")].indexOf(card);
+  const app = apps[appIndex];
+  const settings = app?.cameraSettings?.[cameraId];
+  if (!app || !settings) return;
+  const rules = [...(settings.rules || [])];
+  rules.splice(Number(button.dataset.deleteDeployRule), 1);
+  app.cameraSettings = {
+    ...(app.cameraSettings || {}),
+    [cameraId]: { ...settings, rules }
+  };
+  renderDeployApps(apps, readCameraCards());
 }
 
 function attachDeployPreviewImageHandlers() {
@@ -2381,7 +2638,7 @@ function renderZoneControls() {
   const zones = selectedCameraZones();
   roiTool.zoneIndex = zones.length ? clamp(roiTool.zoneIndex, 0, zones.length - 1) : 0;
   els.roiZoneSelect.innerHTML = zones.length
-    ? zones.map((zone, index) => `<option value="${index}">${escapeHtml(zone.name || zone.id)} - ${escapeHtml(zoneModeLabel(zone.mode))}</option>`).join("")
+    ? zones.map((zone, index) => `<option value="${index}">${escapeHtml(zone.name || zone.id)}</option>`).join("")
     : '<option value="0">No zone yet</option>';
   els.roiZoneSelect.value = String(roiTool.zoneIndex);
   const zone = zones[roiTool.zoneIndex] || defaultZoneConfig(0);
@@ -2393,7 +2650,7 @@ function renderZoneControls() {
   els.roiZoneList.innerHTML = zones.length ? zones.map((item, index) => `
     <button type="button" class="zone-chip ${index === roiTool.zoneIndex ? "active" : ""}" data-zone-index="${index}">
       <strong>${escapeHtml(item.name || item.id)}</strong>
-      <span>${escapeHtml(zoneModeLabel(item.mode))} - ${cleanZonePolygon(item.polygon).length >= 3 ? `${item.polygon.length} pts` : "full frame"}</span>
+      <span>${cleanZonePolygon(item.polygon).length >= 3 ? `${item.polygon.length} pts` : "full frame"}</span>
     </button>
   `).join("") : '<div class="empty">No zone configured.</div>';
   els.roiZoneList.querySelectorAll("[data-zone-index]").forEach((button) => {
@@ -3170,6 +3427,7 @@ els.deployAppList.addEventListener("change", (event) => {
   if (event.target?.matches?.("[data-stage-field='selectedModel']")) {
     event.target.dataset.selectedValue = event.target.value;
     hydrateStageLabelPickers(event.target.closest("[data-stage-row]") || els.deployAppList);
+    renderDeployApps(readDeployApps(), readCameraCards());
     return;
   }
   renderDeployApps(readDeployApps(), readCameraCards());
