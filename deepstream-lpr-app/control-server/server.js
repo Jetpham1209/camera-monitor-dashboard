@@ -2871,7 +2871,12 @@ app.post("/api/deploy", async (req, res) => {
 });
 
 app.post("/api/stop", async (_req, res) => {
-  const result = await runCommand("docker", ["compose", "-f", COMPOSE_FILE, "down"], { cwd: APP_ROOT });
+  const composeResult = await runCommand("docker", ["compose", "-f", COMPOSE_FILE, "down", "--remove-orphans"], { cwd: APP_ROOT });
+  const removeResult = await runCommand("docker", ["rm", "-f", "deepstream-lpr"], { cwd: APP_ROOT });
+  const result = {
+    code: composeResult.code === 0 || removeResult.code === 0 ? 0 : composeResult.code,
+    output: `${composeResult.output || ""}${removeResult.output || ""}`
+  };
   await writeRuntimeStatus({
     state: "stopped",
     message: result.code === 0 ? "DeepStream container stopped." : "Failed to stop DeepStream container.",

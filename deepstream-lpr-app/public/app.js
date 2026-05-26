@@ -1994,6 +1994,7 @@ function attachDeployAppHandlers() {
       const current = readDeployApps();
       current.splice(Number(button.dataset.removeDeployApp), 1);
       renderDeployApps(current.length ? current : [defaultDeployApp(0, readCameraCards())]);
+      persistConfigAfterDeployAppChange("DeepStream app removed and saved.", button).catch((error) => print(error.message));
     });
   });
   document.querySelectorAll("[data-capture-deploy-sample]").forEach((button) => {
@@ -2025,6 +2026,16 @@ function attachDeployAppHandlers() {
   document.querySelectorAll("[data-delete-deploy-rule]").forEach((button) => {
     button.addEventListener("click", () => deleteDeploySequenceRule(button));
   });
+}
+
+async function persistConfigAfterDeployAppChange(message, button = null) {
+  const result = await withTask("config", button, "Saving...", async () => {
+    return await api("/api/config", { method: "PUT", body: JSON.stringify(formConfig()) });
+  });
+  setTaskStatus("config", "success", message);
+  renderConfig(result);
+  print({ message, deployApps: result.deployApps || [] });
+  return result;
 }
 
 function syncDeployZoneClassOptions(row) {
