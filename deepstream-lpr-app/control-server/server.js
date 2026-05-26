@@ -200,6 +200,15 @@ async function readRuntimeStatus() {
   });
 }
 
+async function writeRuntimeStatus(status) {
+  await fsp.mkdir(RUNTIME_DIR, { recursive: true });
+  await writeJson(path.join(RUNTIME_DIR, "status.json"), {
+    updatedAt: new Date().toISOString(),
+    sources: [],
+    ...status
+  });
+}
+
 async function inspectContainer(name) {
   const result = await runCommand("docker", ["inspect", name], { cwd: APP_ROOT });
   if (result.code !== 0) {
@@ -2863,19 +2872,48 @@ app.post("/api/deploy", async (req, res) => {
 
 app.post("/api/stop", async (_req, res) => {
   const result = await runCommand("docker", ["compose", "-f", COMPOSE_FILE, "down"], { cwd: APP_ROOT });
+  await writeRuntimeStatus({
+    state: "stopped",
+    message: result.code === 0 ? "DeepStream container stopped." : "Failed to stop DeepStream container.",
+    containerRunning: false,
+    output: tailOutput(result.output || "", 5000)
+  }).catch(() => {});
+  if (result.code === 0) {
+    const config = await getConfig().catch(() => null);
+    if (config) {
+      config.deploy = {
+        ...(config.deploy || {}),
+        lastStatus: "stopped",
+        lastOutput: tailOutput(result.output || "", 5000),
+        updatedAt: new Date().toISOString()
+      };
+      await writeJson(CONFIG_FILE, config).catch(() => {});
+    }
+  }
   res.status(result.code === 0 ? 200 : 500).json(result);
 });
 
 app.get("/api/deploy/status", async (_req, res) => {
-  const [container, runtimeStatus, logs] = await Promise.all([
+  const [container, rawRuntimeStatus, logs] = await Promise.all([
     inspectContainer("deepstream-lpr"),
     readRuntimeStatus(),
     runCommand("docker", ["logs", "--tail", "120", "deepstream-lpr"], { cwd: APP_ROOT }).catch((error) => ({ code: 1, output: error.message }))
   ]);
+  const runtimeStatus = container.running
+    ? rawRuntimeStatus
+    : {
+      ...rawRuntimeStatus,
+      state: container.exists ? "stopped" : "missing",
+      message: container.exists
+        ? "DeepStream container is not running."
+        : "DeepStream container is missing. Deploy an app to start runtime.",
+      sources: [],
+      staleStatus: rawRuntimeStatus.state === "playing"
+    };
   res.json({
     container,
     deepstream: {
-      started: runtimeStatus.state === "playing",
+      started: container.running && runtimeStatus.state === "playing",
       ...runtimeStatus
     },
     logs: tailOutput(logs.output || "", 12000),
