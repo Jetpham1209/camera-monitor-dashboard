@@ -1168,6 +1168,13 @@ function stageInferBatchSize(stage, sourceBatchSize, model = {}) {
   return Math.max(1, Number(stage.batchSize || builtBatchSize || sourceBatchSize || 1));
 }
 
+function modelClassIdRange(group, model = {}) {
+  const labels = resolveModelLabels(group, model.sourceKey || model.selectedBuildKey, model.build, model);
+  const labelCount = countLabelLines(hostPathFromWorkspace(labels));
+  const count = Math.max(0, Number(model.numClasses || model.build?.numClasses || labelCount || 0));
+  return Array.from({ length: count }, (_item, index) => index);
+}
+
 function applySelectedModels(config, selectedModels = {}) {
   const next = mergeConfig(defaultConfig(), config);
   const stageSelected = {};
@@ -2217,7 +2224,9 @@ async function generateRuntime(config) {
   const sourceBatchSize = Math.max(1, enabledRtspStreams(config).length || (config.streams || []).length || 1);
   const imageTestVehicleIds = normalizeClassIds(config.imageTest?.vehicleClassIds);
   const stages = normalizePipelineStages(config).filter((stage) => stage.enabled);
+  const stageByGieId = new Map(stages.map((stage) => [Number(stage.gieId), stage]));
   const primaryStage = stages.find((stage) => Number(stage.gieId) === 1 || !stage.operateOnGieId) || {};
+  const primaryStageId = Number(primaryStage.gieId || 1);
   const primaryVehicleClassIds = (
     config.testMode === "image-debug" && imageTestVehicleIds.length
       ? imageTestVehicleIds
@@ -2228,14 +2237,23 @@ async function generateRuntime(config) {
   config.pipelineStages = stages.map((stage) => {
     const model = config.models[stage.modelGroup] || {};
     let networkType = Number(stage.networkType ?? 0);
-    if (runtimeProcessorType === "lpr" && stage.modelGroup === "plate_ocr") {
+    const stageRole = String(stage.role || stage.gieType || "").toLowerCase();
+    const isTgieStage = stageRole === "tgie" || String(stage.gieType || "").toLowerCase() === "tgie";
+    if (runtimeProcessorType === "lpr" && isTgieStage) {
       const task = model.build?.task || model.task || "classify";
       const isDetector = task === "detect" || task === "auto" || model.ocrMode === "char_detector";
       networkType = isDetector ? 0 : 1;
     }
     let operateClassIds = normalizeClassIds(stage.operateOnClassIds);
-    if (runtimeProcessorType === "lpr" && stage.modelGroup === "plate_detector" && Number(stage.operateOnGieId) === 1 && primaryVehicleClassIds.length) {
-      operateClassIds = primaryVehicleClassIds;
+    if (runtimeProcessorType === "lpr" && stage.operateOnGieId) {
+      const parentStage = stageByGieId.get(Number(stage.operateOnGieId));
+      if (Number(stage.operateOnGieId) === primaryStageId && primaryVehicleClassIds.length) {
+        operateClassIds = primaryVehicleClassIds;
+      } else if (isTgieStage && parentStage) {
+        const parentModel = config.models[parentStage.modelGroup] || {};
+        const parentClassIds = modelClassIdRange(parentStage.modelGroup, parentModel);
+        if (parentClassIds.length) operateClassIds = parentClassIds;
+      }
     }
     const configFile = path.join(GENERATED_DIR, `config_infer_${stage.id}.txt`);
     return {
