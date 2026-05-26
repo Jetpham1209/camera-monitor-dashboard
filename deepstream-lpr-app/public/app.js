@@ -168,6 +168,7 @@ const els = {
 let cameraDrafts = [];
 let deployApps = [];
 let deployCaptures = [];
+let activeDeployAppId = "";
 let confirmedTestPipelineStages = [];
 let confirmedTestProcessorType = "lpr";
 let latestDeployStatus = {};
@@ -839,12 +840,20 @@ function sleep(ms) {
 function formConfig() {
   const cameras = readCameraCards();
   const deployProfiles = readDeployApps(cameras);
-  const activeDeployApp = deployProfiles.find((app) => app.active) || deployProfiles[0] || defaultDeployApp(0, cameras);
+  const activeDeployApp = deployProfiles.find((app) => app.active)
+    || deployProfiles.find((app) => app.id === activeDeployAppId)
+    || deployProfiles[0]
+    || defaultDeployApp(0, cameras);
+  activeDeployAppId = activeDeployApp.id;
+  const normalizedDeployProfiles = deployProfiles.map((app) => ({
+    ...app,
+    active: app.id === activeDeployApp.id
+  }));
   const selectedCameraIds = new Set(activeDeployApp.cameraIds || []);
   return {
     streams: cameras.map((camera) => ({
       ...applyDeployCameraSettings(camera, activeDeployApp),
-      enabled: camera.enabled !== false && selectedCameraIds.has(camera.id)
+      enabled: selectedCameraIds.has(camera.id)
     })),
     streamWidth: Number(els.streamWidth.value),
     streamHeight: Number(els.streamHeight.value),
@@ -853,8 +862,8 @@ function formConfig() {
     testProcessorType: normalizeProcessorType(els.testProcessorType?.value || confirmedTestProcessorType),
     pipelineStages: normalizePipelineStages(activeDeployApp.pipelineStages),
     selectedModels: selectedModelsFromStages(activeDeployApp.pipelineStages),
-    deployApps: deployProfiles,
-    activeDeployAppId: activeDeployApp.id,
+    deployApps: normalizedDeployProfiles,
+    activeDeployAppId,
     ocrPostprocess: readOcrPostprocess()
   };
 }
@@ -1452,6 +1461,7 @@ function readDeployApps(cameras = readCameraCards()) {
   });
   if (!apps.some((app) => app.active)) apps[0].active = true;
   apps = apps.map((app, index) => ({ ...app, active: index === apps.findIndex((item) => item.active) }));
+  activeDeployAppId = apps.find((app) => app.active)?.id || activeDeployAppId;
   return apps;
 }
 
@@ -1485,17 +1495,19 @@ function renderDeployApps(apps = [], cameras = readCameraCards()) {
   if (!els.deployAppList) return;
   const normalizedCameras = cameras;
   const existing = apps.length ? apps : deployApps;
+  const requestedActiveId = existing.find((item) => item.active)?.id || activeDeployAppId;
   deployApps = (existing.length ? existing : [defaultDeployApp(0, normalizedCameras)]).map((app, index) => ({
     ...defaultDeployApp(index, normalizedCameras),
     ...app,
-    active: app.active || (!existing.some((item) => item.active) && index === 0),
-    cameraIds: Array.isArray(app.cameraIds) && app.cameraIds.length ? app.cameraIds : defaultDeployApp(index, normalizedCameras).cameraIds,
+    active: false,
+    cameraIds: Array.isArray(app.cameraIds) ? app.cameraIds : defaultDeployApp(index, normalizedCameras).cameraIds,
     cameraSettings: app.cameraSettings || {},
     pipelineStages: normalizePipelineStages(app.pipelineStages || stagesFromSelectedModels(app.selectedModels)),
     selectedModels: selectedModelsFromStages(app.pipelineStages || stagesFromSelectedModels(app.selectedModels))
   }));
-  if (!deployApps.some((app) => app.active)) deployApps[0].active = true;
-  const activeIndex = deployApps.findIndex((app) => app.active);
+  let activeIndex = deployApps.findIndex((app) => app.id === requestedActiveId);
+  if (activeIndex < 0) activeIndex = 0;
+  activeDeployAppId = deployApps[activeIndex]?.id || "";
   deployApps = deployApps.map((app, index) => ({ ...app, active: index === activeIndex }));
 
   els.deployAppList.innerHTML = deployApps.map((app, index) => renderDeployAppCard(app, index, normalizedCameras)).join("");
@@ -1989,6 +2001,18 @@ function bindStageActions(root = document, onChange = null) {
 }
 
 function attachDeployAppHandlers() {
+  document.querySelectorAll("[data-deploy-active]").forEach((input) => {
+    input.addEventListener("change", () => {
+      const apps = readDeployApps();
+      activeDeployAppId = apps.find((app) => app.active)?.id || activeDeployAppId;
+      renderDeployApps(apps, readCameraCards());
+    });
+  });
+  document.querySelectorAll("[data-deploy-camera]").forEach((input) => {
+    input.addEventListener("change", () => {
+      renderDeployApps(readDeployApps(), readCameraCards());
+    });
+  });
   document.querySelectorAll("[data-remove-deploy-app]").forEach((button) => {
     button.addEventListener("click", () => {
       const current = readDeployApps();
@@ -2212,6 +2236,7 @@ async function checkSavedCameraConnection(index, button = null) {
 
 function renderConfig(config) {
   renderCameras(config.streams || []);
+  activeDeployAppId = config.activeDeployAppId || config.deployApps?.find((app) => app.active)?.id || activeDeployAppId;
   renderDeployApps(config.deployApps || [], config.streams || []);
   confirmedTestProcessorType = normalizeProcessorType(config.testProcessorType || config.processor?.type);
   if (els.testProcessorType) els.testProcessorType.value = confirmedTestProcessorType;

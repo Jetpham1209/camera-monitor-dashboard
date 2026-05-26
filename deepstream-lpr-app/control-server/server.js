@@ -2398,10 +2398,10 @@ async function deploy(config) {
     delete config.inputUri;
     delete config.imageTest;
     await runCheckpoint(checkpoints, "validate_config", async () => {
-      if (!config.rtspUrl || !/^rtsps?:\/\//i.test(config.rtspUrl)) {
-        throw new Error("RTSP URL is required and must start with rtsp:// or rtsps://.");
-      }
       const streams = enabledRtspStreams(config);
+      if (!streams.length) {
+        throw new Error("Select at least one camera for this deploy app and make sure its RTSP URL starts with rtsp:// or rtsps://.");
+      }
       const processor = validateProcessorFlow(config, "Deploy");
       return {
         output: `App: ${config.activeDeployAppId || "default"}\nStreams: ${streams.map((stream) => `${stream.name} (${stream.id})`).join(", ")}\n${processor.output}`
