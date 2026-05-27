@@ -1030,16 +1030,24 @@ function validateProcessorFlow(config, context = "runtime") {
   };
 }
 
-function modelConfig(slot, model, gieId, networkType, operateOnGieId = null, batchSize = 1, operateOnClassIds = []) {
+function modelConfig(slot, model, gieId, networkType, operateOnGieId = null, batchSize = 1, operateOnClassIds = [], stage = {}, runtimeProcessorType = "lpr") {
   const profile = modelProfileSpec(model.profile || model.build?.profile);
   const runtimeNetworkType = profile.networkType === null || profile.networkType === undefined
     ? Number(networkType ?? 0)
     : Number(profile.networkType);
+  const stageRole = String(stage.role || stage.gieType || "").toLowerCase();
+  const modelGroup = String(stage.modelGroup || slot || "").toLowerCase();
+  const isLprCharacterDetector = runtimeProcessorType === "lpr"
+    && runtimeNetworkType === 0
+    && (stageRole === "tgie" || modelGroup.includes("plate_ocr") || modelGroup.includes("plate_character"));
   const labelCount = countLabelLines(hostPathFromWorkspace(model.labels));
   const configuredClasses = Number(model.numClasses || 0);
-  const detectedClasses = slot === "plate_ocr"
-    ? Math.max(1, configuredClasses > 0 ? configuredClasses : labelCount || 1)
-    : Math.max(1, configuredClasses || 1, labelCount || 0);
+  let detectedClasses = Math.max(1, configuredClasses || 1, labelCount || 0);
+  if (isLprCharacterDetector && labelCount === 37 && configuredClasses <= 37) {
+    // Legacy VN plate character detector ships 37 label lines, but the
+    // working DeepStream config uses 36 detected classes.
+    detectedClasses = 36;
+  }
   const lines = [
     "[property]",
     "gpu-id=0",
@@ -1057,7 +1065,7 @@ function modelConfig(slot, model, gieId, networkType, operateOnGieId = null, bat
     "interval=0",
     "maintain-aspect-ratio=1"
   ];
-  if (slot === "plate_ocr") {
+  if (isLprCharacterDetector) {
     lines.push("force-implicit-batch-dim=1", "scaling-filter=2");
   }
   if (profile.outputInstanceMask) {
@@ -1095,8 +1103,8 @@ function modelConfig(slot, model, gieId, networkType, operateOnGieId = null, bat
       lines.push(`segmentation-threshold=${Number(model.segmentationThreshold ?? profile.segmentationThreshold)}`);
     }
   }
-  const preClusterThreshold = slot === "plate_ocr" ? 0.4 : 0.35;
-  const topk = slot === "vehicle_front" ? 50 : slot === "plate_ocr" ? 200 : 100;
+  const preClusterThreshold = isLprCharacterDetector ? 0.4 : 0.35;
+  const topk = isLprCharacterDetector ? 200 : 100;
   lines.push("", "[class-attrs-all]", `pre-cluster-threshold=${preClusterThreshold}`);
   if (runtimeNetworkType === 0) lines.push("nms-iou-threshold=0.45", `topk=${topk}`);
   lines.push("");
@@ -2279,7 +2287,9 @@ async function generateRuntime(config) {
         stage.networkType,
         stage.operateOnGieId,
         stageInferBatchSize(stage, sourceBatchSize, model),
-        stage.operateOnClassIds
+        stage.operateOnClassIds,
+        stage,
+        runtimeProcessorType
       )
     );
   }
