@@ -1353,12 +1353,16 @@ function resolveEngineBuildMethod(requested, canUseDeepStreamYolo) {
   return "runtime-trtexec";
 }
 
+function isPlateCharacterGroup(value) {
+  return /plate.*(ocr|char|character)|character.*plate/i.test(String(value || ""));
+}
+
 function resolveDeepStreamYoloRef(group, sourceExt, requested = "") {
   const value = String(requested || "auto").trim();
   if (value && value !== "auto") return value;
   // This OCR model family exports ONNX with boxes/scores/classes outputs. It
   // needs the parser profile copied from the working production deployment.
-  if (group === "plate_ocr" && sourceExt === ".onnx") {
+  if (isPlateCharacterGroup(group) && sourceExt === ".onnx") {
     const profileName = "plate_ocr_yolov8_36";
     if (fs.existsSync(path.join(PARSER_PROFILES_DIR, profileName, "nvdsinfer_custom_impl_Yolo"))) {
       return `profile:${profileName}`;
@@ -1418,10 +1422,10 @@ function readLabelLines(filePath) {
 
 function inferredNumClasses(group, labelCount, currentValue = 0) {
   const current = Number(currentValue || 0);
-  if (current > 0) return current;
-  if (group === "plate_ocr" && Number(labelCount) === 37) {
+  if (isPlateCharacterGroup(group) && Number(labelCount) === 37 && current <= 37) {
     return 36;
   }
+  if (current > 0) return current;
   return Math.max(1, Number(labelCount || 1));
 }
 
@@ -1696,7 +1700,7 @@ function inspectRecommendations(group, sourcePath, model, inspect, labels) {
     warnings.push("Cannot confidently infer output family. Compare input/output names with the source model repo before building.");
   }
 
-  if (group === "plate_ocr" || /plate.*(ocr|char|character)/i.test(group)) {
+  if (isPlateCharacterGroup(group)) {
     recommendations.push("For this plate character model family, keep legacy OCR post-process assumptions: boxes/scores/classes outputs, sorted character detections, threshold around 0.4, topk around 200.");
   }
 
