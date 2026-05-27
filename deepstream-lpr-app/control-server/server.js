@@ -17,6 +17,7 @@ const RUNTIME_DIR = path.join(APP_ROOT, "runtime");
 const GENERATED_DIR = path.join(RUNTIME_DIR, "generated");
 const THIRD_PARTY_DIR = path.join(RUNTIME_DIR, "third_party");
 const TEST_MEDIA_DIR = path.join(RUNTIME_DIR, "test-media");
+const MODEL_PENDING_DIR = path.join(RUNTIME_DIR, "model-factory-pending");
 const MODELS_DIR = path.join(APP_ROOT, "models");
 const MODEL_ARCHIVE_DIR = path.join(APP_ROOT, "model-archive");
 const PARSER_PROFILES_DIR = path.join(APP_ROOT, "parser-profiles");
@@ -123,7 +124,7 @@ const MODEL_PROFILE_SPECS = {
 };
 
 function ensureDirs() {
-  for (const dir of [RUNTIME_DIR, GENERATED_DIR, THIRD_PARTY_DIR, TEST_MEDIA_DIR, MODELS_DIR, MODEL_ARCHIVE_DIR, ROI_CAPTURE_DIR]) {
+  for (const dir of [RUNTIME_DIR, GENERATED_DIR, THIRD_PARTY_DIR, TEST_MEDIA_DIR, MODEL_PENDING_DIR, MODELS_DIR, MODEL_ARCHIVE_DIR, ROI_CAPTURE_DIR]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }
@@ -668,6 +669,38 @@ const uploadSource = multer({
   storage: sourceStorage,
   fileFilter(_req, file, cb) {
     const ext = path.extname(file.originalname).toLowerCase();
+    if (![".pt", ".onnx"].includes(ext)) {
+      cb(new Error("Source model must be a .pt or .onnx file."));
+      return;
+    }
+    cb(null, true);
+  }
+});
+
+const pendingSourceStorage = multer.diskStorage({
+  destination(_req, _file, cb) {
+    fs.mkdirSync(MODEL_PENDING_DIR, { recursive: true });
+    cb(null, MODEL_PENDING_DIR);
+  },
+  filename(_req, file, cb) {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const base = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80) || "source";
+    cb(null, `${Date.now()}_${base}${ext}`);
+  }
+});
+
+const uploadPendingSource = multer({
+  storage: pendingSourceStorage,
+  fileFilter(_req, file, cb) {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (file.fieldname === "labels") {
+      if (ext !== ".txt") {
+        cb(new Error("ONNX labels must be a .txt file."));
+        return;
+      }
+      cb(null, true);
+      return;
+    }
     if (![".pt", ".onnx"].includes(ext)) {
       cb(new Error("Source model must be a .pt or .onnx file."));
       return;
@@ -1310,6 +1343,11 @@ function sourceKeyFromPath(filePath) {
   return path.basename(hostPath || "default", ext).replace(/[^a-zA-Z0-9_-]/g, "_") || "default";
 }
 
+function pendingIdFromPath(filePath) {
+  const hostPath = hostPathFromWorkspace(filePath);
+  return path.basename(hostPath || "pending", path.extname(hostPath || "")).replace(/[^a-zA-Z0-9_-]/g, "_") || `pending_${Date.now()}`;
+}
+
 function sourceLabelPath(group, sourceKey) {
   return path.join(MODELS_DIR, group, "labels", `${sanitizeSourceKey(sourceKey)}.txt`);
 }
@@ -1485,6 +1523,9 @@ async function listModelFiles(group) {
       task: build?.task || model.build?.task || "",
       inspectedAt: meta.inspect?.inspectedAt || null,
       inspectDetected: meta.inspect?.detected || null,
+      inspect: meta.inspect || null,
+      buildOptions: meta.buildOptions || build?.buildOptions || null,
+      lastDummyTest: meta.lastDummyTest || null,
       engineBuildMethod: build?.engineBuildMethod || "",
       deepstreamYoloRef: build?.deepstreamYoloRef || "",
       labelsUploaded: Boolean(usableFileStat(sourceLabel)),
@@ -1538,6 +1579,12 @@ import sys
 
 path = sys.argv[1]
 ext = os.path.splitext(path)[1].lower()
+name_hint = os.path.basename(path).lower()
+version_hint = ""
+for token in ["yolov13", "yolov12", "yolo11", "yolov10", "yolov9", "yolov8", "yolov7", "yolov5"]:
+    if token in name_hint:
+        version_hint = token
+        break
 result = {
     "path": path,
     "fileName": os.path.basename(path),
@@ -1545,7 +1592,7 @@ result = {
     "inputs": [],
     "outputs": [],
     "metadata": {},
-    "detected": {},
+    "detected": {"modelVersionHint": version_hint},
     "warnings": []
 }
 
@@ -1601,6 +1648,7 @@ try:
         elif len(output_shapes) == 1 and len(output_shapes[0]) == 2:
             output_kind = "classification_like"
         result["detected"] = {
+            "modelVersionHint": version_hint,
             "fixedBatch": bool(fixed_batch),
             "batchSize": first_input[0] if fixed_batch else None,
             "imageSize": image_size,
@@ -1622,6 +1670,7 @@ try:
             "labelsPreview": labels[:20]
         }
         result["detected"] = {
+            "modelVersionHint": version_hint,
             "task": task,
             "outputKind": f"ultralytics_{task}",
             "imageSize": None,
@@ -1648,6 +1697,7 @@ function inspectRecommendations(group, sourcePath, model, inspect, labels) {
   const suggested = {
     profile,
     task: detected.task || (profile === "yolo_segmentation" ? "segment" : profile === "yolo_pose" ? "pose" : profile === "yolo_classification" ? "classify" : "detect"),
+    yoloVersion: detected.modelVersionHint || model.yoloVersion || "yolov8",
     imageSize: detected.imageSize || 640,
     buildBatchSize: detected.fixedBatch && detected.batchSize ? detected.batchSize : 1,
     numClasses: labelCount > 0 ? inferredNumClasses(group, labelCount, model.numClasses) : model.numClasses || null,
@@ -1707,6 +1757,64 @@ function inspectRecommendations(group, sourcePath, model, inspect, labels) {
   return { suggested, warnings: [...new Set(warnings)], recommendations: [...new Set(recommendations)] };
 }
 
+function normalizeBuildConfig(group, input = {}, inspect = null, model = {}) {
+  const suggested = inspect?.suggested || {};
+  const profile = normalizeModelProfile(input.profile || suggested.profile || model.profile || "yolo_detection");
+  const profileSpec = modelProfileSpec(profile);
+  const sourceType = String(input.sourceType || "").toLowerCase();
+  const ext = String(input.sourceExt || "").toLowerCase();
+  const isOnnx = sourceType === "onnx" || ext === ".onnx";
+  const buildParserDefault = !["custom_onnx", "yolo_classification"].includes(profile);
+  return {
+    sourceType: isOnnx ? "onnx" : "pt",
+    profile,
+    task: String(input.task || suggested.task || profileSpec.task || "detect"),
+    yoloVersion: String(input.yoloVersion || suggested.yoloVersion || model.yoloVersion || "yolov8").toLowerCase(),
+    imgsz: Math.max(32, Number(input.imgsz || suggested.imageSize || 640)),
+    opset: Math.max(11, Number(input.opset || 17)),
+    batchSize: Math.max(1, Number(input.batchSize || suggested.buildBatchSize || 1)),
+    workspaceMb: Math.max(256, Number(input.workspaceMb || 2048)),
+    fp16: parseBool(input.fp16, true),
+    simplify: parseBool(input.simplify, !isOnnx),
+    dynamic: parseBool(input.dynamic, false),
+    buildEngine: parseBool(input.buildEngine, true),
+    engineBuildMethod: String(input.engineBuildMethod || suggested.engineBuildMethod || "runtime-trtexec"),
+    buildParser: parseBool(input.buildParser, suggested.buildParser ?? buildParserDefault),
+    numClasses: Number(input.numClasses || suggested.numClasses || model.numClasses || 0) || undefined,
+    deepstreamYoloRef: String(input.deepstreamYoloRef || model.deepstreamYoloRef || "").trim(),
+    forceImplicitBatchDim: parseBool(input.forceImplicitBatchDim, suggested.forceImplicitBatchDim || false),
+    scalingFilter: input.scalingFilter ?? suggested.scalingFilter ?? "",
+    preClusterThreshold: input.preClusterThreshold ?? suggested.preClusterThreshold ?? "",
+    topk: input.topk ?? suggested.topk ?? ""
+  };
+}
+
+function applySavedBuildOptions(options = {}, saved = {}) {
+  return {
+    ...saved,
+    ...options,
+    profile: options.profile || saved.profile,
+    task: options.task || saved.task,
+    yoloVersion: options.yoloVersion || saved.yoloVersion,
+    imgsz: options.imgsz || saved.imgsz,
+    opset: options.opset || saved.opset,
+    batchSize: options.batchSize || saved.batchSize,
+    workspaceMb: options.workspaceMb || saved.workspaceMb,
+    engineBuildMethod: options.engineBuildMethod || saved.engineBuildMethod,
+    buildParser: options.buildParser ?? saved.buildParser,
+    buildEngine: options.buildEngine ?? saved.buildEngine,
+    fp16: options.fp16 ?? saved.fp16,
+    simplify: options.simplify ?? saved.simplify,
+    dynamic: options.dynamic ?? saved.dynamic,
+    numClasses: options.numClasses || saved.numClasses,
+    deepstreamYoloRef: options.deepstreamYoloRef || saved.deepstreamYoloRef,
+    forceImplicitBatchDim: options.forceImplicitBatchDim ?? saved.forceImplicitBatchDim,
+    scalingFilter: options.scalingFilter ?? saved.scalingFilter,
+    preClusterThreshold: options.preClusterThreshold ?? saved.preClusterThreshold,
+    topk: options.topk ?? saved.topk
+  };
+}
+
 async function inspectModelSource(group, sourceKey) {
   group = sanitizeModelGroup(group);
   sourceKey = sanitizeSourceKey(sourceKey);
@@ -1714,7 +1822,21 @@ async function inspectModelSource(group, sourceKey) {
   const model = config.models[group] || {};
   const sourcePath = await findModelSourcePath(group, sourceKey, config);
   if (!sourcePath) throw new Error(`Cannot find source model ${sourceKey} in ${group}.`);
+  const summary = await inspectSourcePath(group, sourceKey, sourcePath, model);
+  model.sourceMeta = {
+    ...(model.sourceMeta || {}),
+    [sourceKey]: {
+      ...(model.sourceMeta?.[sourceKey] || {}),
+      inspect: summary,
+      buildOptions: normalizeBuildConfig(group, model.sourceMeta?.[sourceKey]?.buildOptions || {}, summary, model)
+    }
+  };
+  config.models[group] = model;
+  await writeJson(CONFIG_FILE, config);
+  return { group, sourceKey, inspect: summary, raw: summary.raw };
+}
 
+async function inspectSourcePath(group, sourceKey, sourcePath, model = {}, labelsPath = "") {
   await ensureModelBuilderImage();
   const result = await runModelBuilder(["python3", "-c", modelInspectScript(), workspacePath(sourcePath)]);
   if (result.code !== 0) {
@@ -1729,10 +1851,10 @@ async function inspectModelSource(group, sourceKey) {
   const sourceLabel = sourceLabelPath(group, sourceKey);
   const buildLabels = modelBuildPaths(group, sourceKey).labels;
   const activeLabels = hostPathFromWorkspace(model.sourceLabels?.[sourceKey] || "");
-  const labelPath = [activeLabels, sourceLabel, buildLabels].find((candidate) => candidate && usableFileStat(candidate)) || "";
+  const labelPath = [labelsPath, activeLabels, sourceLabel, buildLabels].find((candidate) => candidate && usableFileStat(candidate)) || "";
   const labels = readLabelLines(labelPath);
   const advice = inspectRecommendations(group, sourcePath, model, inspect, labels);
-  const summary = {
+  return {
     sourceKey,
     source: workspacePath(sourcePath),
     inspectedAt: new Date().toISOString(),
@@ -1746,19 +1868,218 @@ async function inspectModelSource(group, sourceKey) {
       count: labels.length,
       preview: labels.slice(0, 30)
     },
-    ...advice
+    ...advice,
+    raw: inspect
   };
+}
 
+async function savePendingModelSource(payload = {}) {
+  const group = sanitizeModelGroup(payload.group || payload.modelName);
+  const pendingSource = hostPathFromWorkspace(payload.sourcePath);
+  if (!pendingSource || !fs.existsSync(pendingSource) || !pendingSource.startsWith(MODEL_PENDING_DIR)) {
+    throw new Error("Pending source model was not found. Upload the source again.");
+  }
+  const sourceExt = path.extname(pendingSource).toLowerCase();
+  const sourceBase = path.basename(pendingSource, sourceExt).replace(/[^a-zA-Z0-9_-]/g, "_");
+  const sourceDir = path.join(MODELS_DIR, group, "source");
+  await fsp.mkdir(sourceDir, { recursive: true });
+  const finalSource = path.join(sourceDir, `${sourceBase}${sourceExt}`);
+  await fsp.rename(pendingSource, finalSource);
+  const sourceKey = sourceKeyFromPath(finalSource);
+
+  const config = await getConfig();
+  const model = config.models[group] || {};
+  const pendingLabel = hostPathFromWorkspace(payload.labelsPath || "");
+  let labelsWorkspace = "";
+  if (pendingLabel && fs.existsSync(pendingLabel) && pendingLabel.startsWith(MODEL_PENDING_DIR)) {
+    const labelsPath = sourceLabelPath(group, sourceKey);
+    await fsp.mkdir(path.dirname(labelsPath), { recursive: true });
+    await fsp.rename(pendingLabel, labelsPath);
+    labelsWorkspace = workspacePath(labelsPath);
+    model.sourceLabels = {
+      ...(model.sourceLabels || {}),
+      [sourceKey]: labelsWorkspace
+    };
+    model.labels = labelsWorkspace;
+  }
+
+  const modelName = String(payload.modelName || group).trim();
+  const description = String(payload.description || "").trim();
+  const inspect = await inspectSourcePath(group, sourceKey, finalSource, model, labelsWorkspace ? hostPathFromWorkspace(labelsWorkspace) : "");
+  const buildOptions = normalizeBuildConfig(group, {
+    ...(payload.buildOptions || {}),
+    sourceExt
+  }, inspect, model);
+  model.source = workspacePath(finalSource);
+  model.sourceKey = sourceKey;
+  model.profile = buildOptions.profile;
+  model.yoloVersion = buildOptions.yoloVersion;
+  model.numClasses = buildOptions.numClasses || model.numClasses;
+  model.sourceOriginalName = payload.originalName || path.basename(finalSource);
+  model.sourceUploadedAt = new Date().toISOString();
   model.sourceMeta = {
     ...(model.sourceMeta || {}),
     [sourceKey]: {
-      ...(model.sourceMeta?.[sourceKey] || {}),
-      inspect: summary
+      modelName,
+      description,
+      profile: buildOptions.profile,
+      originalName: model.sourceOriginalName,
+      uploadedAt: model.sourceUploadedAt,
+      inspect,
+      buildOptions
     }
   };
   config.models[group] = model;
   await writeJson(CONFIG_FILE, config);
-  return { group, sourceKey, inspect: summary, raw: inspect };
+  return { group, sourceKey, model: config.models[group], files: await listModelFiles(group), config };
+}
+
+async function updateModelSourceBuildConfig(group, sourceKey, input = {}) {
+  group = sanitizeModelGroup(group);
+  sourceKey = sanitizeSourceKey(sourceKey);
+  const config = await getConfig();
+  const model = config.models[group] || {};
+  const sourcePath = await findModelSourcePath(group, sourceKey, config);
+  if (!sourcePath) throw new Error(`Cannot find source model ${sourceKey} in ${group}.`);
+  const meta = model.sourceMeta?.[sourceKey] || {};
+  const inspect = input.inspect || meta.inspect || await inspectSourcePath(group, sourceKey, sourcePath, model);
+  const buildOptions = normalizeBuildConfig(group, {
+    ...(meta.buildOptions || {}),
+    ...(input.buildOptions || input),
+    sourceExt: path.extname(sourcePath).toLowerCase()
+  }, inspect, model);
+  model.profile = buildOptions.profile;
+  model.yoloVersion = buildOptions.yoloVersion;
+  model.numClasses = buildOptions.numClasses || model.numClasses;
+  model.sourceMeta = {
+    ...(model.sourceMeta || {}),
+    [sourceKey]: {
+      ...meta,
+      modelName: String(input.modelName || meta.modelName || group).trim(),
+      description: String(input.description ?? meta.description ?? "").trim(),
+      profile: buildOptions.profile,
+      inspect,
+      buildOptions,
+      updatedAt: new Date().toISOString()
+    }
+  };
+  config.models[group] = model;
+  await writeJson(CONFIG_FILE, config);
+  return { group, sourceKey, buildOptions, files: await listModelFiles(group), config };
+}
+
+function modelDummyTestScript() {
+  return String.raw`
+import json
+import os
+import sys
+
+path = sys.argv[1]
+imgsz = int(sys.argv[2])
+batch = int(sys.argv[3])
+ext = os.path.splitext(path)[1].lower()
+result = {
+    "path": path,
+    "imgsz": imgsz,
+    "batch": batch,
+    "mode": "shape_check",
+    "inputs": [],
+    "outputs": [],
+    "warnings": []
+}
+
+def summarize_tensor(value):
+    try:
+        import torch
+        if isinstance(value, torch.Tensor):
+            return {"shape": list(value.shape), "dtype": str(value.dtype)}
+        if isinstance(value, (list, tuple)):
+            return [summarize_tensor(item) for item in value]
+        if isinstance(value, dict):
+            return {str(key): summarize_tensor(item) for key, item in value.items()}
+    except Exception:
+        pass
+    return str(type(value))
+
+def shape_from_value(value):
+    dims = []
+    tensor_type = value.type.tensor_type
+    for dim in tensor_type.shape.dim:
+        if dim.dim_value:
+            dims.append(int(dim.dim_value))
+        elif dim.dim_param:
+            dims.append(str(dim.dim_param))
+        else:
+            dims.append(None)
+    return dims
+
+try:
+    if ext == ".pt":
+        import torch
+        from ultralytics import YOLO
+        model = YOLO(path)
+        model.model.eval()
+        x = torch.zeros((batch, 3, imgsz, imgsz), dtype=torch.float32)
+        with torch.no_grad():
+            y = model.model(x)
+        result["mode"] = "torch_dummy_forward"
+        result["inputs"] = [{"name": "images", "shape": list(x.shape), "dtype": str(x.dtype)}]
+        result["outputs"] = summarize_tensor(y)
+    elif ext == ".onnx":
+        import onnx
+        model = onnx.load(path)
+        onnx.checker.check_model(model)
+        for value in model.graph.input:
+            result["inputs"].append({"name": value.name, "shape": shape_from_value(value)})
+        for value in model.graph.output:
+            result["outputs"].append({"name": value.name, "shape": shape_from_value(value)})
+        result["mode"] = "onnx_checker_shape_check"
+        result["warnings"].append("ONNX runtime execution is not required in the builder image; this validates graph and dummy-compatible tensor shapes only.")
+    else:
+        raise RuntimeError(f"Unsupported extension: {ext}")
+except Exception as exc:
+    result["error"] = str(exc)
+
+print(json.dumps(result, ensure_ascii=False))
+`;
+}
+
+async function testModelSourceBuild(group, sourceKey) {
+  group = sanitizeModelGroup(group);
+  sourceKey = sanitizeSourceKey(sourceKey);
+  const config = await getConfig();
+  const model = config.models[group] || {};
+  const sourcePath = await findModelSourcePath(group, sourceKey, config);
+  if (!sourcePath) throw new Error(`Cannot find source model ${sourceKey} in ${group}.`);
+  const meta = model.sourceMeta?.[sourceKey] || {};
+  const buildOptions = meta.buildOptions || {};
+  const inspect = meta.inspect || await inspectSourcePath(group, sourceKey, sourcePath, model);
+  const imgsz = Number(buildOptions.imgsz || inspect.suggested?.imageSize || inspect.detected?.imageSize || 640);
+  const batch = Math.max(1, Math.min(4, Number(buildOptions.batchSize || 1)));
+  await ensureModelBuilderImage();
+  const result = await runModelBuilder(["python3", "-c", modelDummyTestScript(), workspacePath(sourcePath), String(imgsz), String(batch)]);
+  if (result.code !== 0) {
+    const error = new Error(`Model dummy test failed:\n${result.output}`);
+    error.output = result.output;
+    throw error;
+  }
+  const jsonLine = result.output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).reverse().find((line) => line.startsWith("{"));
+  if (!jsonLine) throw new Error(`Model dummy test did not return JSON.\n${result.output}`);
+  const test = JSON.parse(jsonLine);
+  model.sourceMeta = {
+    ...(model.sourceMeta || {}),
+    [sourceKey]: {
+      ...meta,
+      inspect,
+      lastDummyTest: {
+        testedAt: new Date().toISOString(),
+        test
+      }
+    }
+  };
+  config.models[group] = model;
+  await writeJson(CONFIG_FILE, config);
+  return { group, sourceKey, test, files: await listModelFiles(group) };
 }
 
 async function listModelGroups() {
@@ -2183,6 +2504,7 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
   const sourceKey = sourceKeyFromPath(source);
   model.sourceKey = sourceKey;
   const sourceMeta = model.sourceMeta?.[sourceKey] || {};
+  options = applySavedBuildOptions(options, sourceMeta.buildOptions || {});
   const profile = modelProfileSpec(options.profile || sourceMeta.profile || model.profile);
   const modelName = String(options.modelName || sourceMeta.modelName || model.sourceOriginalName || path.basename(source)).trim();
   const description = String(options.description || sourceMeta.description || "").trim();
@@ -2475,6 +2797,7 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
     forceRebuild,
     modelName,
     description,
+    buildOptions: normalizeBuildConfig(group, options, sourceMeta.inspect, model),
     updatedAt: new Date().toISOString(),
     log: workspacePath(paths.log),
     checkpoints
@@ -2998,6 +3321,54 @@ app.post("/api/upload/:slot", upload.single("file"), async (req, res) => {
   }
 });
 
+app.post("/api/model-source/pending", uploadPendingSource.fields([
+  { name: "file", maxCount: 1 },
+  { name: "labels", maxCount: 1 }
+]), async (req, res) => {
+  try {
+    const sourceFile = req.files?.file?.[0];
+    if (!sourceFile) return res.status(400).json({ error: "No source model uploaded." });
+    const labelsFile = req.files?.labels?.[0] || null;
+    const modelName = String(req.body?.modelName || "").trim();
+    const group = sanitizeModelGroup(modelName || path.basename(sourceFile.originalname, path.extname(sourceFile.originalname)));
+    const model = {
+      profile: normalizeModelProfile(req.body?.profile),
+      yoloVersion: String(req.body?.yoloVersion || "yolov8").toLowerCase()
+    };
+    const pendingId = pendingIdFromPath(sourceFile.path);
+    const sourceKey = sourceKeyFromPath(sourceFile.path);
+    const inspect = await inspectSourcePath(group, sourceKey, sourceFile.path, model, labelsFile?.path || "");
+    const buildOptions = normalizeBuildConfig(group, {
+      ...req.body,
+      sourceExt: path.extname(sourceFile.path).toLowerCase()
+    }, inspect, model);
+    const payload = {
+      pendingId,
+      group,
+      sourceKey,
+      source: workspacePath(sourceFile.path),
+      labels: labelsFile ? workspacePath(labelsFile.path) : "",
+      originalName: sourceFile.originalname,
+      modelName: modelName || group,
+      description: String(req.body?.description || "").trim(),
+      inspect,
+      buildOptions
+    };
+    await fsp.writeFile(path.join(MODEL_PENDING_DIR, `${pendingId}.json`), `${JSON.stringify(payload, null, 2)}\n`);
+    res.json(payload);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/model-source/save-config", async (req, res) => {
+  try {
+    res.json(await savePendingModelSource(req.body || {}));
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 app.post("/api/model-source/:group", uploadSource.single("file"), async (req, res) => {
   try {
     const group = sanitizeModelGroup(req.params.group);
@@ -3069,6 +3440,22 @@ app.post("/api/model-source/:group/:sourceKey/labels", uploadSourceLabel.single(
 app.post("/api/model-source/:group/:sourceKey/inspect", async (req, res) => {
   try {
     res.json(await inspectModelSource(req.params.group, req.params.sourceKey));
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.put("/api/model-source/:group/:sourceKey/config", async (req, res) => {
+  try {
+    res.json(await updateModelSourceBuildConfig(req.params.group, req.params.sourceKey, req.body || {}));
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/model-source/:group/:sourceKey/test-build", async (req, res) => {
+  try {
+    res.json(await testModelSourceBuild(req.params.group, req.params.sourceKey));
   } catch (error) {
     res.status(400).json({ error: error.message });
   }

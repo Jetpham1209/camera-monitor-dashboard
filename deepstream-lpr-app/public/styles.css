@@ -1291,6 +1291,43 @@ button.small-button {
   background: white;
   color: var(--blue);
 }
+.model-inspect-panel {
+  margin-top: 12px;
+}
+.inspect-summary {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: white;
+}
+.inspect-summary > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+.inspect-summary span,
+.inspect-summary small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.inspect-summary pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: #0f172a;
+  color: #e5e7eb;
+  font-size: 12px;
+}
+.inspect-summary ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text);
+  font-size: 13px;
+}
 .model-library {
   gap: 14px;
 }

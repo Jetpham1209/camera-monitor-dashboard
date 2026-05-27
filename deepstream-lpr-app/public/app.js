@@ -181,6 +181,8 @@ const roiTool = {
 const tasks = new Map();
 const modelFiles = new Map();
 let modelLibraryGroups = [];
+let pendingModelDraft = null;
+let editingModelConfig = null;
 let deployStatusPollTimer = null;
 let deployStatusPollInFlight = false;
 const agentThreadId = "default";
@@ -2318,6 +2320,13 @@ function renderModelBuilders() {
           <small>Model name tao model library rieng. Co the la person_detector, dog_detector, fire_smoke...</small>
         </label>
         <label>Description <input data-builder="factory" data-key="description" placeholder="Nguon data, version, ghi chu..." /></label>
+        <label>
+          Upload type
+          <select data-builder="factory" data-key="sourceType">
+            <option value="pt" selected>PyTorch .pt</option>
+            <option value="onnx">ONNX .onnx</option>
+          </select>
+        </label>
       </div>
       <div class="grid">
         <label>Image size <input data-builder="factory" data-key="imgsz" type="number" value="${defaultRole.defaultImgsz || 640}" /></label>
@@ -2358,6 +2367,7 @@ function renderModelBuilders() {
       </div>
       <div class="grid one">
         <label>Source .pt/.onnx <input data-builder="factory" data-key="source" type="file" accept=".pt,.onnx" /></label>
+        <label data-builder-labels-row hidden>labels.txt for ONNX <input data-builder="factory" data-key="labels" type="file" accept=".txt" /></label>
       </div>
       <div class="checks">
         <label><input data-builder="factory" data-key="fp16" type="checkbox" checked /> FP16 engine</label>
@@ -2368,8 +2378,12 @@ function renderModelBuilders() {
         <label><input data-builder="factory" data-key="forceRebuild" type="checkbox" /> Force rebuild</label>
       </div>
       <div class="actions inline-actions">
-        <button type="button" data-upload-factory-source>Upload source</button>
+        <button type="button" data-upload-factory-source>Upload & inspect</button>
+        <button type="button" data-save-model-config disabled>Save config</button>
         <button type="button" data-refresh-model-files="all">Refresh library</button>
+      </div>
+      <div class="model-inspect-panel" data-pending-model-panel>
+        <div class="empty">Upload source de auto inspect va fill suggested build options truoc khi save vao library.</div>
       </div>
       <div class="task-status idle" data-task-status="model-factory">
         ${statusMarkup("idle", "Ready.")}
@@ -2381,10 +2395,13 @@ function renderModelBuilders() {
   `;
   document.querySelector("[data-upload-factory-source]")?.addEventListener("click", (event) => {
     try {
-      uploadSource(factoryModelGroup(), event.currentTarget).catch((error) => print(error.message));
+      uploadPendingSource(event.currentTarget).catch((error) => print(error.message));
     } catch (error) {
       print(error.message);
     }
+  });
+  document.querySelector("[data-save-model-config]")?.addEventListener("click", (event) => {
+    saveModelBuildConfig(event.currentTarget).catch((error) => print(error.message));
   });
   document.querySelectorAll("[data-build-log]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -2397,7 +2414,10 @@ function renderModelBuilders() {
   });
   const profileSelect = builderControl("factory", "profile");
   profileSelect?.addEventListener("change", () => applyFactoryProfileDefaults(profileOptions));
+  builderControl("factory", "sourceType")?.addEventListener("change", () => applyFactorySourceTypeDefaults());
   applyFactoryProfileDefaults(profileOptions);
+  applyFactorySourceTypeDefaults();
+  renderPendingModelDraft();
   renderModelLibrary();
   updateModelSelects();
 }
@@ -2425,6 +2445,87 @@ function applyFactoryProfileDefaults(profileOptions = []) {
   }
 }
 
+function applyFactorySourceTypeDefaults() {
+  const sourceType = builderControl("factory", "sourceType")?.value || "pt";
+  const source = builderControl("factory", "source");
+  const labelsRow = document.querySelector("[data-builder-labels-row]");
+  const simplify = builderControl("factory", "simplify");
+  if (source) source.accept = sourceType === "onnx" ? ".onnx" : ".pt";
+  if (labelsRow) labelsRow.hidden = sourceType !== "onnx";
+  if (simplify && sourceType === "onnx") simplify.checked = false;
+}
+
+function fillFactoryBuildOptions(options = {}) {
+  const map = {
+    profile: "profile",
+    task: "task",
+    yoloVersion: "yoloVersion",
+    imgsz: "imgsz",
+    opset: "opset",
+    batchSize: "batchSize",
+    workspaceMb: "workspaceMb",
+    engineBuildMethod: "engineBuildMethod"
+  };
+  Object.entries(map).forEach(([key, controlKey]) => {
+    const control = builderControl("factory", controlKey);
+    if (control && options[key] !== undefined && options[key] !== null && options[key] !== "") {
+      control.value = options[key];
+    }
+  });
+  ["fp16", "simplify", "dynamic", "buildEngine", "buildParser", "forceRebuild"].forEach((key) => {
+    const control = builderControl("factory", key);
+    if (control && options[key] !== undefined) control.checked = Boolean(options[key]);
+  });
+  if (builderControl("factory", "sourceType") && options.sourceType) {
+    builderControl("factory", "sourceType").value = options.sourceType;
+    applyFactorySourceTypeDefaults();
+  }
+}
+
+function readFactoryBuildOptions() {
+  return buildOptions("factory");
+}
+
+function renderPendingModelDraft() {
+  const panel = document.querySelector("[data-pending-model-panel]");
+  const saveButton = document.querySelector("[data-save-model-config]");
+  if (!panel) return;
+  if (!pendingModelDraft && !editingModelConfig) {
+    panel.innerHTML = '<div class="empty">Upload source de auto inspect va fill suggested build options truoc khi save vao library.</div>';
+    if (saveButton) {
+      saveButton.disabled = true;
+      saveButton.textContent = "Save config";
+    }
+    return;
+  }
+  const draft = pendingModelDraft || editingModelConfig;
+  const inspect = draft.inspect || {};
+  const suggested = inspect.suggested || draft.buildOptions || {};
+  const outputs = (inspect.outputs || []).map((item) => `${item.name}: [${(item.shape || []).join(", ")}]`).join("\n");
+  const inputs = (inspect.inputs || []).map((item) => `${item.name}: [${(item.shape || []).join(", ")}]`).join("\n");
+  panel.innerHTML = `
+    <div class="inspect-summary">
+      <div>
+        <strong>${escapeHtml(draft.modelName || draft.group || "Pending model")}</strong>
+        <span>${escapeHtml(draft.originalName || draft.source || "")}</span>
+        <small>${escapeHtml(inspect.detected?.outputKind || "not inspected")} - ${escapeHtml(inspect.type || "")}</small>
+      </div>
+      <div class="metric-row">
+        <strong>${escapeHtml(suggested.profile || "")}</strong><span>profile</span>
+        <strong>${escapeHtml(suggested.imageSize || suggested.imgsz || "")}</strong><span>imgsz</span>
+        <strong>${escapeHtml(suggested.buildBatchSize || suggested.batchSize || "")}</strong><span>batch</span>
+      </div>
+      <pre>${escapeHtml([inputs ? `Inputs:\n${inputs}` : "", outputs ? `Outputs:\n${outputs}` : ""].filter(Boolean).join("\n\n"))}</pre>
+      ${(inspect.recommendations || []).length ? `<ul>${inspect.recommendations.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+      ${(inspect.warnings || []).length ? `<div class="task-status failed">${statusMarkup("failed", inspect.warnings.join(" "))}</div>` : ""}
+    </div>
+  `;
+  if (saveButton) {
+    saveButton.disabled = false;
+    saveButton.textContent = editingModelConfig ? "Save config changes" : "Save config";
+  }
+}
+
 async function uploadSource(group, button = null) {
   const controlGroup = builderControl(group, "source") ? group : "factory";
   const sourceInput = builderControl(controlGroup, "source");
@@ -2440,6 +2541,74 @@ async function uploadSource(group, button = null) {
   });
   setTaskStatus(`model-${group}`, "success", `Uploaded ${fileName}.`);
   await loadModelFiles(group);
+  print(result);
+}
+
+async function uploadPendingSource(button = null) {
+  const sourceInput = builderControl("factory", "source");
+  const labelsInput = builderControl("factory", "labels");
+  if (!sourceInput.files.length) return print("Chon file source model truoc khi upload.");
+  const group = factoryModelGroup();
+  const result = await withTask("model-factory", button, "Inspecting source...", async () => {
+    const form = new FormData();
+    form.append("file", sourceInput.files[0]);
+    if (labelsInput?.files?.length) form.append("labels", labelsInput.files[0]);
+    form.append("modelName", builderControl("factory", "modelName")?.value || group);
+    form.append("description", builderControl("factory", "description")?.value || "");
+    form.append("sourceType", builderControl("factory", "sourceType")?.value || "pt");
+    form.append("profile", builderControl("factory", "profile")?.value || "yolo_detection");
+    form.append("yoloVersion", builderControl("factory", "yoloVersion")?.value || "yolov8");
+    return await api("/api/model-source/pending", { method: "POST", body: form });
+  });
+  pendingModelDraft = result;
+  editingModelConfig = null;
+  fillFactoryBuildOptions(result.buildOptions || result.inspect?.suggested || {});
+  renderPendingModelDraft();
+  setTaskStatus("model-factory", "success", `Inspect done for ${result.modelName || result.group}. Save config to add it to library.`);
+  print(result);
+}
+
+async function saveModelBuildConfig(button = null) {
+  if (editingModelConfig) {
+    const payload = {
+      modelName: builderControl("factory", "modelName")?.value || editingModelConfig.modelName || editingModelConfig.group,
+      description: builderControl("factory", "description")?.value || editingModelConfig.description || "",
+      buildOptions: readFactoryBuildOptions()
+    };
+    const result = await withTask(`model-${editingModelConfig.group}`, button, "Saving build config...", async () => {
+      return await api(`/api/model-source/${encodeURIComponent(editingModelConfig.group)}/${encodeURIComponent(editingModelConfig.sourceKey)}/config`, {
+        method: "PUT",
+        body: JSON.stringify(payload)
+      });
+    });
+    modelFiles.set(editingModelConfig.group, result.files || []);
+    upsertModelLibraryGroup(editingModelConfig.group, result.files || []);
+    editingModelConfig = null;
+    renderPendingModelDraft();
+    renderModelLibrary();
+    setTaskStatus("model-factory", "success", "Build config saved.");
+    print(result);
+    return;
+  }
+  if (!pendingModelDraft) return print("Upload va inspect source model truoc khi save config.");
+  const payload = {
+    ...pendingModelDraft,
+    modelName: builderControl("factory", "modelName")?.value || pendingModelDraft.modelName,
+    description: builderControl("factory", "description")?.value || pendingModelDraft.description || "",
+    buildOptions: readFactoryBuildOptions()
+  };
+  const result = await withTask("model-factory", button, "Saving model config...", async () => {
+    return await api("/api/model-source/save-config", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  });
+  pendingModelDraft = null;
+  modelFiles.set(result.group, result.files || []);
+  upsertModelLibraryGroup(result.group, result.files || []);
+  renderPendingModelDraft();
+  renderModelLibrary();
+  setTaskStatus("model-factory", "success", "Model config saved to library.");
   print(result);
 }
 
@@ -2503,6 +2672,7 @@ function renderModelFiles(group, files = []) {
           ${file.task ? `<b>${escapeHtml(file.task)}</b>` : ""}
           ${file.inspectedAt ? `<b>inspected ${escapeHtml(formatDateTime(file.inspectedAt))}</b>` : ""}
           ${file.inspectDetected?.outputKind ? `<b>${escapeHtml(file.inspectDetected.outputKind)}</b>` : ""}
+          ${file.lastDummyTest?.testedAt ? `<b>dummy tested ${escapeHtml(formatDateTime(file.lastDummyTest.testedAt))}</b>` : ""}
           ${file.roles?.length ? file.roles.map((role) => `<b>${escapeHtml(role)}</b>`).join(" ") : ""}
         </small>
       </div>
@@ -2520,8 +2690,14 @@ function renderModelFiles(group, files = []) {
         <button class="model-build-button" type="button" data-build-source="${escapeHtml(group)}" data-source-path="${escapeHtml(file.path)}" data-source-name="${escapeHtml(file.name)}" data-source-profile="${escapeHtml(file.profile || "yolo_detection")}" data-built="${file.built ? "1" : "0"}">
           ${file.built ? "Built" : "Build"}
         </button>
+        <button type="button" data-change-model-config="${escapeHtml(group)}" data-source-key="${escapeHtml(file.sourceKey)}">
+          Change config
+        </button>
         <button type="button" data-inspect-model-file="${escapeHtml(group)}" data-source-key="${escapeHtml(file.sourceKey)}">
           Inspect
+        </button>
+        <button type="button" data-test-build-model="${escapeHtml(group)}" data-source-key="${escapeHtml(file.sourceKey)}">
+          Test build
         </button>
         <button type="button" data-delete-model-file="${escapeHtml(group)}" data-file-id="${escapeHtml(file.id)}">
           Delete
@@ -2548,6 +2724,19 @@ function renderModelFiles(group, files = []) {
   container.querySelectorAll("[data-inspect-model-file]").forEach((button) => {
     button.addEventListener("click", () => inspectModelFile(
       button.dataset.inspectModelFile,
+      button.dataset.sourceKey,
+      button
+    ).catch((error) => print(error.message)));
+  });
+  container.querySelectorAll("[data-change-model-config]").forEach((button) => {
+    button.addEventListener("click", () => changeModelConfig(
+      button.dataset.changeModelConfig,
+      button.dataset.sourceKey
+    ));
+  });
+  container.querySelectorAll("[data-test-build-model]").forEach((button) => {
+    button.addEventListener("click", () => testModelBuild(
+      button.dataset.testBuildModel,
       button.dataset.sourceKey,
       button
     ).catch((error) => print(error.message)));
@@ -2580,6 +2769,42 @@ async function inspectModelFile(group, sourceKey, button = null) {
   await loadModelFiles(group);
   const detected = result.inspect?.detected?.outputKind || "unknown output";
   setTaskStatus(`model-${group}`, "success", `Inspect done: ${detected}.`);
+  print(result);
+}
+
+function changeModelConfig(group, sourceKey) {
+  const file = findModelFile(group, sourceKey);
+  if (!file) return print("Cannot find selected model config.");
+  editingModelConfig = {
+    group,
+    sourceKey,
+    modelName: file.displayName || file.name,
+    description: file.description || "",
+    inspect: file.inspect || null,
+    buildOptions: file.buildOptions || {}
+  };
+  pendingModelDraft = null;
+  builderControl("factory", "modelName").value = file.displayName || group;
+  builderControl("factory", "description").value = file.description || "";
+  fillFactoryBuildOptions(file.buildOptions || {
+    profile: file.profile,
+    task: file.task,
+    sourceType: file.name.toLowerCase().endsWith(".onnx") ? "onnx" : "pt"
+  });
+  renderPendingModelDraft();
+  setTaskStatus("model-factory", "running", `Editing build config for ${file.displayName || file.name}.`);
+}
+
+async function testModelBuild(group, sourceKey, button = null) {
+  const result = await withTask(`model-${group}`, button, `Testing ${group}...`, async () => {
+    return await api(`/api/model-source/${encodeURIComponent(group)}/${encodeURIComponent(sourceKey)}/test-build`, { method: "POST" });
+  });
+  if (result.files) {
+    modelFiles.set(group, result.files || []);
+    upsertModelLibraryGroup(group, result.files || []);
+    renderModelLibrary();
+  }
+  setTaskStatus(`model-${group}`, "success", `Dummy test ${result.test?.mode || "done"}.`);
   print(result);
 }
 
@@ -3241,7 +3466,9 @@ async function buildModelSource(group, sourcePath, sourceName = "", sourceProfil
     print(message);
     return;
   }
-  await buildModel(group, button, { sourcePath, profile: sourceProfile, forceRebuild, modelName: "", description: "" });
+  const sourceKey = (modelFiles.get(group) || []).find((file) => file.path === sourcePath)?.sourceKey || "";
+  const saved = sourceKey ? findModelFile(group, sourceKey)?.buildOptions || {} : {};
+  await buildModel(group, button, { ...saved, sourcePath, profile: saved.profile || sourceProfile, forceRebuild, modelName: "", description: "" });
 }
 
 async function buildModel(group, button = null, overrides = {}) {
