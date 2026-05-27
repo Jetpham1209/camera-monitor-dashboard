@@ -2501,6 +2501,8 @@ function renderModelFiles(group, files = []) {
           ${file.deepstreamYoloRef ? `<b>parser ${escapeHtml(file.deepstreamYoloRef.slice(0, 8))}</b>` : ""}
           ${file.name.toLowerCase().endsWith(".onnx") ? `<b class="${file.labelsUploaded ? "built" : "not-built"}">${file.labelsUploaded ? "labels ok" : "needs labels"}</b>` : ""}
           ${file.task ? `<b>${escapeHtml(file.task)}</b>` : ""}
+          ${file.inspectedAt ? `<b>inspected ${escapeHtml(formatDateTime(file.inspectedAt))}</b>` : ""}
+          ${file.inspectDetected?.outputKind ? `<b>${escapeHtml(file.inspectDetected.outputKind)}</b>` : ""}
           ${file.roles?.length ? file.roles.map((role) => `<b>${escapeHtml(role)}</b>`).join(" ") : ""}
         </small>
       </div>
@@ -2517,6 +2519,9 @@ function renderModelFiles(group, files = []) {
         ` : ""}
         <button class="model-build-button" type="button" data-build-source="${escapeHtml(group)}" data-source-path="${escapeHtml(file.path)}" data-source-name="${escapeHtml(file.name)}" data-source-profile="${escapeHtml(file.profile || "yolo_detection")}" data-built="${file.built ? "1" : "0"}">
           ${file.built ? "Built" : "Build"}
+        </button>
+        <button type="button" data-inspect-model-file="${escapeHtml(group)}" data-source-key="${escapeHtml(file.sourceKey)}">
+          Inspect
         </button>
         <button type="button" data-delete-model-file="${escapeHtml(group)}" data-file-id="${escapeHtml(file.id)}">
           Delete
@@ -2540,6 +2545,13 @@ function renderModelFiles(group, files = []) {
       print(error.message);
     }));
   });
+  container.querySelectorAll("[data-inspect-model-file]").forEach((button) => {
+    button.addEventListener("click", () => inspectModelFile(
+      button.dataset.inspectModelFile,
+      button.dataset.sourceKey,
+      button
+    ).catch((error) => print(error.message)));
+  });
   container.querySelectorAll("[data-delete-model-file]").forEach((button) => {
     button.addEventListener("click", () => deleteModelFile(button.dataset.deleteModelFile, button.dataset.fileId, button).catch((error) => print(error.message)));
   });
@@ -2558,6 +2570,16 @@ async function uploadSourceLabels(group, sourceKey, button = null) {
   modelFiles.set(group, result.files || []);
   renderModelFiles(group, result.files || []);
   setTaskStatus(`model-${group}`, "success", `Uploaded ${result.labelCount} labels.`);
+  print(result);
+}
+
+async function inspectModelFile(group, sourceKey, button = null) {
+  const result = await withTask(`model-${group}`, button, `Inspecting ${group}...`, async () => {
+    return await api(`/api/model-source/${encodeURIComponent(group)}/${encodeURIComponent(sourceKey)}/inspect`, { method: "POST" });
+  });
+  await loadModelFiles(group);
+  const detected = result.inspect?.detected?.outputKind || "unknown output";
+  setTaskStatus(`model-${group}`, "success", `Inspect done: ${detected}.`);
   print(result);
 }
 

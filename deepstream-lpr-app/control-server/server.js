@@ -1408,6 +1408,14 @@ function countLabelLines(filePath) {
   }
 }
 
+function readLabelLines(filePath) {
+  try {
+    return fs.readFileSync(filePath, "utf8").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 function inferredNumClasses(group, labelCount, currentValue = 0) {
   const current = Number(currentValue || 0);
   if (current > 0) return current;
@@ -1449,9 +1457,7 @@ async function listModelFiles(group) {
     const onnxPath = build?.onnx ? hostPathFromWorkspace(build.onnx) : paths.onnx;
     const parserPath = build?.customLib ? hostPathFromWorkspace(build.customLib) : paths.parserLib;
     const labelsPath = build?.labels ? hostPathFromWorkspace(build.labels) : usableFileStat(paths.labels) ? paths.labels : sourceLabel;
-    const labels = usableFileStat(labelsPath)
-      ? fs.readFileSync(labelsPath, "utf8").split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
-      : [];
+    const labels = readLabelLines(labelsPath);
     const isActive = model.source === workspace || model.engine === build?.engine;
     const isBuilt = Boolean(buildHasRunnableArtifacts(build, paths));
     files.push({
@@ -1473,6 +1479,8 @@ async function listModelFiles(group) {
       buildUpdatedAt: build?.updatedAt || null,
       profile: normalizeModelProfile(build?.profile || meta.profile || model.profile),
       task: build?.task || model.build?.task || "",
+      inspectedAt: meta.inspect?.inspectedAt || null,
+      inspectDetected: meta.inspect?.detected || null,
       engineBuildMethod: build?.engineBuildMethod || "",
       deepstreamYoloRef: build?.deepstreamYoloRef || "",
       labelsUploaded: Boolean(usableFileStat(sourceLabel)),
@@ -1491,6 +1499,262 @@ async function listModelFiles(group) {
   }
 
   return files.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+}
+
+async function findModelSourcePath(group, sourceKey, config = null) {
+  group = sanitizeModelGroup(group);
+  sourceKey = sanitizeSourceKey(sourceKey);
+  const currentConfig = config || await getConfig();
+  const model = currentConfig.models?.[group] || {};
+  const directSource = hostPathFromWorkspace(model.source);
+  if (directSource && fs.existsSync(directSource) && sourceKeyFromPath(directSource) === sourceKey) {
+    return directSource;
+  }
+
+  const sourceDir = path.join(MODELS_DIR, group, "source");
+  let entries = [];
+  try {
+    entries = await fsp.readdir(sourceDir, { withFileTypes: true });
+  } catch {
+    entries = [];
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const candidate = path.join(sourceDir, entry.name);
+    if (sourceKeyFromPath(candidate) === sourceKey) return candidate;
+  }
+  return "";
+}
+
+function modelInspectScript() {
+  return String.raw`
+import json
+import os
+import sys
+
+path = sys.argv[1]
+ext = os.path.splitext(path)[1].lower()
+result = {
+    "path": path,
+    "fileName": os.path.basename(path),
+    "type": ext.replace(".", ""),
+    "inputs": [],
+    "outputs": [],
+    "metadata": {},
+    "detected": {},
+    "warnings": []
+}
+
+def shape_from_value(value):
+    dims = []
+    tensor_type = value.type.tensor_type
+    for dim in tensor_type.shape.dim:
+        if dim.dim_value:
+            dims.append(int(dim.dim_value))
+        elif dim.dim_param:
+            dims.append(str(dim.dim_param))
+        else:
+            dims.append(None)
+    return dims
+
+try:
+    if ext == ".onnx":
+        import onnx
+        model = onnx.load(path)
+        graph = model.graph
+        result["metadata"] = {
+            "irVersion": getattr(model, "ir_version", None),
+            "producerName": getattr(model, "producer_name", ""),
+            "producerVersion": getattr(model, "producer_version", ""),
+            "opsets": [{"domain": item.domain or "ai.onnx", "version": int(item.version)} for item in model.opset_import],
+        }
+        initializer_names = {item.name for item in graph.initializer}
+        for value in graph.input:
+            if value.name in initializer_names:
+                continue
+            result["inputs"].append({"name": value.name, "shape": shape_from_value(value)})
+        for value in graph.output:
+            result["outputs"].append({"name": value.name, "shape": shape_from_value(value)})
+
+        first_input = result["inputs"][0]["shape"] if result["inputs"] else []
+        fixed_batch = isinstance(first_input[0], int) and first_input[0] > 0 if len(first_input) >= 1 else False
+        image_size = None
+        if len(first_input) == 4:
+            h, w = first_input[2], first_input[3]
+            if isinstance(h, int) and isinstance(w, int):
+                image_size = max(h, w)
+        output_names = [item["name"].lower() for item in result["outputs"]]
+        output_shapes = [item["shape"] for item in result["outputs"]]
+        output_kind = "unknown"
+        if {"boxes", "scores", "classes"}.issubset(set(output_names)):
+            output_kind = "boxes_scores_classes"
+        elif any("mask" in name or "proto" in name for name in output_names):
+            output_kind = "segmentation_like"
+        elif any("keypoint" in name or "kpt" in name or "pose" in name for name in output_names):
+            output_kind = "pose_like"
+        elif len(output_shapes) == 1 and len(output_shapes[0]) == 3:
+            output_kind = "raw_yolo_like"
+        elif len(output_shapes) == 1 and len(output_shapes[0]) == 2:
+            output_kind = "classification_like"
+        result["detected"] = {
+            "fixedBatch": bool(fixed_batch),
+            "batchSize": first_input[0] if fixed_batch else None,
+            "imageSize": image_size,
+            "outputKind": output_kind,
+            "outputCount": len(result["outputs"])
+        }
+    elif ext == ".pt":
+        from ultralytics import YOLO
+        model = YOLO(path)
+        names = getattr(model, "names", None) or {}
+        if isinstance(names, dict):
+            labels = [names[key] for key in sorted(names.keys(), key=lambda value: int(value) if str(value).isdigit() else str(value))]
+        else:
+            labels = list(names or [])
+        task = getattr(model, "task", "") or "detect"
+        result["metadata"] = {
+            "task": task,
+            "labelCount": len(labels),
+            "labelsPreview": labels[:20]
+        }
+        result["detected"] = {
+            "task": task,
+            "outputKind": f"ultralytics_{task}",
+            "imageSize": None,
+            "fixedBatch": False,
+            "batchSize": None
+        }
+    else:
+        result["warnings"].append(f"Unsupported model extension: {ext}")
+except Exception as exc:
+    result["error"] = str(exc)
+
+print(json.dumps(result, ensure_ascii=False))
+`;
+}
+
+function inspectRecommendations(group, sourcePath, model, inspect, labels) {
+  const sourceExt = path.extname(sourcePath || "").toLowerCase();
+  const sourceKey = sourceKeyFromPath(sourcePath);
+  const detected = inspect.detected || {};
+  const profile = normalizeModelProfile(model.profile || model.sourceMeta?.[sourceKey]?.profile);
+  const labelCount = labels.length;
+  const warnings = [...(inspect.warnings || [])];
+  const recommendations = [];
+  const suggested = {
+    profile,
+    task: detected.task || (profile === "yolo_segmentation" ? "segment" : profile === "yolo_pose" ? "pose" : profile === "yolo_classification" ? "classify" : "detect"),
+    imageSize: detected.imageSize || 640,
+    buildBatchSize: detected.fixedBatch && detected.batchSize ? detected.batchSize : 1,
+    numClasses: labelCount > 0 ? inferredNumClasses(group, labelCount, model.numClasses) : model.numClasses || null,
+    engineBuildMethod: "runtime-trtexec",
+    buildParser: !["custom_onnx", "yolo_classification"].includes(profile),
+    forceImplicitBatchDim: false,
+    scalingFilter: null,
+    preClusterThreshold: null,
+    topk: null
+  };
+
+  if (sourceExt === ".onnx" && !labelCount) {
+    warnings.push("ONNX does not contain a DeepStream labels.txt. Upload labels.txt before building runtime artifacts.");
+  }
+  if (detected.imageSize) recommendations.push(`Set Image size to ${detected.imageSize}.`);
+  if (detected.fixedBatch && detected.batchSize) {
+    recommendations.push(`ONNX has fixed batch ${detected.batchSize}. Keep build/runtime batch choices deliberate and do not reuse engines across JetPack/TensorRT versions.`);
+  }
+  if (labelCount > 0) {
+    recommendations.push(`labels.txt has ${labelCount} labels; suggested num classes is ${suggested.numClasses}.`);
+  }
+
+  if (detected.outputKind === "raw_yolo_like") {
+    suggested.profile = profile === "custom_onnx" ? "yolo_detection" : profile;
+    suggested.buildParser = true;
+    recommendations.push("Output looks like raw YOLO detection. Use the matching YOLO profile/parser and runtime-matched trtexec.");
+  } else if (detected.outputKind === "boxes_scores_classes") {
+    suggested.engineBuildMethod = "deepstream-runtime";
+    suggested.forceImplicitBatchDim = true;
+    suggested.scalingFilter = 2;
+    suggested.preClusterThreshold = 0.4;
+    suggested.topk = 200;
+    recommendations.push("Output is already boxes/scores/classes. This is not the normal raw YOLO output; use the legacy/custom parser profile that matches the training project.");
+  } else if (detected.outputKind === "segmentation_like") {
+    suggested.profile = "yolo_segmentation";
+    suggested.task = "segment";
+    recommendations.push("Output looks segmentation-like. Use YOLO Segmentation profile and segmentation parser settings.");
+  } else if (detected.outputKind === "pose_like") {
+    suggested.profile = "yolo_pose";
+    suggested.task = "pose";
+    recommendations.push("Output looks pose/keypoint-like. Use YOLO Pose profile and pose parser settings.");
+  } else if (detected.outputKind === "classification_like") {
+    suggested.profile = "yolo_classification";
+    suggested.task = "classify";
+    suggested.buildParser = false;
+    recommendations.push("Output looks classification-like. Build classifier engine without a YOLO bbox parser.");
+  } else if (sourceExt === ".pt") {
+    recommendations.push("For .pt sources, choose the Model profile that matches the Ultralytics task, then export/build.");
+  } else {
+    warnings.push("Cannot confidently infer output family. Compare input/output names with the source model repo before building.");
+  }
+
+  if (group === "plate_ocr" || /plate.*(ocr|char|character)/i.test(group)) {
+    recommendations.push("For this plate character model family, keep legacy OCR post-process assumptions: boxes/scores/classes outputs, sorted character detections, threshold around 0.4, topk around 200.");
+  }
+
+  return { suggested, warnings: [...new Set(warnings)], recommendations: [...new Set(recommendations)] };
+}
+
+async function inspectModelSource(group, sourceKey) {
+  group = sanitizeModelGroup(group);
+  sourceKey = sanitizeSourceKey(sourceKey);
+  const config = await getConfig();
+  const model = config.models[group] || {};
+  const sourcePath = await findModelSourcePath(group, sourceKey, config);
+  if (!sourcePath) throw new Error(`Cannot find source model ${sourceKey} in ${group}.`);
+
+  await ensureModelBuilderImage();
+  const result = await runModelBuilder(["python3", "-c", modelInspectScript(), workspacePath(sourcePath)]);
+  if (result.code !== 0) {
+    const error = new Error(`Model inspect failed:\n${result.output}`);
+    error.output = result.output;
+    throw error;
+  }
+
+  const jsonLine = result.output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).reverse().find((line) => line.startsWith("{"));
+  if (!jsonLine) throw new Error(`Model inspect did not return JSON.\n${result.output}`);
+  const inspect = JSON.parse(jsonLine);
+  const sourceLabel = sourceLabelPath(group, sourceKey);
+  const buildLabels = modelBuildPaths(group, sourceKey).labels;
+  const activeLabels = hostPathFromWorkspace(model.sourceLabels?.[sourceKey] || "");
+  const labelPath = [activeLabels, sourceLabel, buildLabels].find((candidate) => candidate && usableFileStat(candidate)) || "";
+  const labels = readLabelLines(labelPath);
+  const advice = inspectRecommendations(group, sourcePath, model, inspect, labels);
+  const summary = {
+    sourceKey,
+    source: workspacePath(sourcePath),
+    inspectedAt: new Date().toISOString(),
+    type: inspect.type,
+    inputs: inspect.inputs,
+    outputs: inspect.outputs,
+    metadata: inspect.metadata,
+    detected: inspect.detected,
+    labels: {
+      path: labelPath ? workspacePath(labelPath) : "",
+      count: labels.length,
+      preview: labels.slice(0, 30)
+    },
+    ...advice
+  };
+
+  model.sourceMeta = {
+    ...(model.sourceMeta || {}),
+    [sourceKey]: {
+      ...(model.sourceMeta?.[sourceKey] || {}),
+      inspect: summary
+    }
+  };
+  config.models[group] = model;
+  await writeJson(CONFIG_FILE, config);
+  return { group, sourceKey, inspect: summary, raw: inspect };
 }
 
 async function listModelGroups() {
@@ -2793,6 +3057,14 @@ app.post("/api/model-source/:group/:sourceKey/labels", uploadSourceLabel.single(
       files: await listModelFiles(group),
       config
     });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/model-source/:group/:sourceKey/inspect", async (req, res) => {
+  try {
+    res.json(await inspectModelSource(req.params.group, req.params.sourceKey));
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
