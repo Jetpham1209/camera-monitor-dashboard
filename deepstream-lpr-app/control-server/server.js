@@ -1875,7 +1875,7 @@ async function inspectSourcePath(group, sourceKey, sourcePath, model = {}, label
 
 async function savePendingModelSource(payload = {}) {
   const group = sanitizeModelGroup(payload.group || payload.modelName);
-  const pendingSource = hostPathFromWorkspace(payload.sourcePath);
+  const pendingSource = hostPathFromWorkspace(payload.sourcePath || payload.source);
   if (!pendingSource || !fs.existsSync(pendingSource) || !pendingSource.startsWith(MODEL_PENDING_DIR)) {
     throw new Error("Pending source model was not found. Upload the source again.");
   }
@@ -1889,7 +1889,7 @@ async function savePendingModelSource(payload = {}) {
 
   const config = await getConfig();
   const model = config.models[group] || {};
-  const pendingLabel = hostPathFromWorkspace(payload.labelsPath || "");
+  const pendingLabel = hostPathFromWorkspace(payload.labelsPath || payload.labels || "");
   let labelsWorkspace = "";
   if (pendingLabel && fs.existsSync(pendingLabel) && pendingLabel.startsWith(MODEL_PENDING_DIR)) {
     const labelsPath = sourceLabelPath(group, sourceKey);
