@@ -1726,6 +1726,9 @@ function inspectRecommendations(group, sourcePath, model, inspect, labels) {
     recommendations.push("Output looks like raw YOLO detection. Use the matching YOLO profile/parser and runtime-matched trtexec.");
   } else if (detected.outputKind === "boxes_scores_classes") {
     suggested.engineBuildMethod = "deepstream-runtime";
+    if (isPlateCharacterGroup(group)) {
+      suggested.deepstreamYoloRef = "profile:plate_ocr_yolov8_36";
+    }
     suggested.forceImplicitBatchDim = true;
     suggested.scalingFilter = 2;
     suggested.preClusterThreshold = 0.4;
@@ -1781,7 +1784,7 @@ function normalizeBuildConfig(group, input = {}, inspect = null, model = {}) {
     engineBuildMethod: String(input.engineBuildMethod || suggested.engineBuildMethod || "runtime-trtexec"),
     buildParser: parseBool(input.buildParser, suggested.buildParser ?? buildParserDefault),
     numClasses: Number(input.numClasses || suggested.numClasses || model.numClasses || 0) || undefined,
-    deepstreamYoloRef: String(input.deepstreamYoloRef || model.deepstreamYoloRef || "").trim(),
+    deepstreamYoloRef: String(input.deepstreamYoloRef || suggested.deepstreamYoloRef || model.deepstreamYoloRef || "").trim(),
     forceImplicitBatchDim: parseBool(input.forceImplicitBatchDim, suggested.forceImplicitBatchDim || false),
     scalingFilter: input.scalingFilter ?? suggested.scalingFilter ?? "",
     preClusterThreshold: input.preClusterThreshold ?? suggested.preClusterThreshold ?? "",
@@ -2563,9 +2566,12 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
   }
 
   const requestedRepoRef = options.deepstreamYoloRef || options.deepStreamYoloRef || "";
+  const normalizedRequestedRepoRef = isPlateCharacterGroup(group) && sourceExt === ".onnx" && !isParserProfile(requestedRepoRef)
+    ? "auto"
+    : requestedRepoRef;
   const deepstreamYoloRef = profile.id === "yolo_detection"
-    ? resolveDeepStreamYoloRef(group, sourceExt, requestedRepoRef)
-    : String(requestedRepoRef || profile.ref || "").trim();
+    ? resolveDeepStreamYoloRef(group, sourceExt, normalizedRequestedRepoRef)
+    : String(normalizedRequestedRepoRef || profile.ref || "").trim();
   output += [
     "# Build plan",
     `Model profile: ${profile.label} (${profile.id})`,
