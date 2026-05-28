@@ -233,14 +233,21 @@
     setupVideo(camera);
   }
 
-  function setupVideo(camera) {
+  function setupVideo(camera, attempt = 0) {
     const video = $("#monitorVideo");
     const help = $("#monitorVideoHelp");
     destroyHls();
     if (!camera.streaming || !video) return;
     const src = `${camera.streamUrl}?t=${Date.now()}`;
     if (window.Hls?.isSupported()) {
-      const hls = new window.Hls({ liveDurationInfinity: true, lowLatencyMode: true });
+      const hls = new window.Hls({
+        liveDurationInfinity: true,
+        lowLatencyMode: true,
+        manifestLoadingMaxRetry: 20,
+        manifestLoadingRetryDelay: 1000,
+        levelLoadingMaxRetry: 20,
+        levelLoadingRetryDelay: 1000
+      });
       state.hls = hls;
       hls.loadSource(src);
       hls.attachMedia(video);
@@ -249,7 +256,13 @@
         video.play().catch(() => {});
       });
       hls.on(window.Hls.Events.ERROR, (_event, data) => {
-        if (data.fatal && help) help.textContent = "Waiting for HLS stream. Check RTSP URL if it stays empty.";
+        if (!data.fatal) return;
+        if (help) help.textContent = "Waiting for HLS stream...";
+        if (attempt < 8 && state.selectedId === camera.id) {
+          setTimeout(() => setupVideo(camera, attempt + 1), 1500);
+        } else if (help) {
+          help.textContent = "Cannot load HLS stream. Check RTSP URL, codec, or stream status.";
+        }
       });
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
       video.src = src;

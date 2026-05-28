@@ -375,7 +375,7 @@ function createCameraMonitorFeature({
   }
 
   async function startStream(camera) {
-    if (streamProcesses.has(camera.id)) return;
+    if (streamProcesses.has(camera.id)) return streamProcesses.get(camera.id);
     const outputDir = path.join(hlsDir, camera.id);
     await removeDirectoryContents(outputDir);
     const playlistPath = path.join(outputDir, "index.m3u8");
@@ -394,7 +394,7 @@ function createCameraMonitorFeature({
       "-hls_segment_filename", segmentPath,
       playlistPath
     ], { windowsHide: true });
-    const record = { child, startedAt: new Date().toISOString(), lastLog: "" };
+    const record = { child, startedAt: new Date().toISOString(), lastLog: "", playlistPath };
     streamProcesses.set(camera.id, record);
     child.stderr.on("data", (chunk) => {
       record.lastLog = chunk.toString().trim().slice(-500);
@@ -408,6 +408,27 @@ function createCameraMonitorFeature({
       streamProcesses.delete(camera.id);
       await broadcastDashboard();
     });
+    return record;
+  }
+
+  async function waitForStreamReady(cameraId, timeoutMs = 12000) {
+    const started = Date.now();
+    const playlistPath = path.join(hlsDir, cameraId, "index.m3u8");
+    while (Date.now() - started < timeoutMs) {
+      const record = streamProcesses.get(cameraId);
+      if (!record) return { ready: false, error: "Stream process stopped before HLS playlist was ready." };
+      try {
+        const playlist = await fsp.readFile(playlistPath, "utf8");
+        if (/segment_.*\.ts/.test(playlist)) {
+          return { ready: true, lastLog: record.lastLog };
+        }
+      } catch {
+        // ffmpeg has not written the first playlist yet.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    const record = streamProcesses.get(cameraId);
+    return { ready: false, lastLog: record?.lastLog || "HLS playlist is not ready yet." };
   }
 
   function stopStream(cameraId) {
@@ -553,7 +574,8 @@ function createCameraMonitorFeature({
       if (!camera) return res.status(404).json({ error: "Camera not found." });
       await startStream(camera);
       await broadcastDashboard();
-      res.json({ streamUrl: publicPath(`/hls/${camera.id}/index.m3u8`) });
+      const readiness = await waitForStreamReady(camera.id);
+      res.json({ streamUrl: publicPath(`/hls/${camera.id}/index.m3u8`), ...readiness });
     } catch (error) {
       res.status(500).json({ error: error.message });
     }
