@@ -15,6 +15,11 @@ services:
       MODEL_BUILDER_FORCE_BUILD: ${MODEL_BUILDER_FORCE_BUILD:-0}
       DOCKER_RUNTIME_ARGS: ${DOCKER_RUNTIME_ARGS:---runtime nvidia}
       DEEPSTREAM_IMAGE: ${DEEPSTREAM_IMAGE:-camera-monitor-deepstream-runtime:local}
+      TRITON_IMAGE: ${TRITON_IMAGE:-nvcr.io/nvidia/tritonserver:24.03-py3-igpu}
+      TRITON_CONTAINER_NAME: ${TRITON_CONTAINER_NAME:-jetson-triton-server}
+      TRITON_HTTP_PORT: ${TRITON_HTTP_PORT:-8000}
+      TRITON_GRPC_PORT: ${TRITON_GRPC_PORT:-8001}
+      TRITON_METRICS_PORT: ${TRITON_METRICS_PORT:-8002}
       DEEPSTREAM_PROFILE: ${DEEPSTREAM_PROFILE:-unknown}
       DEEPSTREAM_VERSION: ${DEEPSTREAM_VERSION:-unknown}
       DEEPSTREAM_BASE_IMAGE: ${DEEPSTREAM_BASE_IMAGE:-nvcr.io/nvidia/deepstream:7.0-triton-multiarch}

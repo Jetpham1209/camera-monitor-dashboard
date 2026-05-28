@@ -11,6 +11,7 @@ Scaffold deploy tren Jetson cho DeepStream detection app co the chay LPR process
 - Tracking object id de tranh capture qua nhieu lan cho cung mot xe.
 - Control UI de nhap RTSP, ve ROI polygon tren anh mau, upload/build model YOLO, build ONNX/TensorRT engine, roi bam Deploy.
 - Camera Monitor duoc mount vao cung Jetson Console de ping camera, xem HLS stream, capture frame, ve shape va cau hinh Telegram alert.
+- Triton tab de quan ly Triton model repository, start/stop Triton server, upload/delete model va dung nhu service inference rieng cho automation workflow.
 
 ## Chay dang product Docker
 
@@ -20,11 +21,11 @@ Day la cach khuyen nghi tren Jetson de isolate moi truong. Control UI chay trong
 
 Product deploy path hien tai target JetPack 6.x tren Jetson Orin. Script install se tu detect L4T va chon profile:
 
-| Jetson L4T | JetPack | CUDA | TensorRT | DeepStream | pyds | Profile |
-| --- | --- | --- | --- | --- | --- | --- |
-| 36.4.x | 6.1 GA | 12.6 | 10.3 | 7.1 | 1.2.0 | `jp61-ds71` |
-| 36.3.x | 6.0 GA | 12.2 | 8.6 | 7.0 | 1.1.11 | `jp60-ds70` |
-| 36.2.x | 6.0 DP | 12.2 | 8.6 | 6.4 | 1.1.10 | `jp60dp-ds64` experimental |
+| Jetson L4T | JetPack | CUDA | TensorRT | DeepStream | pyds | Triton image | Profile |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 36.4.x | 6.1 GA | 12.6 | 10.3 | 7.1 | 1.2.0 | `nvcr.io/nvidia/tritonserver:24.08-py3-igpu` | `jp61-ds71` |
+| 36.3.x | 6.0 GA | 12.2 | 8.6 | 7.0 | 1.1.11 | `nvcr.io/nvidia/tritonserver:24.03-py3-igpu` | `jp60-ds70` |
+| 36.2.x | 6.0 DP | 12.2 | 8.6 | 6.4 | 1.1.10 | `nvcr.io/nvidia/tritonserver:23.11-py3-igpu` | `jp60dp-ds64` experimental |
 
 JetPack 5.x hien khong duoc dong goi mac dinh cho product Docker path nay vi khac Ubuntu/Python/DeepStream stack. Neu preflight detect JetPack 5.x, script se dung som va yeu cau upgrade len JetPack 6.x hoac tao image set rieng cho JetPack 5.
 

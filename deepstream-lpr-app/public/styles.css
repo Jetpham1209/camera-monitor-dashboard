@@ -1920,6 +1920,37 @@ pre {
   margin: 8px 0 0;
   font-size: 11px;
 }
+.triton-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.2fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+.triton-upload-card,
+.triton-model-card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fbfcff;
+}
+.triton-upload-card h3,
+.triton-upload-card p,
+.triton-model-card h3 {
+  margin: 0;
+}
+.triton-upload-card p {
+  color: var(--muted);
+  font-size: 13px;
+}
+.triton-config-preview {
+  min-height: 0;
+  max-height: 140px;
+  margin: -4px 0 8px;
+  font-size: 11px;
+}
 @media (max-width: 760px) {
   .shell {
     width: min(100% - 20px, 100%);
@@ -1942,7 +1973,8 @@ pre {
   .monitor-layout,
   .monitor-detail-grid,
   .monitor-frame-layout,
-  .automation-grid {
+  .automation-grid,
+  .triton-layout {
     grid-template-columns: 1fr;
   }
   .automation-wide {

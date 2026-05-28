@@ -19,6 +19,7 @@
           <button type="button" class="sidebar-link" data-nav-view="cameras">Cameras & ROI</button>
           <button type="button" class="sidebar-link" data-nav-view="deploy">Deploy</button>
           <button type="button" class="sidebar-link" data-nav-view="models">Model Factory</button>
+          <button type="button" class="sidebar-link" data-nav-view="triton">Triton</button>
           <button type="button" class="sidebar-link" data-nav-view="tests">Test Lab</button>
           <button type="button" class="sidebar-link" data-nav-view="agent">Agent</button>
           <button type="button" class="sidebar-link" data-nav-view="automation">Automation</button>
@@ -298,6 +299,52 @@
         <h2>Model Factory</h2>
         <div id="modelBuilders" class="model-builders"></div>
       </section>
+        </section>
+
+        <section class="view" data-view-section="triton">
+          <section class="panel">
+            <div class="panel-toolbar">
+              <div>
+                <h2>Triton Server</h2>
+                <p>Quan ly Triton model repository, start/stop server va upload model de cac service workflow co the goi inference rieng.</p>
+              </div>
+              <div class="actions inline-actions">
+                <button id="refreshTritonBtn" type="button" class="secondary">Refresh</button>
+                <button id="startTritonBtn" type="button">Start Triton</button>
+                <button id="stopTritonBtn" type="button" class="danger">Stop Triton</button>
+              </div>
+            </div>
+            <div id="tritonStatusCards" class="deploy-status-grid"></div>
+            <div class="triton-layout">
+              <article class="triton-upload-card">
+                <h3>Add model</h3>
+                <p>Upload vao Triton model repository. Neu model can input/output config cu the, upload them config.pbtxt.</p>
+                <div class="grid">
+                  <label>Model name <input id="tritonModelName" placeholder="weight_display_ocr" /></label>
+                  <label>Version <input id="tritonModelVersion" value="1" /></label>
+                  <label>
+                    Platform
+                    <select id="tritonModelPlatform">
+                      <option value="">Auto from file</option>
+                      <option value="onnxruntime_onnx">ONNX Runtime</option>
+                      <option value="tensorrt_plan">TensorRT plan</option>
+                      <option value="python">Python backend</option>
+                    </select>
+                  </label>
+                  <label>Max batch size <input id="tritonMaxBatchSize" type="number" value="0" min="0" /></label>
+                </div>
+                <label>Model file <input id="tritonModelFile" type="file" accept=".onnx,.plan,.engine,.py" /></label>
+                <label>config.pbtxt optional <input id="tritonConfigFile" type="file" accept=".pbtxt,.txt" /></label>
+                <div class="actions inline-actions">
+                  <button id="uploadTritonModelBtn" type="button">Upload model</button>
+                </div>
+              </article>
+              <article class="triton-model-card">
+                <h3>Model Repository</h3>
+                <div id="tritonModelList" class="automation-list"></div>
+              </article>
+            </div>
+          </section>
         </section>
 
         <section class="view" data-view-section="tests">

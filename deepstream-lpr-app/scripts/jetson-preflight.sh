@@ -65,6 +65,7 @@ TENSORRT_VERSION=$TENSORRT_VERSION
 DEEPSTREAM_VERSION=$DEEPSTREAM_VERSION
 DEEPSTREAM_IMAGE=$DEEPSTREAM_IMAGE
 DEEPSTREAM_BASE_IMAGE=$DEEPSTREAM_BASE_IMAGE
+TRITON_IMAGE=$TRITON_IMAGE
 PYDS_WHEEL_URL=$PYDS_WHEEL_URL
 MODEL_BUILDER_IMAGE=$MODEL_BUILDER_IMAGE
 MODEL_BUILDER_BASE_IMAGE=$MODEL_BUILDER_BASE_IMAGE
@@ -85,6 +86,7 @@ TENSORRT_VERSION="unknown"
 DEEPSTREAM_VERSION="unknown"
 DEEPSTREAM_IMAGE="camera-monitor-deepstream-runtime:local"
 DEEPSTREAM_BASE_IMAGE="nvcr.io/nvidia/deepstream:7.0-triton-multiarch"
+TRITON_IMAGE="nvcr.io/nvidia/tritonserver:24.03-py3-igpu"
 PYDS_WHEEL_URL="https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.1.11/pyds-1.1.11-py3-none-linux_aarch64.whl"
 MODEL_BUILDER_IMAGE="deepstream-lpr-model-builder:local"
 MODEL_BUILDER_BASE_IMAGE="ultralytics/ultralytics:latest-jetson-jetpack6"
@@ -97,6 +99,7 @@ case "$L4T_VERSION" in
     TENSORRT_VERSION="10.3"
     DEEPSTREAM_VERSION="7.1"
     DEEPSTREAM_BASE_IMAGE="nvcr.io/nvidia/deepstream:7.1-triton-multiarch"
+    TRITON_IMAGE="nvcr.io/nvidia/tritonserver:24.08-py3-igpu"
     PYDS_WHEEL_URL="https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.2.0/pyds-1.2.0-cp310-cp310-linux_aarch64.whl"
     ;;
   36.3*)
@@ -106,6 +109,7 @@ case "$L4T_VERSION" in
     TENSORRT_VERSION="8.6"
     DEEPSTREAM_VERSION="7.0"
     DEEPSTREAM_BASE_IMAGE="nvcr.io/nvidia/deepstream:7.0-triton-multiarch"
+    TRITON_IMAGE="nvcr.io/nvidia/tritonserver:24.03-py3-igpu"
     PYDS_WHEEL_URL="https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.1.11/pyds-1.1.11-py3-none-linux_aarch64.whl"
     ;;
   36.2*)
@@ -115,6 +119,7 @@ case "$L4T_VERSION" in
     TENSORRT_VERSION="8.6"
     DEEPSTREAM_VERSION="6.4"
     DEEPSTREAM_BASE_IMAGE="nvcr.io/nvidia/deepstream:6.4-triton-multiarch"
+    TRITON_IMAGE="nvcr.io/nvidia/tritonserver:23.11-py3-igpu"
     PYDS_WHEEL_URL="https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.1.10/pyds-1.1.10-py3-none-linux_aarch64.whl"
     warn "L4T 36.2 / JetPack 6.0 DP is detected. Prefer JetPack 6.0 GA or 6.1 GA for production."
     ;;
@@ -138,6 +143,7 @@ fi
 info "Detected Jetson profile: $DEEPSTREAM_PROFILE"
 info "L4T $L4T_VERSION, JetPack $JETPACK_VERSION, CUDA $CUDA_VER, TensorRT $TENSORRT_VERSION, DeepStream $DEEPSTREAM_VERSION"
 info "DeepStream base image: $DEEPSTREAM_BASE_IMAGE"
+info "Triton image: $TRITON_IMAGE"
 
 if [ "$CHECK_DOCKER" = "1" ]; then
   command_exists docker || fail "Docker is not installed. Install Docker first, then rerun this script."

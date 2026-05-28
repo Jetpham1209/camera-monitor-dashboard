@@ -193,7 +193,19 @@ const els = {
   automationWorkflowList: document.querySelector("#automationWorkflowList"),
   refreshAutomationRunsBtn: document.querySelector("#refreshAutomationRunsBtn"),
   clearAutomationRunsBtn: document.querySelector("#clearAutomationRunsBtn"),
-  automationRunList: document.querySelector("#automationRunList")
+  automationRunList: document.querySelector("#automationRunList"),
+  refreshTritonBtn: document.querySelector("#refreshTritonBtn"),
+  startTritonBtn: document.querySelector("#startTritonBtn"),
+  stopTritonBtn: document.querySelector("#stopTritonBtn"),
+  tritonStatusCards: document.querySelector("#tritonStatusCards"),
+  tritonModelName: document.querySelector("#tritonModelName"),
+  tritonModelVersion: document.querySelector("#tritonModelVersion"),
+  tritonModelPlatform: document.querySelector("#tritonModelPlatform"),
+  tritonMaxBatchSize: document.querySelector("#tritonMaxBatchSize"),
+  tritonModelFile: document.querySelector("#tritonModelFile"),
+  tritonConfigFile: document.querySelector("#tritonConfigFile"),
+  uploadTritonModelBtn: document.querySelector("#uploadTritonModelBtn"),
+  tritonModelList: document.querySelector("#tritonModelList")
 };
 
 let cameraDrafts = [];
@@ -221,6 +233,7 @@ let agentMessages = [];
 let agentSettings = null;
 let automationConfig = { services: [], environments: [], workflows: [] };
 let automationRuns = [];
+let latestTriton = { status: {}, models: [] };
 
 function print(value) {
   els.output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -308,6 +321,7 @@ const dashboardViewTitles = {
   cameras: "Cameras & ROI",
   deploy: "Deploy Settings",
   models: "Model Factory",
+  triton: "Triton Server",
   tests: "Test Lab",
   agent: "Operator Agent",
   automation: "Automation",
@@ -326,6 +340,7 @@ function selectDashboardView(view = "dashboard") {
   if (next === "dashboard") renderMainDashboard();
   if (next === "agent") refreshAgent().catch((error) => setTaskStatus("agent", "failed", error.message));
   if (next === "automation") refreshAutomation().catch((error) => setTaskStatus("automation", "failed", error.message));
+  if (next === "triton") refreshTriton().catch((error) => setTaskStatus("triton", "failed", error.message));
 }
 
 function dashboardTag(label, tone = "") {
@@ -739,6 +754,103 @@ async function clearAutomationRuns() {
   });
   automationRuns = result.runs || [];
   renderAutomationRuns();
+  print(result);
+}
+
+function renderTriton(data = latestTriton) {
+  latestTriton = data || { status: {}, models: [] };
+  const status = latestTriton.status || {};
+  const container = status.container || {};
+  const models = latestTriton.models || [];
+  if (els.tritonStatusCards) {
+    els.tritonStatusCards.innerHTML = `
+      <article class="deploy-status-card ${container.running ? "success" : "failed"}">
+        <span>Container</span>
+        <strong>${container.running ? "Running" : container.exists ? "Stopped" : "Missing"}</strong>
+        <small>${escapeHtml(container.name || "jetson-triton-server")} ${escapeHtml(container.status || "")}</small>
+      </article>
+      <article class="deploy-status-card ${status.ready ? "success" : "failed"}">
+        <span>Triton ready</span>
+        <strong>${status.ready ? "Ready" : "Not ready"}</strong>
+        <small>${escapeHtml(status.server?.version ? `version ${status.server.version}` : "Health endpoint waiting.")}</small>
+      </article>
+      <article class="deploy-status-card">
+        <span>Image</span>
+        <strong>${escapeHtml(status.image || "unknown")}</strong>
+        <small>${escapeHtml(status.modelRepository || "triton-models")}</small>
+      </article>
+      <article class="deploy-status-card">
+        <span>Ports</span>
+        <strong>${status.httpPort || 8000} / ${status.grpcPort || 8001}</strong>
+        <small>HTTP / gRPC, metrics ${status.metricsPort || 8002}</small>
+      </article>
+    `;
+  }
+  if (els.tritonModelList) {
+    els.tritonModelList.innerHTML = models.length ? models.map((model) => `
+      <article class="automation-row">
+        <div>
+          <strong>${escapeHtml(model.name)}</strong>
+          <span>${model.versions?.length ? model.versions.map((item) => `v${item.version}: ${item.files.join(", ")}`).join(" | ") : "No version folder"}</span>
+          <small>${model.hasConfig ? "config.pbtxt available" : "missing config.pbtxt"}</small>
+        </div>
+        <div class="actions inline-actions">
+          <button type="button" class="danger" data-delete-triton-model="${escapeHtml(model.name)}">Delete</button>
+        </div>
+      </article>
+      ${model.configPreview ? `<pre class="triton-config-preview">${escapeHtml(model.configPreview)}</pre>` : ""}
+    `).join("") : '<div class="empty">No Triton model yet.</div>';
+  }
+}
+
+async function refreshTriton(button = null) {
+  const result = await withTask("triton", button, "Loading Triton...", async () => {
+    return await api("/api/triton/models");
+  });
+  renderTriton(result);
+  print(result);
+  return result;
+}
+
+async function startTriton(button = null) {
+  const result = await withTask("triton", button, "Starting Triton...", async () => {
+    return await api("/api/triton/start", { method: "POST" });
+  });
+  await refreshTriton().catch(() => {});
+  print(result);
+}
+
+async function stopTriton(button = null) {
+  const result = await withTask("triton", button, "Stopping Triton...", async () => {
+    return await api("/api/triton/stop", { method: "POST" });
+  });
+  await refreshTriton().catch(() => {});
+  print(result);
+}
+
+async function uploadTritonModel(button = null) {
+  if (!els.tritonModelFile?.files?.length) return print("Chon Triton model file truoc khi upload.");
+  const form = new FormData();
+  form.append("model", els.tritonModelFile.files[0]);
+  if (els.tritonConfigFile?.files?.length) form.append("config", els.tritonConfigFile.files[0]);
+  form.append("name", els.tritonModelName.value.trim());
+  form.append("version", els.tritonModelVersion.value.trim() || "1");
+  form.append("platform", els.tritonModelPlatform.value);
+  form.append("maxBatchSize", els.tritonMaxBatchSize.value || "0");
+  const result = await withTask("triton", button, "Uploading Triton model...", async () => {
+    return await api("/api/triton/models", { method: "POST", body: form });
+  });
+  els.tritonModelFile.value = "";
+  if (els.tritonConfigFile) els.tritonConfigFile.value = "";
+  renderTriton(result);
+  print(result);
+}
+
+async function deleteTritonModel(name) {
+  const result = await withTask("triton", null, `Deleting ${name}...`, async () => {
+    return await api(`/api/triton/models/${encodeURIComponent(name)}`, { method: "DELETE" });
+  });
+  renderTriton(result);
   print(result);
 }
 
@@ -3954,6 +4066,7 @@ async function init() {
   await refreshDeployStatus().catch(() => {});
   await refreshAgent().catch((error) => setTaskStatus("agent", "failed", error.message));
   await refreshAutomation().catch((error) => setTaskStatus("automation", "failed", error.message));
+  await refreshTriton().catch((error) => setTaskStatus("triton", "failed", error.message));
   startDeployStatusPolling();
 }
 
@@ -4148,4 +4261,18 @@ els.automationWorkflowList?.addEventListener("click", (event) => {
 });
 els.refreshAutomationRunsBtn?.addEventListener("click", () => refreshAutomationRuns(els.refreshAutomationRunsBtn).then((result) => print(result)).catch((error) => print(error.message)));
 els.clearAutomationRunsBtn?.addEventListener("click", () => clearAutomationRuns().catch((error) => print(error.message)));
+els.refreshTritonBtn?.addEventListener("click", () => refreshTriton(els.refreshTritonBtn).catch((error) => print(error.message)));
+els.startTritonBtn?.addEventListener("click", () => startTriton(els.startTritonBtn).catch((error) => print(error.message)));
+els.stopTritonBtn?.addEventListener("click", () => stopTriton(els.stopTritonBtn).catch((error) => print(error.message)));
+els.uploadTritonModelBtn?.addEventListener("click", () => uploadTritonModel(els.uploadTritonModelBtn).catch((error) => print(error.message)));
+els.tritonModelFile?.addEventListener("change", () => {
+  const file = els.tritonModelFile.files?.[0];
+  if (!file || els.tritonModelName.value.trim()) return;
+  els.tritonModelName.value = file.name.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_.-]/g, "_");
+});
+els.tritonModelList?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-delete-triton-model]");
+  if (!button) return;
+  deleteTritonModel(button.dataset.deleteTritonModel).catch((error) => print(error.message));
+});
 init().catch((error) => print(error.message));

@@ -12,6 +12,7 @@ deepstream-lpr-app/.env.product
 deepstream-lpr-app/.env.product.detected
 deepstream-lpr-app/runtime/
 deepstream-lpr-app/models/
+deepstream-lpr-app/triton-models/
 yolo-test-models/
 __pycache__/
 *.pyc
