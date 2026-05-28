@@ -1404,6 +1404,28 @@ function isPlateCharacterGroup(value) {
 }
 
 const MODEL_FAMILY_RULES = {
+  boxes_scores_classes_yolov8_xywh: {
+    id: "boxes_scores_classes_yolov8_xywh",
+    label: "Postprocessed YOLO boxes/scores/classes",
+    parserProfile: "profile:boxes_scores_classes_xywh",
+    reason: "ONNX already exports boxes, scores and classes tensors. It needs the local BSC parser instead of the raw DeepStream-Yolo parser.",
+    lockedOptions: [
+      "profile",
+      "task",
+      "deepstreamYoloRef",
+      "engineBuildMethod",
+      "buildParser"
+    ],
+    suggested: {
+      profile: "yolo_detection",
+      task: "detect",
+      engineBuildMethod: "runtime-trtexec",
+      buildParser: true,
+      deepstreamYoloRef: "profile:boxes_scores_classes_xywh",
+      preClusterThreshold: 0.4,
+      topk: 200
+    }
+  },
   plate_character_legacy_yolov8: {
     id: "plate_character_legacy_yolov8",
     label: "Plate character legacy YOLOv8",
@@ -1440,6 +1462,24 @@ function firstInputShape(inspect = {}) {
   return Array.isArray(inspect.inputs?.[0]?.shape) ? inspect.inputs[0].shape : [];
 }
 
+function firstInputName(inspect = {}) {
+  return String(inspect.inputs?.[0]?.name || "input").trim() || "input";
+}
+
+function isDynamicDim(value) {
+  return value === null || value === undefined || value === "" || Number(value) <= 0 || typeof value === "string";
+}
+
+function trtexecShapeArg(inspect = {}, batchSize = 1, imageSize = 640) {
+  const shape = firstInputShape(inspect);
+  if (shape.length !== 4 || !shape.some(isDynamicDim)) return "";
+  const inputName = firstInputName(inspect);
+  const channels = Number(shape[1]) > 0 ? Number(shape[1]) : 3;
+  const height = Number(shape[2]) > 0 ? Number(shape[2]) : Number(imageSize || 640);
+  const width = Number(shape[3]) > 0 ? Number(shape[3]) : Number(imageSize || 640);
+  return `--shapes=${inputName}:${Math.max(1, Number(batchSize || 1))}x${channels}x${height}x${width}`;
+}
+
 function looksLikePlateCharacterLabels(labels = []) {
   const clean = labels.map((label) => String(label || "").trim().toUpperCase()).filter(Boolean);
   const hasDigits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"].every((value) => clean.includes(value));
@@ -1461,11 +1501,34 @@ function detectModelFamilyRule(group, sourcePath, inspect = {}, labels = []) {
   if ((isPlateCharacterGroup(group) || plateHint) && hasLegacyShape && hasLegacyOutput && looksLikePlateCharacterLabels(labels)) {
     return MODEL_FAMILY_RULES.plate_character_legacy_yolov8;
   }
+  if (hasLegacyOutput && labels.length > 0) {
+    return MODEL_FAMILY_RULES.boxes_scores_classes_yolov8_xywh;
+  }
   return null;
 }
 
 function applyModelFamilyRule(buildConfig, familyRule = null) {
   if (!familyRule) return buildConfig;
+  if (familyRule.id === "boxes_scores_classes_yolov8_xywh") {
+    return {
+      ...buildConfig,
+      ...familyRule.suggested,
+      imgsz: buildConfig.imgsz,
+      batchSize: buildConfig.batchSize,
+      sourceType: buildConfig.sourceType,
+      yoloVersion: buildConfig.yoloVersion || "yolov8",
+      opset: buildConfig.opset,
+      workspaceMb: buildConfig.workspaceMb,
+      fp16: buildConfig.fp16,
+      simplify: buildConfig.simplify,
+      dynamic: buildConfig.dynamic,
+      buildEngine: buildConfig.buildEngine,
+      numClasses: buildConfig.numClasses,
+      forceImplicitBatchDim: buildConfig.forceImplicitBatchDim,
+      scalingFilter: buildConfig.scalingFilter,
+      family: familyRule.id
+    };
+  }
   if (familyRule.id === "plate_character_legacy_yolov8") {
     return {
       ...buildConfig,
@@ -1488,6 +1551,30 @@ function applyModelFamilyRule(buildConfig, familyRule = null) {
 
 async function validateModelFamilyBuild(paths, familyRule, buildState = {}) {
   if (!familyRule) return "No model family rule matched.";
+  if (familyRule.id === "boxes_scores_classes_yolov8_xywh") {
+    const problems = [];
+    if (buildState.deepstreamYoloRef !== familyRule.parserProfile) {
+      problems.push(`parser ref must be ${familyRule.parserProfile}, got ${buildState.deepstreamYoloRef || "empty"}`);
+    }
+    if (!usableFileStat(paths.parserLib)) {
+      problems.push(`parser library missing: ${paths.parserLib}`);
+    }
+    const labelCount = countLabelLines(paths.labels);
+    if (labelCount <= 0) {
+      problems.push("labels.txt is required for boxes/scores/classes detector outputs");
+    }
+    if (Number(buildState.numClasses || 0) !== labelCount) {
+      problems.push(`numClasses should match labels count ${labelCount}, got ${buildState.numClasses}`);
+    }
+    if (problems.length) {
+      throw new Error(`Model family validation failed:\n- ${problems.join("\n- ")}`);
+    }
+    return [
+      `${familyRule.label} validation OK.`,
+      `Parser: ${familyRule.parserProfile}`,
+      `labels.txt: ${labelCount} labels`
+    ].join("\n");
+  }
   if (familyRule.id !== "plate_character_legacy_yolov8") return `No validation rules for ${familyRule.id}.`;
   const problems = [];
   if (buildState.deepstreamYoloRef !== familyRule.parserProfile) {
@@ -2579,6 +2666,7 @@ async function buildParserProfile(config, paths, profileName) {
 async function buildRuntimeTrtexecEngine(config, paths, options = {}) {
   const fp16 = parseBool(options.fp16, true);
   const workspaceMb = Math.max(256, Number(options.workspaceMb || 1024));
+  const shapeArg = String(options.shapeArg || "").trim();
   const mountedOnnx = workspacePath(paths.onnx);
   const mountedEngine = workspacePath(paths.engine);
   const command = [
@@ -2592,6 +2680,7 @@ async function buildRuntimeTrtexecEngine(config, paths, options = {}) {
       `--memPoolSize=workspace:${workspaceMb}`,
       "--builderOptimizationLevel=0",
       "--avgTiming=1",
+      shapeArg,
       fp16 ? "--fp16" : ""
     ].filter(Boolean).join(" ")
   ].join(" && ");
@@ -2693,6 +2782,7 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
   const imgsz = Math.max(32, Number(options.imgsz || 640));
   const opset = Math.max(11, Number(options.opset || 17));
   const batchSize = Math.max(1, Number(options.batchSize || previousBuild.batchSize || model.engineBatchSize || 1));
+  const shapeArg = trtexecShapeArg(sourceMeta.inspect || {}, batchSize, imgsz);
   const task = profile.task || options.task || "detect";
   const yoloVersion = String(options.yoloVersion || model.yoloVersion || "yolov8").toLowerCase();
   const simplify = parseBool(options.simplify, true);
@@ -2739,6 +2829,7 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
     `DeepStream runtime image: ${config.deepstreamImage}`,
     `Detected runtime TensorRT: ${TENSORRT_VERSION || "unknown"}`,
     `Build batch size: ${batchSize}`,
+    shapeArg ? `TensorRT input shape: ${shapeArg}` : "TensorRT input shape: static/default",
     ""
   ].join("\n");
   const labelSource = sourceLabelPath(group, sourceKey);
@@ -2847,7 +2938,7 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
       output += `\n# Build TensorRT engine\n${message}\n`;
     } else {
       const trtResult = await runCheckpoint(checkpoints, "build_tensorrt", async () => {
-        const resultOutput = await buildRuntimeTrtexecEngine(config, paths, { fp16, workspaceMb });
+        const resultOutput = await buildRuntimeTrtexecEngine(config, paths, { fp16, workspaceMb, shapeArg });
         return { output: resultOutput };
       }, "TensorRT engine built in DeepStream runtime.", onProgress);
       output += `\n# Build TensorRT engine\n${trtResult.output}\n`;
@@ -2868,6 +2959,7 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
           `--memPoolSize=workspace:${workspaceMb}`,
           "--verbose"
         ];
+        if (shapeArg) trtArgs.push(shapeArg);
         if (fp16) trtArgs.push("--fp16");
         const result = await runModelBuilder([trtexec, ...trtArgs]);
         if (result.code !== 0) {
