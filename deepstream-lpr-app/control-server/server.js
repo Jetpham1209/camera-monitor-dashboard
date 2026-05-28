@@ -933,7 +933,7 @@ function normalizeRule(rule, index, zones = [], streamDefaults = {}) {
     maxTimeSec: Math.max(1, Number(rule?.maxTimeSec || 30)),
     cooldownSec: cooldown,
     gieId,
-    classIds: normalizeClassIds(rule?.classIds)
+    classIds: []
   };
 }
 

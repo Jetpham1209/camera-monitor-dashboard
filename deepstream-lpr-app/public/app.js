@@ -1124,7 +1124,7 @@ function normalizeRule(rule = {}, index = 0, zones = []) {
     action: ["capture", "ignore"].includes(rule.action) ? rule.action : "capture",
     reverseAction: ["capture", "ignore"].includes(rule.reverseAction) ? rule.reverseAction : "ignore",
     maxTimeSec: Math.max(1, Number(rule.maxTimeSec || 30)),
-    classIds: Array.isArray(rule.classIds) ? rule.classIds.join(",") : String(rule.classIds ?? ""),
+    classIds: "",
     cooldownSec: rule.cooldownSec === "" || rule.cooldownSec === null || rule.cooldownSec === undefined
       ? ""
       : Math.max(1, Number(rule.cooldownSec || 30))

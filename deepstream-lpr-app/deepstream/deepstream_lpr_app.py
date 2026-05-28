@@ -323,7 +323,7 @@ class LprRuntime:
                 "maxTimeSec": float(rule.get("maxTimeSec") or 30),
                 "cooldownSec": rule.get("cooldownSec", ""),
                 "gieId": int(rule.get("gieId") or 0),
-                "classIds": self.class_id_set(rule.get("classIds")),
+                "classIds": set(),
             })
         return normalized
 
@@ -420,9 +420,6 @@ class LprRuntime:
         for rule in rules:
             gie_id = int(rule.get("gieId") or 0)
             if gie_id and int(component_id) != gie_id:
-                continue
-            class_ids = rule.get("classIds") or set()
-            if class_ids and int(class_id) not in class_ids:
                 continue
             for zone in zones:
                 action, direction = self.sequence_rule_action(rule, history, zone.get("id"))
