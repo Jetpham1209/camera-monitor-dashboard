@@ -1322,6 +1322,17 @@ button.small-button {
   color: #e5e7eb;
   font-size: 12px;
 }
+.inspect-family-rule {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #a7f3d0;
+  border-radius: 8px;
+  padding: 10px;
+  background: #ecfdf5;
+}
+.inspect-family-rule strong {
+  color: #065f46;
+}
 .inspect-summary ul {
   margin: 0;
   padding-left: 18px;

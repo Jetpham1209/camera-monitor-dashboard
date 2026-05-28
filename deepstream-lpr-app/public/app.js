@@ -1071,6 +1071,9 @@ function normalizeZone(zone = {}, index = 0, camera = {}) {
   const mode = ["capture_when_inside", "alert_when_inside", "lpr_only_inside", "detect_only_inside", "ignore_inside"].includes(zone.mode)
     ? zone.mode
     : fallback.mode;
+  const gieId = zone.gieId === "" || zone.gieId === null || zone.gieId === undefined
+    ? ""
+    : Math.max(1, Number(zone.gieId || 1));
   return {
     ...fallback,
     ...zone,
@@ -1079,6 +1082,7 @@ function normalizeZone(zone = {}, index = 0, camera = {}) {
     enabled: zone.enabled !== false,
     mode,
     polygon: cleanZonePolygon(zone.polygon || zone.points || []),
+    gieId,
     classIds: Array.isArray(zone.classIds) ? zone.classIds.join(",") : String(zone.classIds ?? ""),
     cooldownSec: zone.cooldownSec === "" || zone.cooldownSec === null || zone.cooldownSec === undefined
       ? ""
@@ -1096,7 +1100,7 @@ function defaultRuleConfig(index = 0, overrides = {}) {
     secondZoneId: "",
     action: "capture",
     reverseAction: "ignore",
-    maxTimeSec: 5,
+    maxTimeSec: 30,
     classIds: "",
     cooldownSec: "",
     ...overrides
@@ -1119,7 +1123,7 @@ function normalizeRule(rule = {}, index = 0, zones = []) {
     secondZoneId: zoneIds.has(secondZoneId) ? secondZoneId : secondZoneId,
     action: ["capture", "ignore"].includes(rule.action) ? rule.action : "capture",
     reverseAction: ["capture", "ignore"].includes(rule.reverseAction) ? rule.reverseAction : "ignore",
-    maxTimeSec: Math.max(1, Number(rule.maxTimeSec || 5)),
+    maxTimeSec: Math.max(1, Number(rule.maxTimeSec || 30)),
     classIds: Array.isArray(rule.classIds) ? rule.classIds.join(",") : String(rule.classIds ?? ""),
     cooldownSec: rule.cooldownSec === "" || rule.cooldownSec === null || rule.cooldownSec === undefined
       ? ""
@@ -1237,6 +1241,25 @@ function primaryStageForApp(app = {}) {
 function primaryStageModelFile(app = {}) {
   const stage = primaryStageForApp(app);
   return stage ? findModelFile(stage.modelGroup, stage.selectedModel) : null;
+}
+
+function stageLabelChoices(stage = {}) {
+  const file = findModelFile(stage.modelGroup, stage.selectedModel);
+  const labels = file?.labels || [];
+  const allowed = String(stage.operateOnClassIds || "").split(/[;,]/).map((item) => item.trim()).filter(Boolean);
+  const allowedSet = new Set(allowed);
+  return labels
+    .map((label, index) => ({ id: String(index), label }))
+    .filter((item) => !allowedSet.size || allowedSet.has(item.id));
+}
+
+function zoneStageForApp(app = {}, zone = {}) {
+  const stages = normalizePipelineStages(app.pipelineStages || stagesFromSelectedModels(app.selectedModels)).filter((stage) => stage.enabled);
+  const requestedGieId = Number(zone.gieId || 0);
+  return stages.find((stage) => Number(stage.gieId) === requestedGieId)
+    || primaryStageForApp({ ...app, pipelineStages: stages })
+    || stages[0]
+    || null;
 }
 
 function deployCameraSettings(app = {}, camera = {}) {
@@ -1483,6 +1506,7 @@ function readDeployCameraSettings(card, cameras = readCameraCards()) {
         polygon: base.polygon || [],
         enabled: field("enabled")?.checked !== false,
         mode: field("mode")?.value || base.mode,
+        gieId: field("gieId")?.value || base.gieId || "",
         classIds: field("classIdsText")?.value || field("classIds")?.value || "",
         cooldownSec: field("cooldownSec")?.value || ""
       }, index, camera);
@@ -1572,8 +1596,7 @@ function renderDeployCameraPreview(camera, app = {}, appIndex = 0) {
   const settings = deployCameraSettings(app, camera);
   const zones = settings.zones;
   const capture = latestCaptureForCamera(camera.id);
-  const modelFile = primaryStageModelFile(app);
-  const labels = modelFile?.labels || [];
+  const stages = normalizePipelineStages(app.pipelineStages || stagesFromSelectedModels(app.selectedModels)).filter((stage) => stage.enabled);
   return `
     <article class="deploy-camera-preview" data-deploy-preview-camera="${escapeHtml(camera.id)}">
       <div class="deploy-preview-head">
@@ -1598,9 +1621,9 @@ function renderDeployCameraPreview(camera, app = {}, appIndex = 0) {
       <div class="deploy-zone-config">
         <div class="stage-section-head">
           <strong>Zone deploy logic</strong>
-          <small>${labels.length ? `${escapeHtml(modelFile.displayName || modelFile.name)} labels` : "No primary-stage labels loaded"}</small>
+          <small>Zone filters reuse labels from the GIE stages above.</small>
         </div>
-        ${zones.map((zone, zoneIndex) => renderDeployZoneRow(zone, zoneIndex, labels)).join("")}
+        ${zones.map((zone, zoneIndex) => renderDeployZoneRow(zone, zoneIndex, app, stages)).join("")}
       </div>
       <input data-deploy-camera-rules type="hidden" value="${escapeHtml(JSON.stringify(settings.rules))}" />
       ${renderDeployRuleEditor(camera, settings, appIndex)}
@@ -1608,7 +1631,10 @@ function renderDeployCameraPreview(camera, app = {}, appIndex = 0) {
   `;
 }
 
-function renderDeployZoneRow(zone, zoneIndex, labels = []) {
+function renderDeployZoneRow(zone, zoneIndex, app = {}, stages = []) {
+  const selectedStage = zoneStageForApp({ ...app, pipelineStages: stages }, zone);
+  const selectedGieId = Number(selectedStage?.gieId || zone.gieId || 1);
+  const labels = selectedStage ? stageLabelChoices(selectedStage) : [];
   const selected = new Set(String(zone.classIds || "").split(/[;,]/).map((item) => item.trim()).filter(Boolean));
   return `
     <div class="deploy-zone-row" data-deploy-zone-row>
@@ -1618,6 +1644,15 @@ function renderDeployZoneRow(zone, zoneIndex, labels = []) {
         <label class="inline-check"><input data-deploy-zone-field="enabled" type="checkbox" ${zone.enabled !== false ? "checked" : ""} /> enabled</label>
       </div>
       <div class="grid">
+        <label>GIE source
+          <select data-deploy-zone-field="gieId">
+            ${stages.length ? stages.map((stage) => {
+              const file = findModelFile(stage.modelGroup, stage.selectedModel);
+              const label = `${stage.gieType || "GIE"} ${stage.gieId} - ${file?.displayName || stage.modelGroup || stage.selectedModel || "model"}`;
+              return `<option value="${escapeHtml(stage.gieId)}" ${Number(stage.gieId) === selectedGieId ? "selected" : ""}>${escapeHtml(label)}</option>`;
+            }).join("") : '<option value="1">GIE 1</option>'}
+          </select>
+        </label>
         <label>Logic mode
           <select data-deploy-zone-field="mode">
             ${["capture_when_inside", "alert_when_inside", "lpr_only_inside", "detect_only_inside", "ignore_inside"].map((mode) => `
@@ -1628,21 +1663,21 @@ function renderDeployZoneRow(zone, zoneIndex, labels = []) {
         <label>Cooldown seconds <input data-deploy-zone-field="cooldownSec" type="number" min="1" value="${escapeHtml(zone.cooldownSec || "")}" placeholder="camera default" /></label>
       </div>
       <input data-deploy-zone-field="classIds" type="hidden" value="${escapeHtml(zone.classIds || "")}" />
-      <label>Desired class IDs <input data-deploy-zone-field="classIdsText" value="${escapeHtml(zone.classIds || "")}" placeholder="blank = all selected primary labels" /></label>
+      <input data-deploy-zone-field="classIdsText" type="hidden" value="${escapeHtml(zone.classIds || "")}" />
       ${labels.length ? `
         <div class="stage-label-tools deploy-label-tools">
-          <small>${labels.length} labels</small>
+          <small>${labels.length} label(s) from selected GIE stage</small>
           <button type="button" class="secondary small-button" data-select-all-zone-labels>Select all</button>
         </div>
         <div class="stage-label-options compact-label-options">
-          ${labels.map((label, index) => `
+          ${labels.map((item) => `
             <label class="class-chip">
-              <input data-zone-class-option type="checkbox" value="${index}" ${selected.has(String(index)) ? "checked" : ""} />
-              <span>${index}: ${escapeHtml(label)}</span>
+              <input data-zone-class-option type="checkbox" value="${escapeHtml(item.id)}" ${selected.has(String(item.id)) ? "checked" : ""} />
+              <span>${escapeHtml(item.id)}: ${escapeHtml(item.label)}</span>
             </label>
           `).join("")}
         </div>
-      ` : ""}
+      ` : '<small>No labels available from this GIE stage. Blank means all classes from the selected GIE.</small>'}
     </div>
   `;
 }
@@ -1662,14 +1697,13 @@ function renderDeployRuleEditor(camera, settings, appIndex = 0) {
         <label>Rule name <input data-rule-draft="name" placeholder="Zone 1 to Zone 2" /></label>
         <label>First zone <select data-rule-draft="firstZoneId">${zoneOptions(zones[0]?.id || "")}</select></label>
         <label>Then zone <select data-rule-draft="secondZoneId">${zoneOptions(zones[1]?.id || zones[0]?.id || "")}</select></label>
-        <label>Max seconds <input data-rule-draft="maxTimeSec" type="number" min="1" value="5" /></label>
+        <label>Max seconds <input data-rule-draft="maxTimeSec" type="number" min="1" value="30" /></label>
         <label>Reverse direction
           <select data-rule-draft="reverseAction">
             <option value="ignore">Ignore</option>
             <option value="capture">Capture</option>
           </select>
         </label>
-        <label>Rule class IDs <input data-rule-draft="classIds" placeholder="blank = all desired zone labels" /></label>
         <label>Cooldown seconds <input data-rule-draft="cooldownSec" type="number" min="1" placeholder="zone/camera default" /></label>
         <label class="inline-check"><input data-rule-draft="enabled" type="checkbox" checked /> enabled</label>
       </div>
@@ -2036,6 +2070,16 @@ function attachDeployAppHandlers() {
   document.querySelectorAll("[data-zone-class-option]").forEach((checkbox) => {
     checkbox.addEventListener("change", () => syncDeployZoneClassOptions(checkbox.closest("[data-deploy-zone-row]")));
   });
+  document.querySelectorAll("[data-deploy-zone-field='gieId']").forEach((select) => {
+    select.addEventListener("change", () => {
+      const row = select.closest("[data-deploy-zone-row]");
+      const hidden = row?.querySelector("[data-deploy-zone-field='classIds']");
+      const textInput = row?.querySelector("[data-deploy-zone-field='classIdsText']");
+      if (hidden) hidden.value = "";
+      if (textInput) textInput.value = "";
+      renderDeployApps(readDeployApps(), readCameraCards());
+    });
+  });
   document.querySelectorAll("[data-select-all-zone-labels]").forEach((button) => {
     button.addEventListener("click", () => {
       const row = button.closest("[data-deploy-zone-row]");
@@ -2105,8 +2149,7 @@ function addDeploySequenceRule(button) {
     secondZoneId,
     action: "capture",
     reverseAction: draft("reverseAction")?.value || "ignore",
-    maxTimeSec: draft("maxTimeSec")?.value || 5,
-    classIds: draft("classIds")?.value || "",
+    maxTimeSec: draft("maxTimeSec")?.value || 30,
     cooldownSec: draft("cooldownSec")?.value || ""
   }, rules.length, settings.zones));
   app.cameraSettings = {
@@ -2501,6 +2544,7 @@ function renderPendingModelDraft() {
   const draft = pendingModelDraft || editingModelConfig;
   const inspect = draft.inspect || {};
   const suggested = inspect.suggested || draft.buildOptions || {};
+  const familyRule = inspect.familyRule || draft.familyRule || null;
   const outputs = (inspect.outputs || []).map((item) => `${item.name}: [${(item.shape || []).join(", ")}]`).join("\n");
   const inputs = (inspect.inputs || []).map((item) => `${item.name}: [${(item.shape || []).join(", ")}]`).join("\n");
   panel.innerHTML = `
@@ -2515,6 +2559,14 @@ function renderPendingModelDraft() {
         <strong>${escapeHtml(suggested.imageSize || suggested.imgsz || "")}</strong><span>imgsz</span>
         <strong>${escapeHtml(suggested.buildBatchSize || suggested.batchSize || "")}</strong><span>batch</span>
       </div>
+      ${familyRule ? `
+        <div class="inspect-family-rule">
+          <strong>${escapeHtml(familyRule.label || familyRule.id)}</strong>
+          <span>${escapeHtml(familyRule.reason || "")}</span>
+          <small>Locked parser: ${escapeHtml(familyRule.parserProfile || suggested.deepstreamYoloRef || "")}</small>
+          ${familyRule.lockedOptions?.length ? `<small>Locked options: ${familyRule.lockedOptions.map(escapeHtml).join(", ")}</small>` : ""}
+        </div>
+      ` : ""}
       <pre>${escapeHtml([inputs ? `Inputs:\n${inputs}` : "", outputs ? `Outputs:\n${outputs}` : ""].filter(Boolean).join("\n\n"))}</pre>
       ${(inspect.recommendations || []).length ? `<ul>${inspect.recommendations.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
       ${(inspect.warnings || []).length ? `<div class="task-status failed">${statusMarkup("failed", inspect.warnings.join(" "))}</div>` : ""}
@@ -2668,6 +2720,7 @@ function renderModelFiles(group, files = []) {
           ${file.profile ? `<b>${escapeHtml(file.profile)}</b>` : ""}
           ${file.engineBuildMethod ? `<b>${escapeHtml(file.engineBuildMethod)}</b>` : ""}
           ${file.deepstreamYoloRef ? `<b>parser ${escapeHtml(file.deepstreamYoloRef.slice(0, 8))}</b>` : ""}
+          ${file.familyRule?.label ? `<b class="built">${escapeHtml(file.familyRule.label)}</b>` : ""}
           ${file.name.toLowerCase().endsWith(".onnx") ? `<b class="${file.labelsUploaded ? "built" : "not-built"}">${file.labelsUploaded ? "labels ok" : "needs labels"}</b>` : ""}
           ${file.task ? `<b>${escapeHtml(file.task)}</b>` : ""}
           ${file.inspectedAt ? `<b>inspected ${escapeHtml(formatDateTime(file.inspectedAt))}</b>` : ""}
@@ -3003,7 +3056,7 @@ function addRoiRule() {
     secondZoneId,
     action: "capture",
     reverseAction: els.roiRuleReverseAction.value || "ignore",
-    maxTimeSec: els.roiRuleMaxTime.value || 5,
+    maxTimeSec: els.roiRuleMaxTime.value || 30,
     classIds: els.roiRuleClassIds.value,
     cooldownSec: els.roiRuleCooldown.value
   }, rules.length, zones));

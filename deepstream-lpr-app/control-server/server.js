@@ -873,6 +873,9 @@ function normalizeZone(zone, index, streamDefaults = {}) {
   const id = String(zone?.id || `zone-${index + 1}`).trim() || `zone-${index + 1}`;
   const mode = ZONE_MODES.has(zone?.mode) ? zone.mode : "capture_when_inside";
   const classIds = normalizeClassIds(zone?.classIds);
+  const gieId = zone?.gieId === "" || zone?.gieId === null || zone?.gieId === undefined
+    ? ""
+    : Math.max(1, Number(zone.gieId || 1));
   const cooldown = zone?.cooldownSec === "" || zone?.cooldownSec === null || zone?.cooldownSec === undefined
     ? ""
     : Math.max(1, Number(zone.cooldownSec || streamDefaults.captureCooldownSec || 30));
@@ -882,6 +885,7 @@ function normalizeZone(zone, index, streamDefaults = {}) {
     enabled: zone?.enabled !== false,
     mode,
     polygon: normalizePolygon(zone?.polygon || zone?.points || []),
+    gieId,
     classIds,
     cooldownSec: cooldown
   };
@@ -911,6 +915,9 @@ function normalizeRule(rule, index, zones = [], streamDefaults = {}) {
   const type = rule?.type === "sequence" ? "sequence" : "sequence";
   const action = ["capture", "ignore"].includes(rule?.action) ? rule.action : "capture";
   const reverseAction = ["capture", "ignore"].includes(rule?.reverseAction) ? rule.reverseAction : "ignore";
+  const gieId = rule?.gieId === "" || rule?.gieId === null || rule?.gieId === undefined
+    ? ""
+    : Math.max(1, Number(rule.gieId || 1));
   const cooldown = rule?.cooldownSec === "" || rule?.cooldownSec === null || rule?.cooldownSec === undefined
     ? ""
     : Math.max(1, Number(rule.cooldownSec || streamDefaults.captureCooldownSec || 30));
@@ -923,8 +930,9 @@ function normalizeRule(rule, index, zones = [], streamDefaults = {}) {
     secondZoneId: zoneIds.has(secondZoneId) ? secondZoneId : secondZoneId,
     action,
     reverseAction,
-    maxTimeSec: Math.max(1, Number(rule?.maxTimeSec || 5)),
+    maxTimeSec: Math.max(1, Number(rule?.maxTimeSec || 30)),
     cooldownSec: cooldown,
+    gieId,
     classIds: normalizeClassIds(rule?.classIds)
   };
 }
@@ -1395,6 +1403,120 @@ function isPlateCharacterGroup(value) {
   return /plate.*(ocr|char|character)|character.*plate/i.test(String(value || ""));
 }
 
+const MODEL_FAMILY_RULES = {
+  plate_character_legacy_yolov8: {
+    id: "plate_character_legacy_yolov8",
+    label: "Plate character legacy YOLOv8",
+    parserProfile: "profile:plate_ocr_yolov8_36",
+    reason: "Fixed 32x3x224x224 ONNX with boxes/scores/classes outputs from the legacy plate OCR project.",
+    lockedOptions: [
+      "profile",
+      "task",
+      "deepstreamYoloRef",
+      "numClasses",
+      "forceImplicitBatchDim",
+      "scalingFilter",
+      "preClusterThreshold",
+      "topk"
+    ],
+    suggested: {
+      profile: "yolo_detection",
+      task: "detect",
+      imageSize: 224,
+      buildBatchSize: 32,
+      numClasses: 36,
+      engineBuildMethod: "runtime-trtexec",
+      buildParser: true,
+      deepstreamYoloRef: "profile:plate_ocr_yolov8_36",
+      forceImplicitBatchDim: true,
+      scalingFilter: 2,
+      preClusterThreshold: 0.4,
+      topk: 200
+    }
+  }
+};
+
+function firstInputShape(inspect = {}) {
+  return Array.isArray(inspect.inputs?.[0]?.shape) ? inspect.inputs[0].shape : [];
+}
+
+function looksLikePlateCharacterLabels(labels = []) {
+  const clean = labels.map((label) => String(label || "").trim().toUpperCase()).filter(Boolean);
+  const hasDigits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"].every((value) => clean.includes(value));
+  const hasLetters = ["A", "B", "C", "D", "E", "F"].every((value) => clean.includes(value));
+  return clean.length >= 36 && clean.length <= 37 && hasDigits && hasLetters;
+}
+
+function detectModelFamilyRule(group, sourcePath, inspect = {}, labels = []) {
+  const detected = inspect.detected || {};
+  const shape = firstInputShape(inspect);
+  const sourceHint = `${group || ""} ${sourcePath || ""}`.toLowerCase();
+  const plateHint = /plate|ocr|char|character|pl_32_224|plate_recognition/.test(sourceHint);
+  const hasLegacyShape = shape.length === 4 && Number(shape[0]) === 32 && Number(shape[1]) === 3 && Number(shape[2]) === 224 && Number(shape[3]) === 224;
+  const hasLegacyOutput = detected.outputKind === "boxes_scores_classes"
+    && Array.isArray(inspect.outputs)
+    && inspect.outputs.some((item) => String(item.name || "").toLowerCase() === "boxes")
+    && inspect.outputs.some((item) => String(item.name || "").toLowerCase() === "scores")
+    && inspect.outputs.some((item) => String(item.name || "").toLowerCase() === "classes");
+  if ((isPlateCharacterGroup(group) || plateHint) && hasLegacyShape && hasLegacyOutput && looksLikePlateCharacterLabels(labels)) {
+    return MODEL_FAMILY_RULES.plate_character_legacy_yolov8;
+  }
+  return null;
+}
+
+function applyModelFamilyRule(buildConfig, familyRule = null) {
+  if (!familyRule) return buildConfig;
+  if (familyRule.id === "plate_character_legacy_yolov8") {
+    return {
+      ...buildConfig,
+      ...familyRule.suggested,
+      imgsz: familyRule.suggested.imageSize,
+      batchSize: familyRule.suggested.buildBatchSize,
+      sourceType: buildConfig.sourceType,
+      yoloVersion: buildConfig.yoloVersion || "yolov8",
+      opset: buildConfig.opset,
+      workspaceMb: buildConfig.workspaceMb,
+      fp16: buildConfig.fp16,
+      simplify: buildConfig.simplify,
+      dynamic: buildConfig.dynamic,
+      buildEngine: buildConfig.buildEngine,
+      family: familyRule.id
+    };
+  }
+  return buildConfig;
+}
+
+async function validateModelFamilyBuild(paths, familyRule, buildState = {}) {
+  if (!familyRule) return "No model family rule matched.";
+  if (familyRule.id !== "plate_character_legacy_yolov8") return `No validation rules for ${familyRule.id}.`;
+  const problems = [];
+  if (buildState.deepstreamYoloRef !== familyRule.parserProfile) {
+    problems.push(`parser ref must be ${familyRule.parserProfile}, got ${buildState.deepstreamYoloRef || "empty"}`);
+  }
+  if (!usableFileStat(paths.parserLib)) {
+    problems.push(`parser library missing: ${paths.parserLib}`);
+  }
+  const labelCount = countLabelLines(paths.labels);
+  if (labelCount < 36 || labelCount > 37) {
+    problems.push(`labels count should be 36 or 37, got ${labelCount}`);
+  }
+  if (Number(buildState.numClasses) !== 36) {
+    problems.push(`numClasses should be 36, got ${buildState.numClasses}`);
+  }
+  if (!buildState.forceImplicitBatchDim) {
+    problems.push("forceImplicitBatchDim must be enabled");
+  }
+  if (problems.length) {
+    throw new Error(`Model family validation failed:\n- ${problems.join("\n- ")}`);
+  }
+  return [
+    `${familyRule.label} validation OK.`,
+    `Parser: ${familyRule.parserProfile}`,
+    `labels.txt: ${labelCount} labels`,
+    "force-implicit-batch-dim: enabled"
+  ].join("\n");
+}
+
 function resolveDeepStreamYoloRef(group, sourceExt, requested = "") {
   const value = String(requested || "auto").trim();
   if (value && value !== "auto") return value;
@@ -1524,6 +1646,7 @@ async function listModelFiles(group) {
       inspectedAt: meta.inspect?.inspectedAt || null,
       inspectDetected: meta.inspect?.detected || null,
       inspect: meta.inspect || null,
+      familyRule: meta.inspect?.familyRule || null,
       buildOptions: meta.buildOptions || build?.buildOptions || null,
       lastDummyTest: meta.lastDummyTest || null,
       engineBuildMethod: build?.engineBuildMethod || "",
@@ -1690,6 +1813,7 @@ function inspectRecommendations(group, sourcePath, model, inspect, labels) {
   const sourceExt = path.extname(sourcePath || "").toLowerCase();
   const sourceKey = sourceKeyFromPath(sourcePath);
   const detected = inspect.detected || {};
+  const familyRule = detectModelFamilyRule(group, sourcePath, inspect, labels);
   const profile = normalizeModelProfile(model.profile || model.sourceMeta?.[sourceKey]?.profile);
   const labelCount = labels.length;
   const warnings = [...(inspect.warnings || [])];
@@ -1709,6 +1833,13 @@ function inspectRecommendations(group, sourcePath, model, inspect, labels) {
     topk: null
   };
 
+  if (familyRule) {
+    Object.assign(suggested, familyRule.suggested);
+    suggested.family = familyRule.id;
+    recommendations.push(`Matched ${familyRule.label}. ${familyRule.reason}`);
+    recommendations.push(`Build config is locked to parser ${familyRule.parserProfile} to avoid the standard YOLO parser misreading boxes/scores/classes outputs.`);
+  }
+
   if (sourceExt === ".onnx" && !labelCount) {
     warnings.push("ONNX does not contain a DeepStream labels.txt. Upload labels.txt before building runtime artifacts.");
   }
@@ -1720,7 +1851,9 @@ function inspectRecommendations(group, sourcePath, model, inspect, labels) {
     recommendations.push(`labels.txt has ${labelCount} labels; suggested num classes is ${suggested.numClasses}.`);
   }
 
-  if (detected.outputKind === "raw_yolo_like") {
+  if (familyRule) {
+    recommendations.push("For future builds of this model family, save the suggested config and keep the generated parser profile unchanged.");
+  } else if (detected.outputKind === "raw_yolo_like") {
     suggested.profile = profile === "custom_onnx" ? "yolo_detection" : profile;
     suggested.buildParser = true;
     recommendations.push("Output looks like raw YOLO detection. Use the matching YOLO profile/parser and runtime-matched trtexec.");
@@ -1757,18 +1890,31 @@ function inspectRecommendations(group, sourcePath, model, inspect, labels) {
     recommendations.push("For this plate character model family, keep legacy OCR post-process assumptions: boxes/scores/classes outputs, sorted character detections, threshold around 0.4, topk around 200.");
   }
 
-  return { suggested, warnings: [...new Set(warnings)], recommendations: [...new Set(recommendations)] };
+  return {
+    suggested,
+    familyRule: familyRule ? {
+      id: familyRule.id,
+      label: familyRule.label,
+      reason: familyRule.reason,
+      parserProfile: familyRule.parserProfile,
+      lockedOptions: familyRule.lockedOptions,
+      suggested: familyRule.suggested
+    } : null,
+    warnings: [...new Set(warnings)],
+    recommendations: [...new Set(recommendations)]
+  };
 }
 
 function normalizeBuildConfig(group, input = {}, inspect = null, model = {}) {
   const suggested = inspect?.suggested || {};
+  const familyRule = inspect?.familyRule?.id ? MODEL_FAMILY_RULES[inspect.familyRule.id] : null;
   const profile = normalizeModelProfile(input.profile || suggested.profile || model.profile || "yolo_detection");
   const profileSpec = modelProfileSpec(profile);
   const sourceType = String(input.sourceType || "").toLowerCase();
   const ext = String(input.sourceExt || "").toLowerCase();
   const isOnnx = sourceType === "onnx" || ext === ".onnx";
   const buildParserDefault = !["custom_onnx", "yolo_classification"].includes(profile);
-  return {
+  const buildConfig = {
     sourceType: isOnnx ? "onnx" : "pt",
     profile,
     task: String(input.task || suggested.task || profileSpec.task || "detect"),
@@ -1790,6 +1936,7 @@ function normalizeBuildConfig(group, input = {}, inspect = null, model = {}) {
     preClusterThreshold: input.preClusterThreshold ?? suggested.preClusterThreshold ?? "",
     topk: input.topk ?? suggested.topk ?? ""
   };
+  return applyModelFamilyRule(buildConfig, familyRule);
 }
 
 function applySavedBuildOptions(options = {}, saved = {}) {
@@ -2484,6 +2631,7 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
     { id: "export_onnx", label: "Export ONNX" },
     { id: "build_tensorrt", label: "Build TensorRT engine" },
     { id: "build_parser", label: "Build DeepStream parser" },
+    { id: "validate_family_rule", label: "Validate model family rule" },
     { id: "write_runtime_config", label: "Write runtime config" }
   ]);
   notifyProgress(onProgress, checkpoints);
@@ -2507,7 +2655,14 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
   const sourceKey = sourceKeyFromPath(source);
   model.sourceKey = sourceKey;
   const sourceMeta = model.sourceMeta?.[sourceKey] || {};
+  const sourceExt = path.extname(source).toLowerCase();
   options = applySavedBuildOptions(options, sourceMeta.buildOptions || {});
+  if (sourceMeta.inspect?.familyRule?.id) {
+    options = normalizeBuildConfig(group, {
+      ...options,
+      sourceExt
+    }, sourceMeta.inspect, model);
+  }
   const profile = modelProfileSpec(options.profile || sourceMeta.profile || model.profile);
   const modelName = String(options.modelName || sourceMeta.modelName || model.sourceOriginalName || path.basename(source)).trim();
   const description = String(options.description || sourceMeta.description || "").trim();
@@ -2545,7 +2700,6 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
   const buildEngine = parseBool(options.buildEngine, true);
   const fp16 = parseBool(options.fp16, true);
   const workspaceMb = Math.max(256, Number(options.workspaceMb || 2048));
-  const sourceExt = path.extname(source).toLowerCase();
   const canUseProfileRepo = Boolean(profile.repo && profile.repoName && profile.parserDir && profile.parserLib);
   const canUseProfileParser = canUseProfileRepo && profile.networkType !== 1;
   const buildParser = parseBool(options.buildParser, canUseProfileParser);
@@ -2566,7 +2720,11 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
   }
 
   const requestedRepoRef = options.deepstreamYoloRef || options.deepStreamYoloRef || "";
-  const normalizedRequestedRepoRef = isPlateCharacterGroup(group) && sourceExt === ".onnx" && !isParserProfile(requestedRepoRef)
+  const familyRule = sourceMeta.inspect?.familyRule?.id ? MODEL_FAMILY_RULES[sourceMeta.inspect.familyRule.id] : null;
+  const familyLocksParser = Boolean(familyRule?.parserProfile);
+  const normalizedRequestedRepoRef = familyLocksParser && !isParserProfile(requestedRepoRef)
+    ? familyRule.parserProfile
+    : isPlateCharacterGroup(group) && sourceExt === ".onnx" && !isParserProfile(requestedRepoRef)
     ? "auto"
     : requestedRepoRef;
   const deepstreamYoloRef = profile.id === "yolo_detection"
@@ -2777,6 +2935,26 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
     model.engineCreateFunc = "";
   }
 
+  let familyValidation = null;
+  if (familyRule) {
+    const validation = await runCheckpoint(checkpoints, "validate_family_rule", async () => {
+      const validationOutput = await validateModelFamilyBuild(paths, familyRule, {
+        deepstreamYoloRef,
+        numClasses,
+        forceImplicitBatchDim: parseBool(options.forceImplicitBatchDim, false)
+      });
+      return { output: validationOutput };
+    }, "Model family rule validated.", onProgress);
+    familyValidation = {
+      family: familyRule.id,
+      label: familyRule.label,
+      output: validation.output || ""
+    };
+    output += `\n# Validate model family rule\n${validation.output || ""}\n`;
+  } else {
+    skipCheckpoint(checkpoints, "validate_family_rule", "No model family rule matched.", onProgress);
+  }
+
   model.build = {
     source: model.source,
     sourceKey,
@@ -2801,6 +2979,8 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
     engineBuildMethod,
     buildParser,
     forceRebuild,
+    family: familyRule?.id || "",
+    familyValidation,
     modelName,
     description,
     buildOptions: normalizeBuildConfig(group, options, sourceMeta.inspect, model),
