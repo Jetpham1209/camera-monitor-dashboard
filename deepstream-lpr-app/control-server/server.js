@@ -239,14 +239,98 @@ async function listRuntimeResults({ date = "", source = "", limit = 200 } = {}) 
   const capturesRoot = path.join(RUNTIME_DIR, "captures");
   const events = await readRuntimeEvents(5000);
   const eventByRelative = new Map();
-  for (const event of events) {
-    if (event.imageRelativePath) eventByRelative.set(String(event.imageRelativePath).replace(/\\/g, "/"), event);
+  const detectionsByFrame = new Map();
+  const lprFrameKeys = new Set();
+  const results = [];
+
+  function frameKey(event = {}) {
+    return [
+      event.processorType || "",
+      event.sourceId ?? "",
+      event.frameNum ?? "",
+      event.cameraId || ""
+    ].join("|");
+  }
+
+  function relativeFromEventImage(event = {}) {
+    if (event.imageRelativePath) return String(event.imageRelativePath).replace(/\\/g, "/");
     if (event.imagePath) {
       const relative = path.relative(RUNTIME_DIR, hostPathFromWorkspace(event.imagePath)).replace(/\\/g, "/");
-      if (relative && !relative.startsWith("..")) eventByRelative.set(relative, event);
+      if (relative && !relative.startsWith("..")) return relative;
+    }
+    return "";
+  }
+
+  function resultFromEventImage(event = {}, fallback = {}) {
+    const relative = relativeFromEventImage(event) || relativeFromEventImage(fallback);
+    const parts = relative ? relative.split("/") : [];
+    const captureDate = parts[1] || String(event.ts || fallback.ts || new Date().toISOString()).slice(0, 10);
+    const cameraId = event.cameraId || fallback.cameraId || parts[2] || "unknown";
+    return { relative, captureDate, cameraId };
+  }
+
+  for (const event of events) {
+    const relative = relativeFromEventImage(event);
+    if (relative) eventByRelative.set(relative, event);
+    if (event.eventType === "image_detection") {
+      const key = frameKey(event);
+      if (!detectionsByFrame.has(key)) detectionsByFrame.set(key, []);
+      detectionsByFrame.get(key).push(event);
     }
   }
-  const results = [];
+
+  for (const event of events) {
+    if (event.eventType !== "image_lpr_result") continue;
+    const key = frameKey(event);
+    lprFrameKeys.add(key);
+    const related = detectionsByFrame.get(key) || [];
+    const preferredImage = [
+      event,
+      event.vehicle,
+      ...(event.plates || []),
+      ...related.filter((item) => item.componentId === 1 || item.isVehicle),
+      ...related
+    ].find((item) => relativeFromEventImage(item));
+    const imageInfo = resultFromEventImage(preferredImage || {}, event);
+    if (date && imageInfo.captureDate !== date) continue;
+    if (source && imageInfo.cameraId !== source) continue;
+    const fullPath = imageInfo.relative ? path.join(RUNTIME_DIR, imageInfo.relative) : "";
+    const stat = fullPath ? await fsp.stat(fullPath).catch(() => null) : null;
+    const plate = (event.plates || []).find((item) => item.plateText) || (event.plates || [])[0] || {};
+    results.push({
+      date: imageInfo.captureDate,
+      sourceId: event.sourceId ?? null,
+      cameraId: event.cameraId || imageInfo.cameraId,
+      cameraName: event.cameraName || event.vehicle?.cameraName || imageInfo.cameraId,
+      fileName: fullPath ? path.basename(fullPath) : "",
+      relativePath: imageInfo.relative,
+      url: imageInfo.relative ? `/runtime/${imageInfo.relative}` : "",
+      size: stat?.size || 0,
+      createdAt: event.ts || stat?.mtime?.toISOString() || new Date().toISOString(),
+      eventType: event.eventType,
+      eventId: event.eventId || key,
+      processorType: event.processorType || "lpr",
+      component: "lpr",
+      label: event.vehicle?.label || plate.label || "",
+      confidence: plate.confidence ?? event.vehicle?.confidence ?? null,
+      plateText: event.plateText || plate.plateText || "",
+      plateStatus: event.plateStatus || "",
+      zoneId: event.zoneId || event.vehicle?.zoneId || "",
+      zoneName: event.zoneName || event.vehicle?.zoneName || "",
+      zoneMode: event.zoneMode || event.vehicle?.zoneMode || "",
+      failedStage: event.failedStage || "",
+      failedModel: event.failedModel || "",
+      failureReason: event.failureReason || "",
+      objectId: event.vehicle?.objectId ?? null,
+      classId: event.vehicle?.classId ?? null,
+      bbox: event.vehicle?.bbox || null,
+      vehicleLabel: event.vehicle?.label || "",
+      plateLabel: plate.label || "",
+      plateCount: (event.plates || []).length,
+      charCount: plate.keptCharCount ?? plate.charDetections?.length ?? plate.ocrObjects?.length ?? null
+    });
+  }
+
   async function walk(dir) {
     let entries = [];
     try {
@@ -269,6 +353,7 @@ async function listRuntimeResults({ date = "", source = "", limit = 200 } = {}) 
       if (source && cameraId !== source) continue;
       const stat = await fsp.stat(fullPath);
       const event = eventByRelative.get(relative) || {};
+      if (event.eventType === "image_detection" && lprFrameKeys.has(frameKey(event))) continue;
       results.push({
         date: captureDate,
         sourceId: event.sourceId ?? null,
