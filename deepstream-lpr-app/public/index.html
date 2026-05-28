@@ -21,6 +21,7 @@
           <button type="button" class="sidebar-link" data-nav-view="models">Model Factory</button>
           <button type="button" class="sidebar-link" data-nav-view="tests">Test Lab</button>
           <button type="button" class="sidebar-link" data-nav-view="agent">Agent</button>
+          <button type="button" class="sidebar-link" data-nav-view="automation">Automation</button>
           <button type="button" class="sidebar-link" data-nav-view="activity">Activity</button>
         </nav>
         <div class="sidebar-note">
@@ -466,6 +467,102 @@
           </aside>
         </div>
       </section>
+        </section>
+
+        <section class="view" data-view-section="automation">
+          <section class="panel">
+            <div class="panel-toolbar">
+              <div>
+                <h2>Automation</h2>
+                <p>Ket noi DeepStream event voi cac service ben ngoai nhu doc bang can, goi API, chay Python script hoac shell worker.</p>
+              </div>
+              <div class="actions inline-actions">
+                <button id="refreshAutomationBtn" type="button" class="secondary">Refresh</button>
+                <button id="saveAutomationBtn" type="button">Save automation</button>
+              </div>
+            </div>
+            <div class="automation-grid">
+              <article class="automation-card">
+                <h3>Service Registry</h3>
+                <p>Dang ky service se duoc workflow goi sau khi co DeepStream event.</p>
+                <div class="grid">
+                  <label>Service name <input id="automationServiceName" placeholder="Read scale display" /></label>
+                  <label>
+                    Type
+                    <select id="automationServiceType">
+                      <option value="http">HTTP JSON</option>
+                      <option value="python">Python script</option>
+                      <option value="shell">Shell command</option>
+                    </select>
+                  </label>
+                  <label>Environment <select id="automationServiceEnv"></select></label>
+                  <label>Timeout ms <input id="automationServiceTimeout" type="number" value="30000" min="1000" step="1000" /></label>
+                </div>
+                <label>HTTP endpoint <input id="automationServiceEndpoint" placeholder="http://localhost:8080/read-scale" /></label>
+                <label>Python script path <input id="automationServiceScript" placeholder="/home/hicas/projects/worker/read_scale.py" /></label>
+                <label>Shell command <input id="automationServiceCommand" placeholder="/home/hicas/projects/worker/run.sh" /></label>
+                <label>Default params JSON <textarea id="automationServiceParams" rows="4">{}</textarea></label>
+                <div class="actions inline-actions">
+                  <button id="addAutomationServiceBtn" type="button">Add service</button>
+                </div>
+                <div id="automationServiceList" class="automation-list"></div>
+              </article>
+
+              <article class="automation-card">
+                <h3>Environment Registry</h3>
+                <p>Luu thong tin moi truong chay service. MVP nay ho tro local Python va shell worker.</p>
+                <div class="grid">
+                  <label>Environment name <input id="automationEnvName" placeholder="Local Jetson Python" /></label>
+                  <label>
+                    Type
+                    <select id="automationEnvType">
+                      <option value="local">Local process</option>
+                      <option value="docker">Docker worker note</option>
+                    </select>
+                  </label>
+                  <label>Working directory <input id="automationEnvWorkingDir" placeholder="/home/hicas/projects" /></label>
+                  <label>Python path <input id="automationEnvPythonPath" value="python3" /></label>
+                </div>
+                <label>Env vars JSON <textarea id="automationEnvVars" rows="4">{}</textarea></label>
+                <div class="actions inline-actions">
+                  <button id="addAutomationEnvBtn" type="button">Add environment</button>
+                </div>
+                <div id="automationEnvList" class="automation-list"></div>
+              </article>
+
+              <article class="automation-card automation-wide">
+                <h3>Workflow Builder</h3>
+                <p>Workflow se lang nghe runtime events. Khi filter match, app doi delay roi goi service da chon.</p>
+                <div class="grid">
+                  <label>Workflow name <input id="automationWorkflowName" placeholder="Vehicle then read scale after 5s" /></label>
+                  <label>Trigger event type <input id="automationWorkflowEvent" value="vehicle_capture" /></label>
+                  <label>Delay seconds <input id="automationWorkflowDelay" type="number" value="5" min="0" step="1" /></label>
+                  <label>Service <select id="automationWorkflowService"></select></label>
+                </div>
+                <label>Filters JSON <textarea id="automationWorkflowFilters" rows="4">{"eventType":"vehicle_capture"}</textarea></label>
+                <label>Workflow params JSON <textarea id="automationWorkflowParams" rows="4">{}</textarea></label>
+                <label class="inline-check"><input id="automationWorkflowEnabled" type="checkbox" checked /> Enabled</label>
+                <div class="actions inline-actions">
+                  <button id="addAutomationWorkflowBtn" type="button">Add workflow</button>
+                </div>
+                <div id="automationWorkflowList" class="automation-list"></div>
+              </article>
+
+              <article class="automation-card automation-wide">
+                <div class="panel-toolbar compact">
+                  <div>
+                    <h3>Runs</h3>
+                    <p>Lich su service call de debug event nao da kich hoat service nao.</p>
+                  </div>
+                  <div class="actions inline-actions">
+                    <button id="refreshAutomationRunsBtn" type="button" class="secondary">Refresh runs</button>
+                    <button id="clearAutomationRunsBtn" type="button" class="danger">Clear runs</button>
+                  </div>
+                </div>
+                <div id="automationRunList" class="automation-run-list"></div>
+              </article>
+            </div>
+          </section>
         </section>
 
         <section class="view" data-view-section="activity">

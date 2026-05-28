@@ -24,6 +24,8 @@ const PARSER_PROFILES_DIR = path.join(APP_ROOT, "parser-profiles");
 const MONITOR_CAPTURE_DIR = path.join(REPO_ROOT, "data", "captures");
 const ROI_CAPTURE_DIR = path.join(RUNTIME_DIR, "roi-captures");
 const CONFIG_FILE = path.join(RUNTIME_DIR, "config.json");
+const AUTOMATION_FILE = path.join(RUNTIME_DIR, "automation.json");
+const AUTOMATION_RUNS_FILE = path.join(RUNTIME_DIR, "automation-runs.json");
 const COMPOSE_FILE = path.join(RUNTIME_DIR, "docker-compose.generated.yml");
 const PORT = Number(process.env.LPR_CONTROL_PORT || 5190);
 const DEEPSTREAM_YOLO_REPO = process.env.DEEPSTREAM_YOLO_REPO || "https://github.com/marcoslucianops/DeepStream-Yolo.git";
@@ -51,6 +53,10 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 const httpServer = http.createServer(app);
 const jobs = new Map();
+const automationSeenEvents = new Set();
+const automationStartedAt = Date.now();
+let automationTimer = null;
+let automationPollInFlight = false;
 
 const MODEL_PROFILE_SPECS = {
   yolo_detection: {
@@ -208,6 +214,306 @@ async function writeRuntimeStatus(status) {
     sources: [],
     ...status
   });
+}
+
+function automationId(prefix = "item") {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function defaultAutomationConfig() {
+  return {
+    version: 1,
+    services: [],
+    environments: [],
+    workflows: []
+  };
+}
+
+function normalizeAutomationConfig(value = {}) {
+  const environments = Array.isArray(value.environments) ? value.environments : [];
+  const services = Array.isArray(value.services) ? value.services : [];
+  const workflows = Array.isArray(value.workflows) ? value.workflows : [];
+  return {
+    version: 1,
+    environments: environments.map((item, index) => ({
+      id: String(item.id || automationId("env")),
+      name: String(item.name || `Environment ${index + 1}`).trim(),
+      type: String(item.type || "local").trim(),
+      workingDir: String(item.workingDir || "").trim(),
+      pythonPath: String(item.pythonPath || "python3").trim(),
+      env: typeof item.env === "object" && item.env && !Array.isArray(item.env) ? item.env : {},
+      description: String(item.description || "").trim()
+    })),
+    services: services.map((item, index) => ({
+      id: String(item.id || automationId("svc")),
+      name: String(item.name || `Service ${index + 1}`).trim(),
+      type: ["http", "python", "shell"].includes(item.type) ? item.type : "http",
+      environmentId: String(item.environmentId || "").trim(),
+      endpoint: String(item.endpoint || "").trim(),
+      method: String(item.method || "POST").toUpperCase(),
+      command: String(item.command || "").trim(),
+      scriptPath: String(item.scriptPath || "").trim(),
+      timeoutMs: Math.max(1000, Number(item.timeoutMs || 30000)),
+      params: typeof item.params === "object" && item.params && !Array.isArray(item.params) ? item.params : {},
+      description: String(item.description || "").trim()
+    })),
+    workflows: workflows.map((item, index) => ({
+      id: String(item.id || automationId("flow")),
+      name: String(item.name || `Workflow ${index + 1}`).trim(),
+      enabled: item.enabled !== false,
+      triggerEventType: String(item.triggerEventType || "vehicle_capture").trim(),
+      filters: typeof item.filters === "object" && item.filters && !Array.isArray(item.filters) ? item.filters : {},
+      delaySec: Math.max(0, Number(item.delaySec || 0)),
+      serviceId: String(item.serviceId || "").trim(),
+      params: typeof item.params === "object" && item.params && !Array.isArray(item.params) ? item.params : {},
+      description: String(item.description || "").trim()
+    }))
+  };
+}
+
+async function readAutomationConfig() {
+  return normalizeAutomationConfig(await readJson(AUTOMATION_FILE, defaultAutomationConfig()));
+}
+
+async function writeAutomationConfig(config) {
+  const normalized = normalizeAutomationConfig(config);
+  await writeJson(AUTOMATION_FILE, normalized);
+  return normalized;
+}
+
+async function readAutomationRuns(limit = 100) {
+  const runs = await readJson(AUTOMATION_RUNS_FILE, []);
+  return (Array.isArray(runs) ? runs : []).slice(0, Math.min(Number(limit) || 100, 500));
+}
+
+async function appendAutomationRun(run) {
+  const runs = await readAutomationRuns(500);
+  const existing = runs.findIndex((item) => item.id === run.id);
+  if (existing >= 0) runs.splice(existing, 1);
+  runs.unshift(run);
+  await writeJson(AUTOMATION_RUNS_FILE, runs.slice(0, 500));
+  return run;
+}
+
+function automationEventId(event = {}) {
+  return String(event.eventId || [event.eventType, event.sourceId, event.objectId, event.frameNum, event.ts].join("|"));
+}
+
+function automationEventTime(event = {}) {
+  const value = Date.parse(event.ts || event.timestamp || "");
+  return Number.isFinite(value) ? value : Date.now();
+}
+
+function automationMatchesFilter(event = {}, filters = {}) {
+  for (const [key, expected] of Object.entries(filters || {})) {
+    if (expected === "" || expected === null || expected === undefined) continue;
+    const actual = key.split(".").reduce((value, part) => value?.[part], event);
+    if (Array.isArray(expected)) {
+      if (!expected.map(String).includes(String(actual))) return false;
+      continue;
+    }
+    if (String(actual) !== String(expected)) return false;
+  }
+  return true;
+}
+
+function mergeEnv(base = {}, extra = {}) {
+  return Object.fromEntries(Object.entries({ ...base, ...extra }).map(([key, value]) => [key, String(value)]));
+}
+
+function runCommandWithInput(command, args, options = {}) {
+  return new Promise((resolve) => {
+    const { timeoutMs = 30000, input = "", ...spawnOptions } = options;
+    const child = spawn(command, args, {
+      ...spawnOptions,
+      shell: process.platform === "win32"
+    });
+    let output = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      output += `\nCommand timed out after ${timeoutMs}ms.`;
+      child.kill("SIGKILL");
+    }, timeoutMs);
+    const finish = (code, extra = "") => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (extra) output += extra;
+      resolve({ code, output });
+    };
+    child.stdout.on("data", (chunk) => { output += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { output += chunk.toString(); });
+    child.on("close", (code) => finish(code));
+    child.on("error", (error) => finish(1, error.message));
+    if (input) child.stdin.write(input);
+    child.stdin.end();
+  });
+}
+
+async function executeAutomationService(service, environment, payload) {
+  const started = Date.now();
+  const servicePayload = {
+    event: payload.event || {},
+    params: {
+      ...(service.params || {}),
+      ...(payload.params || {})
+    },
+    workflow: payload.workflow || null,
+    invokedAt: new Date().toISOString()
+  };
+  if (service.type === "http") {
+    if (!/^https?:\/\//i.test(service.endpoint || "")) throw new Error("HTTP service endpoint is required.");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), service.timeoutMs);
+    try {
+      const response = await fetch(service.endpoint, {
+        method: service.method || "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(servicePayload),
+        signal: controller.signal
+      });
+      const text = await response.text();
+      return {
+        ok: response.ok,
+        statusCode: response.status,
+        durationMs: Date.now() - started,
+        output: text.slice(-8000)
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  const input = `${JSON.stringify(servicePayload)}\n`;
+  const cwd = environment?.workingDir || APP_ROOT;
+  const env = mergeEnv(process.env, environment?.env || {});
+  if (service.type === "python") {
+    if (!service.scriptPath) throw new Error("Python service script path is required.");
+    const command = environment?.pythonPath || "python3";
+    const result = await runCommandWithInput(command, [service.scriptPath], {
+      cwd,
+      env,
+      input,
+      timeoutMs: service.timeoutMs,
+      windowsHide: true
+    });
+    return {
+      ok: result.code === 0,
+      exitCode: result.code,
+      durationMs: Date.now() - started,
+      output: tailOutput(result.output, 8000)
+    };
+  }
+
+  if (service.type === "shell") {
+    if (!service.command) throw new Error("Shell service command is required.");
+    const result = await runCommandWithInput(service.command, [], {
+      cwd,
+      env,
+      input,
+      timeoutMs: service.timeoutMs,
+      windowsHide: true
+    });
+    return {
+      ok: result.code === 0,
+      exitCode: result.code,
+      durationMs: Date.now() - started,
+      output: tailOutput(result.output, 8000)
+    };
+  }
+
+  throw new Error(`Unsupported service type: ${service.type}`);
+}
+
+async function runAutomationWorkflow(workflow, event = {}, manual = false) {
+  const config = await readAutomationConfig();
+  const service = config.services.find((item) => item.id === workflow.serviceId);
+  if (!service) throw new Error(`Automation service not found: ${workflow.serviceId}`);
+  const environment = config.environments.find((item) => item.id === service.environmentId) || null;
+  const run = {
+    id: automationId("run"),
+    workflowId: workflow.id,
+    workflowName: workflow.name,
+    serviceId: service.id,
+    serviceName: service.name,
+    eventId: automationEventId(event),
+    eventType: event.eventType || workflow.triggerEventType,
+    status: "running",
+    manual,
+    startedAt: new Date().toISOString(),
+    finishedAt: "",
+    delaySec: Number(workflow.delaySec || 0),
+    output: ""
+  };
+  await appendAutomationRun(run);
+  if (run.delaySec > 0) await new Promise((resolve) => setTimeout(resolve, run.delaySec * 1000));
+  try {
+    const result = await executeAutomationService(service, environment, {
+      event,
+      params: workflow.params,
+      workflow
+    });
+    run.status = result.ok ? "success" : "failed";
+    run.finishedAt = new Date().toISOString();
+    run.durationMs = result.durationMs;
+    run.output = result.output || "";
+    run.result = result;
+  } catch (error) {
+    run.status = "failed";
+    run.finishedAt = new Date().toISOString();
+    run.output = error.message;
+  }
+  await appendAutomationRun(run);
+  return run;
+}
+
+async function pollAutomationEvents() {
+  if (automationPollInFlight) return;
+  automationPollInFlight = true;
+  try {
+    const config = await readAutomationConfig();
+    const workflows = config.workflows.filter((workflow) => workflow.enabled && workflow.serviceId);
+    if (!workflows.length) return;
+    const events = await readRuntimeEvents(200);
+    for (const event of events) {
+      const eventId = automationEventId(event);
+      if (automationSeenEvents.has(eventId)) continue;
+      if (automationEventTime(event) < automationStartedAt - 5000) {
+        automationSeenEvents.add(eventId);
+        continue;
+      }
+      automationSeenEvents.add(eventId);
+      for (const workflow of workflows) {
+        if (workflow.triggerEventType && event.eventType !== workflow.triggerEventType) continue;
+        if (!automationMatchesFilter(event, workflow.filters)) continue;
+        runAutomationWorkflow(workflow, event, false).catch((error) => {
+          appendAutomationRun({
+            id: automationId("run"),
+            workflowId: workflow.id,
+            workflowName: workflow.name,
+            serviceId: workflow.serviceId,
+            eventId,
+            eventType: event.eventType || workflow.triggerEventType,
+            status: "failed",
+            manual: false,
+            startedAt: new Date().toISOString(),
+            finishedAt: new Date().toISOString(),
+            output: error.message
+          }).catch(() => {});
+        });
+      }
+    }
+    while (automationSeenEvents.size > 1000) automationSeenEvents.delete(automationSeenEvents.values().next().value);
+  } finally {
+    automationPollInFlight = false;
+  }
+}
+
+function startAutomationLoop() {
+  if (automationTimer) clearInterval(automationTimer);
+  automationTimer = setInterval(() => {
+    pollAutomationEvents().catch(() => {});
+  }, 2000);
 }
 
 async function inspectContainer(name) {
@@ -4005,6 +4311,78 @@ app.get("/api/events", async (_req, res) => {
   res.json(await readRuntimeEvents(100));
 });
 
+app.get("/api/automation", async (_req, res) => {
+  res.json(await readAutomationConfig());
+});
+
+app.put("/api/automation", async (req, res) => {
+  try {
+    res.json(await writeAutomationConfig(req.body || {}));
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.get("/api/automation/runs", async (req, res) => {
+  res.json({ runs: await readAutomationRuns(Number(req.query.limit || 100)) });
+});
+
+app.delete("/api/automation/runs", async (_req, res) => {
+  await writeJson(AUTOMATION_RUNS_FILE, []);
+  res.json({ runs: [] });
+});
+
+app.post("/api/automation/services/:serviceId/test", async (req, res) => {
+  try {
+    const config = await readAutomationConfig();
+    const service = config.services.find((item) => item.id === req.params.serviceId);
+    if (!service) return res.status(404).json({ error: "Automation service not found." });
+    const environment = config.environments.find((item) => item.id === service.environmentId) || null;
+    const result = await executeAutomationService(service, environment, {
+      event: req.body?.event || { eventType: "manual_test", ts: new Date().toISOString() },
+      params: req.body?.params || {}
+    });
+    const run = await appendAutomationRun({
+      id: automationId("run"),
+      workflowId: "",
+      workflowName: "Manual service test",
+      serviceId: service.id,
+      serviceName: service.name,
+      eventId: "manual",
+      eventType: "manual_test",
+      status: result.ok ? "success" : "failed",
+      manual: true,
+      startedAt: new Date(Date.now() - result.durationMs).toISOString(),
+      finishedAt: new Date().toISOString(),
+      durationMs: result.durationMs,
+      output: result.output,
+      result
+    });
+    res.json({ result, run });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/automation/workflows/:workflowId/test", async (req, res) => {
+  try {
+    const config = await readAutomationConfig();
+    const workflow = config.workflows.find((item) => item.id === req.params.workflowId);
+    if (!workflow) return res.status(404).json({ error: "Automation workflow not found." });
+    const event = req.body?.event || {
+      eventType: workflow.triggerEventType || "vehicle_capture",
+      eventId: automationId("manual-event"),
+      ts: new Date().toISOString(),
+      cameraId: "manual",
+      sourceId: 0,
+      plateText: "MANUAL"
+    };
+    res.json(await runAutomationWorkflow(workflow, event, true));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.use((error, _req, res, _next) => {
   res.status(400).json({ error: error.message || "Request failed." });
 });
@@ -4019,15 +4397,18 @@ app.get("*", (_req, res) => {
 
 httpServer.listen(PORT, () => {
   cameraMonitorFeature.start();
+  startAutomationLoop();
   console.log(`DeepStream LPR control UI: http://localhost:${PORT}`);
 });
 
 process.on("SIGINT", () => {
+  if (automationTimer) clearInterval(automationTimer);
   cameraMonitorFeature.stop();
   process.exit(0);
 });
 
 process.on("SIGTERM", () => {
+  if (automationTimer) clearInterval(automationTimer);
   cameraMonitorFeature.stop();
   process.exit(0);
 });

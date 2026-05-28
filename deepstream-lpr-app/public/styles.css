@@ -1847,6 +1847,79 @@ pre {
   color: var(--muted);
   font-size: 12px;
 }
+.automation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.automation-card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fbfcff;
+}
+.automation-card h3,
+.automation-card p {
+  margin: 0;
+}
+.automation-card p {
+  color: var(--muted);
+  font-size: 13px;
+}
+.automation-wide {
+  grid-column: 1 / -1;
+}
+.automation-list,
+.automation-run-list {
+  display: grid;
+  gap: 8px;
+}
+.automation-row,
+.automation-run {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: white;
+}
+.automation-row strong,
+.automation-row span,
+.automation-row small,
+.automation-run strong,
+.automation-run span,
+.automation-run small {
+  display: block;
+}
+.automation-row span,
+.automation-row small,
+.automation-run span,
+.automation-run small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.automation-run {
+  display: grid;
+}
+.automation-run.success {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+.automation-run.failed {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+.automation-run pre {
+  min-height: 0;
+  max-height: 120px;
+  margin: 8px 0 0;
+  font-size: 11px;
+}
 @media (max-width: 760px) {
   .shell {
     width: min(100% - 20px, 100%);
@@ -1868,8 +1941,12 @@ pre {
   .monitor-stats,
   .monitor-layout,
   .monitor-detail-grid,
-  .monitor-frame-layout {
+  .monitor-frame-layout,
+  .automation-grid {
     grid-template-columns: 1fr;
+  }
+  .automation-wide {
+    grid-column: auto;
   }
   .model-name-field {
     grid-column: auto;

@@ -162,7 +162,38 @@ const els = {
   agentClearApiKey: document.querySelector("#agentClearApiKey"),
   saveAgentSettingsBtn: document.querySelector("#saveAgentSettingsBtn"),
   testAgentKeyBtn: document.querySelector("#testAgentKeyBtn"),
-  agentSettingsHint: document.querySelector("#agentSettingsHint")
+  agentSettingsHint: document.querySelector("#agentSettingsHint"),
+  refreshAutomationBtn: document.querySelector("#refreshAutomationBtn"),
+  saveAutomationBtn: document.querySelector("#saveAutomationBtn"),
+  automationServiceName: document.querySelector("#automationServiceName"),
+  automationServiceType: document.querySelector("#automationServiceType"),
+  automationServiceEnv: document.querySelector("#automationServiceEnv"),
+  automationServiceTimeout: document.querySelector("#automationServiceTimeout"),
+  automationServiceEndpoint: document.querySelector("#automationServiceEndpoint"),
+  automationServiceScript: document.querySelector("#automationServiceScript"),
+  automationServiceCommand: document.querySelector("#automationServiceCommand"),
+  automationServiceParams: document.querySelector("#automationServiceParams"),
+  addAutomationServiceBtn: document.querySelector("#addAutomationServiceBtn"),
+  automationServiceList: document.querySelector("#automationServiceList"),
+  automationEnvName: document.querySelector("#automationEnvName"),
+  automationEnvType: document.querySelector("#automationEnvType"),
+  automationEnvWorkingDir: document.querySelector("#automationEnvWorkingDir"),
+  automationEnvPythonPath: document.querySelector("#automationEnvPythonPath"),
+  automationEnvVars: document.querySelector("#automationEnvVars"),
+  addAutomationEnvBtn: document.querySelector("#addAutomationEnvBtn"),
+  automationEnvList: document.querySelector("#automationEnvList"),
+  automationWorkflowName: document.querySelector("#automationWorkflowName"),
+  automationWorkflowEvent: document.querySelector("#automationWorkflowEvent"),
+  automationWorkflowDelay: document.querySelector("#automationWorkflowDelay"),
+  automationWorkflowService: document.querySelector("#automationWorkflowService"),
+  automationWorkflowFilters: document.querySelector("#automationWorkflowFilters"),
+  automationWorkflowParams: document.querySelector("#automationWorkflowParams"),
+  automationWorkflowEnabled: document.querySelector("#automationWorkflowEnabled"),
+  addAutomationWorkflowBtn: document.querySelector("#addAutomationWorkflowBtn"),
+  automationWorkflowList: document.querySelector("#automationWorkflowList"),
+  refreshAutomationRunsBtn: document.querySelector("#refreshAutomationRunsBtn"),
+  clearAutomationRunsBtn: document.querySelector("#clearAutomationRunsBtn"),
+  automationRunList: document.querySelector("#automationRunList")
 };
 
 let cameraDrafts = [];
@@ -188,6 +219,8 @@ let deployStatusPollInFlight = false;
 const agentThreadId = "default";
 let agentMessages = [];
 let agentSettings = null;
+let automationConfig = { services: [], environments: [], workflows: [] };
+let automationRuns = [];
 
 function print(value) {
   els.output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -277,6 +310,7 @@ const dashboardViewTitles = {
   models: "Model Factory",
   tests: "Test Lab",
   agent: "Operator Agent",
+  automation: "Automation",
   activity: "Activity"
 };
 
@@ -291,6 +325,7 @@ function selectDashboardView(view = "dashboard") {
   if (els.workspaceTitle) els.workspaceTitle.textContent = dashboardViewTitles[next];
   if (next === "dashboard") renderMainDashboard();
   if (next === "agent") refreshAgent().catch((error) => setTaskStatus("agent", "failed", error.message));
+  if (next === "automation") refreshAutomation().catch((error) => setTaskStatus("automation", "failed", error.message));
 }
 
 function dashboardTag(label, tone = "") {
@@ -329,6 +364,7 @@ function renderMainDashboard() {
   const camerasWithRoi = cameras.filter((camera) => cameraZones(camera).some((zone) => cleanZonePolygon(zone.polygon).length >= 3));
   const modelStats = modelLibraryStats();
   const deploy = dashboardDeploySummary();
+  const automation = automationConfig || {};
   const testStages = confirmedTestPipelineStages.length ? normalizePipelineStages(confirmedTestPipelineStages) : [];
   const selectedDeployCameras = new Set(deploy.app?.cameraIds || []);
   const deployStageCount = deploy.app?.pipelineStages?.length
@@ -361,6 +397,11 @@ function renderMainDashboard() {
         <span>Confirmed test flow</span>
         <strong>${testStages.length}</strong>
         <small>${testStages.filter((stage) => stage.enabled).length} enabled inference stage(s)</small>
+      </article>
+      <article class="dashboard-kpi ${(automation.workflows || []).some((item) => item.enabled !== false) ? "success" : "warning"}">
+        <span>Automation</span>
+        <strong>${(automation.workflows || []).length}</strong>
+        <small>${(automation.services || []).length} service(s), ${(automation.workflows || []).filter((item) => item.enabled !== false).length} enabled workflow(s)</small>
       </article>
     </div>
     <div class="dashboard-grid">
@@ -492,6 +533,213 @@ async function apiText(path) {
   const body = await response.text();
   if (!response.ok) throw new Error(body || `HTTP ${response.status}`);
   return body;
+}
+
+function parseJsonField(input, fallback = {}) {
+  const raw = typeof input === "string" ? input : input?.value;
+  if (!String(raw || "").trim()) return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`JSON khong hop le: ${error.message}`);
+  }
+}
+
+function renderAutomation() {
+  if (!els.automationServiceList) return;
+  const environments = automationConfig.environments || [];
+  const services = automationConfig.services || [];
+  const workflows = automationConfig.workflows || [];
+  els.automationServiceEnv.innerHTML = `<option value="">No environment</option>${environments.map((env) => `
+    <option value="${escapeHtml(env.id)}">${escapeHtml(env.name)}</option>
+  `).join("")}`;
+  els.automationWorkflowService.innerHTML = services.length
+    ? services.map((service) => `<option value="${escapeHtml(service.id)}">${escapeHtml(service.name)}</option>`).join("")
+    : '<option value="">No service</option>';
+  els.automationEnvList.innerHTML = environments.length ? environments.map((env, index) => `
+    <article class="automation-row">
+      <div>
+        <strong>${escapeHtml(env.name)}</strong>
+        <span>${escapeHtml(env.type)} - ${escapeHtml(env.workingDir || "default cwd")}</span>
+        <small>${escapeHtml(env.pythonPath || "python3")}</small>
+      </div>
+      <button type="button" class="danger" data-remove-automation-env="${index}">Remove</button>
+    </article>
+  `).join("") : '<div class="empty">No environment registered yet.</div>';
+  els.automationServiceList.innerHTML = services.length ? services.map((service, index) => `
+    <article class="automation-row">
+      <div>
+        <strong>${escapeHtml(service.name)}</strong>
+        <span>${escapeHtml(service.type)} - ${escapeHtml(service.endpoint || service.scriptPath || service.command || "not configured")}</span>
+        <small>${escapeHtml(service.description || `${service.timeoutMs || 30000}ms timeout`)}</small>
+      </div>
+      <div class="actions inline-actions">
+        <button type="button" class="secondary" data-test-automation-service="${escapeHtml(service.id)}">Test</button>
+        <button type="button" class="danger" data-remove-automation-service="${index}">Remove</button>
+      </div>
+    </article>
+  `).join("") : '<div class="empty">No service registered yet.</div>';
+  els.automationWorkflowList.innerHTML = workflows.length ? workflows.map((workflow, index) => {
+    const service = services.find((item) => item.id === workflow.serviceId);
+    return `
+      <article class="automation-row">
+        <div>
+          <strong>${escapeHtml(workflow.name)}</strong>
+          <span>${escapeHtml(workflow.triggerEventType)} -> ${escapeHtml(service?.name || "missing service")} after ${Number(workflow.delaySec || 0)}s</span>
+          <small>${workflow.enabled !== false ? "enabled" : "disabled"} - filters ${escapeHtml(JSON.stringify(workflow.filters || {}))}</small>
+        </div>
+        <div class="actions inline-actions">
+          <button type="button" class="secondary" data-test-automation-workflow="${escapeHtml(workflow.id)}">Test</button>
+          <button type="button" class="danger" data-remove-automation-workflow="${index}">Remove</button>
+        </div>
+      </article>
+    `;
+  }).join("") : '<div class="empty">No workflow registered yet.</div>';
+  renderAutomationRuns();
+}
+
+function renderAutomationRuns() {
+  if (!els.automationRunList) return;
+  els.automationRunList.innerHTML = automationRuns.length ? automationRuns.map((run) => `
+    <article class="automation-run ${escapeHtml(run.status || "idle")}">
+      <div>
+        <strong>${escapeHtml(run.workflowName || "Manual service test")}</strong>
+        <span>${escapeHtml(run.status || "unknown")} - ${escapeHtml(run.eventType || "")} - ${escapeHtml(run.serviceName || run.serviceId || "")}</span>
+        <small>${escapeHtml(run.startedAt || "")}${run.finishedAt ? ` -> ${escapeHtml(run.finishedAt)}` : ""}</small>
+      </div>
+      ${run.output ? `<pre>${escapeHtml(run.output)}</pre>` : ""}
+    </article>
+  `).join("") : '<div class="empty">No automation run yet.</div>';
+}
+
+async function refreshAutomation(button = null) {
+  const result = await withTask("automation", button, "Loading automation...", async () => {
+    const [config, runs] = await Promise.all([
+      api("/api/automation"),
+      api("/api/automation/runs")
+    ]);
+    return { config, runs };
+  });
+  automationConfig = result.config || { services: [], environments: [], workflows: [] };
+  automationRuns = result.runs?.runs || [];
+  renderAutomation();
+  print(result);
+}
+
+async function saveAutomation(button = null) {
+  const result = await withTask("automation", button, "Saving automation...", async () => {
+    return await api("/api/automation", {
+      method: "PUT",
+      body: JSON.stringify(automationConfig)
+    });
+  });
+  automationConfig = result;
+  renderAutomation();
+  print(result);
+}
+
+function addAutomationEnvironment() {
+  automationConfig.environments = automationConfig.environments || [];
+  automationConfig.environments.push({
+    id: `env-${Date.now()}`,
+    name: els.automationEnvName.value.trim() || `Environment ${automationConfig.environments.length + 1}`,
+    type: els.automationEnvType.value,
+    workingDir: els.automationEnvWorkingDir.value.trim(),
+    pythonPath: els.automationEnvPythonPath.value.trim() || "python3",
+    env: parseJsonField(els.automationEnvVars, {}),
+    description: ""
+  });
+  els.automationEnvName.value = "";
+  renderAutomation();
+}
+
+function addAutomationService() {
+  automationConfig.services = automationConfig.services || [];
+  automationConfig.services.push({
+    id: `svc-${Date.now()}`,
+    name: els.automationServiceName.value.trim() || `Service ${automationConfig.services.length + 1}`,
+    type: els.automationServiceType.value,
+    environmentId: els.automationServiceEnv.value,
+    endpoint: els.automationServiceEndpoint.value.trim(),
+    scriptPath: els.automationServiceScript.value.trim(),
+    command: els.automationServiceCommand.value.trim(),
+    timeoutMs: Number(els.automationServiceTimeout.value || 30000),
+    params: parseJsonField(els.automationServiceParams, {}),
+    description: ""
+  });
+  els.automationServiceName.value = "";
+  renderAutomation();
+}
+
+function addAutomationWorkflow() {
+  automationConfig.workflows = automationConfig.workflows || [];
+  const filters = parseJsonField(els.automationWorkflowFilters, {});
+  automationConfig.workflows.push({
+    id: `flow-${Date.now()}`,
+    name: els.automationWorkflowName.value.trim() || `Workflow ${automationConfig.workflows.length + 1}`,
+    enabled: els.automationWorkflowEnabled.checked,
+    triggerEventType: els.automationWorkflowEvent.value.trim() || "vehicle_capture",
+    filters,
+    delaySec: Number(els.automationWorkflowDelay.value || 0),
+    serviceId: els.automationWorkflowService.value,
+    params: parseJsonField(els.automationWorkflowParams, {}),
+    description: ""
+  });
+  els.automationWorkflowName.value = "";
+  renderAutomation();
+}
+
+async function testAutomationService(serviceId) {
+  const result = await withTask("automation", null, "Testing service...", async () => {
+    return await api(`/api/automation/services/${encodeURIComponent(serviceId)}/test`, {
+      method: "POST",
+      body: JSON.stringify({
+        event: { eventType: "manual_test", eventId: `manual-${Date.now()}`, ts: new Date().toISOString() }
+      })
+    });
+  });
+  await refreshAutomationRuns();
+  print(result);
+}
+
+async function testAutomationWorkflow(workflowId) {
+  const workflow = (automationConfig.workflows || []).find((item) => item.id === workflowId) || {};
+  const result = await withTask("automation", null, "Testing workflow...", async () => {
+    return await api(`/api/automation/workflows/${encodeURIComponent(workflowId)}/test`, {
+      method: "POST",
+      body: JSON.stringify({
+        event: {
+          eventType: workflow.triggerEventType || "vehicle_capture",
+          eventId: `manual-${Date.now()}`,
+          ts: new Date().toISOString(),
+          cameraId: "manual",
+          sourceId: 0,
+          objectId: 0,
+          plateText: "MANUAL"
+        }
+      })
+    });
+  });
+  await refreshAutomationRuns();
+  print(result);
+}
+
+async function refreshAutomationRuns(button = null) {
+  const result = await withTask("automation-runs", button, "Loading runs...", async () => {
+    return await api("/api/automation/runs");
+  });
+  automationRuns = result.runs || [];
+  renderAutomationRuns();
+  return result;
+}
+
+async function clearAutomationRuns() {
+  const result = await withTask("automation-runs", els.clearAutomationRunsBtn, "Clearing runs...", async () => {
+    return await api("/api/automation/runs", { method: "DELETE" });
+  });
+  automationRuns = result.runs || [];
+  renderAutomationRuns();
+  print(result);
 }
 
 function renderAgentStatus(status = {}) {
@@ -3705,6 +3953,7 @@ async function init() {
   await loadDeployCaptures().catch((error) => setTaskStatus("deploy-previews", "failed", error.message));
   await refreshDeployStatus().catch(() => {});
   await refreshAgent().catch((error) => setTaskStatus("agent", "failed", error.message));
+  await refreshAutomation().catch((error) => setTaskStatus("automation", "failed", error.message));
   startDeployStatusPolling();
 }
 
@@ -3846,4 +4095,57 @@ els.agentCustomModel?.addEventListener("input", updateAgentParamVisibility);
 els.agentApiKey?.addEventListener("input", () => {
   els.agentApiKey.type = "password";
 });
+els.refreshAutomationBtn?.addEventListener("click", () => refreshAutomation(els.refreshAutomationBtn).catch((error) => print(error.message)));
+els.saveAutomationBtn?.addEventListener("click", () => saveAutomation(els.saveAutomationBtn).catch((error) => print(error.message)));
+els.addAutomationEnvBtn?.addEventListener("click", () => {
+  try {
+    addAutomationEnvironment();
+  } catch (error) {
+    print(error.message);
+  }
+});
+els.addAutomationServiceBtn?.addEventListener("click", () => {
+  try {
+    addAutomationService();
+  } catch (error) {
+    print(error.message);
+  }
+});
+els.addAutomationWorkflowBtn?.addEventListener("click", () => {
+  try {
+    addAutomationWorkflow();
+  } catch (error) {
+    print(error.message);
+  }
+});
+els.automationEnvList?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-remove-automation-env]");
+  if (!button) return;
+  automationConfig.environments.splice(Number(button.dataset.removeAutomationEnv), 1);
+  renderAutomation();
+});
+els.automationServiceList?.addEventListener("click", (event) => {
+  const testButton = event.target.closest("[data-test-automation-service]");
+  if (testButton) {
+    testAutomationService(testButton.dataset.testAutomationService).catch((error) => print(error.message));
+    return;
+  }
+  const removeButton = event.target.closest("[data-remove-automation-service]");
+  if (!removeButton) return;
+  automationConfig.services.splice(Number(removeButton.dataset.removeAutomationService), 1);
+  renderAutomation();
+});
+els.automationWorkflowList?.addEventListener("click", (event) => {
+  const testButton = event.target.closest("[data-test-automation-workflow]");
+  if (testButton) {
+    testAutomationWorkflow(testButton.dataset.testAutomationWorkflow).catch((error) => print(error.message));
+    return;
+  }
+  const removeButton = event.target.closest("[data-remove-automation-workflow]");
+  if (!removeButton) return;
+  automationConfig.workflows.splice(Number(removeButton.dataset.removeAutomationWorkflow), 1);
+  renderAutomation();
+});
+els.refreshAutomationRunsBtn?.addEventListener("click", () => refreshAutomationRuns(els.refreshAutomationRunsBtn).then((result) => print(result)).catch((error) => print(error.message)));
+els.clearAutomationRunsBtn?.addEventListener("click", () => clearAutomationRuns().catch((error) => print(error.message)));
 init().catch((error) => print(error.message));
