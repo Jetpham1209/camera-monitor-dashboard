@@ -353,6 +353,7 @@ async function listRuntimeResults({ date = "", source = "", limit = 200 } = {}) 
       if (source && cameraId !== source) continue;
       const stat = await fsp.stat(fullPath);
       const event = eventByRelative.get(relative) || {};
+      if (cameraId === "image-test" && (!event.eventType || event.eventType === "image_detection")) continue;
       if (event.eventType === "image_detection" && lprFrameKeys.has(frameKey(event))) continue;
       results.push({
         date: captureDate,
