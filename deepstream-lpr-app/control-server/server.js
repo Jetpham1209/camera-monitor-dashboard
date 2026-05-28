@@ -1144,8 +1144,15 @@ function modelConfig(slot, model, gieId, networkType, operateOnGieId = null, bat
       lines.push(`segmentation-threshold=${Number(model.segmentationThreshold ?? profile.segmentationThreshold)}`);
     }
   }
-  const preClusterThreshold = isLprCharacterDetector ? 0.4 : 0.35;
-  const topk = isLprCharacterDetector ? 200 : 100;
+  const buildOptions = model.build?.buildOptions || {};
+  const configuredPreClusterThreshold = model.preClusterThreshold ?? model.build?.preClusterThreshold ?? buildOptions.preClusterThreshold;
+  const configuredTopk = model.topk ?? model.build?.topk ?? buildOptions.topk;
+  const preClusterThreshold = configuredPreClusterThreshold !== undefined && configuredPreClusterThreshold !== null && configuredPreClusterThreshold !== ""
+    ? Number(configuredPreClusterThreshold)
+    : isLprCharacterDetector ? 0.4 : 0.35;
+  const topk = configuredTopk !== undefined && configuredTopk !== null && configuredTopk !== ""
+    ? Math.max(1, Number(configuredTopk))
+    : isLprCharacterDetector ? 200 : 100;
   lines.push("", "[class-attrs-all]", `pre-cluster-threshold=${preClusterThreshold}`);
   if (runtimeNetworkType === 0) lines.push("nms-iou-threshold=0.45", `topk=${topk}`);
   lines.push("");
