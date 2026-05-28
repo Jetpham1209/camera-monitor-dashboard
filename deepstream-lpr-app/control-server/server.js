@@ -3093,6 +3093,9 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
   };
   config.models[group] = model;
   await runCheckpoint(checkpoints, "write_runtime_config", async () => {
+    config.testMode = "pipeline";
+    delete config.inputUri;
+    delete config.imageTest;
     await fsp.writeFile(paths.log, output);
     await writeJson(CONFIG_FILE, config);
     await generateRuntime(config);
