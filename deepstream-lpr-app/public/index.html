@@ -343,6 +343,32 @@
                 <h3>Model Repository</h3>
                 <div id="tritonModelList" class="automation-list"></div>
               </article>
+              <article class="triton-model-card triton-infer-card">
+                <h3>Test inference</h3>
+                <p>Copy URL infer hoac test bang Triton HTTP JSON payload. Payload phai match input/output config cua model.</p>
+                <div class="grid">
+                  <label>Model <select id="tritonInferModel"></select></label>
+                  <label>Version optional <input id="tritonInferVersion" placeholder="vd: 1" /></label>
+                </div>
+                <label>Infer URL <input id="tritonInferUrl" readonly /></label>
+                <div class="actions inline-actions">
+                  <button id="copyTritonInferUrlBtn" type="button" class="secondary">Copy URL</button>
+                </div>
+                <label>Infer payload JSON <textarea id="tritonInferPayload" rows="10">{
+  "inputs": [
+    {
+      "name": "input",
+      "shape": [1],
+      "datatype": "FP32",
+      "data": [0]
+    }
+  ]
+}</textarea></label>
+                <div class="actions inline-actions">
+                  <button id="testTritonInferBtn" type="button">Test infer</button>
+                </div>
+                <pre id="tritonInferOutput" class="triton-infer-output"></pre>
+              </article>
             </div>
           </section>
         </section>

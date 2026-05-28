@@ -1945,11 +1945,32 @@ pre {
   color: var(--muted);
   font-size: 13px;
 }
+.triton-infer-card {
+  grid-column: 1 / -1;
+}
+.triton-infer-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.triton-infer-url {
+  display: block;
+  max-width: min(100%, 680px);
+  margin-top: 6px;
+  overflow: hidden;
+  color: #1d4ed8;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .triton-config-preview {
   min-height: 0;
   max-height: 140px;
   margin: -4px 0 8px;
   font-size: 11px;
+}
+.triton-infer-output {
+  min-height: 80px;
+  max-height: 280px;
 }
 @media (max-width: 760px) {
   .shell {
@@ -1978,6 +1999,9 @@ pre {
     grid-template-columns: 1fr;
   }
   .automation-wide {
+    grid-column: auto;
+  }
+  .triton-infer-card {
     grid-column: auto;
   }
   .model-name-field {

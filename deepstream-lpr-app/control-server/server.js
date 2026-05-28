@@ -762,10 +762,19 @@ async function listTritonModels() {
       versions: versions.sort((a, b) => Number(a.version) - Number(b.version)),
       hasConfig: Boolean(config),
       configPreview: config.slice(0, 1200),
+      inferPath: `/v2/models/${encodeURIComponent(name)}/infer`,
       path: modelDir
     });
   }
   return models.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function tritonInferPath(name, version = "") {
+  const safeName = encodeURIComponent(sanitizeTritonName(name));
+  const safeVersion = String(version || "").trim();
+  return safeVersion
+    ? `/v2/models/${safeName}/versions/${encodeURIComponent(sanitizeTritonVersion(safeVersion))}/infer`
+    : `/v2/models/${safeName}/infer`;
 }
 
 async function tritonHttp(pathname, options = {}) {
@@ -4153,6 +4162,33 @@ app.delete("/api/triton/models/:name", async (req, res) => {
     res.json({ models: await listTritonModels(), status: await readTritonStatus() });
   } catch (error) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/triton/models/:name/infer", async (req, res) => {
+  try {
+    const name = sanitizeTritonName(req.params.name);
+    const version = String(req.body?.version || "").trim();
+    const payload = req.body?.payload;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return res.status(400).json({ error: "Triton infer payload must be a JSON object." });
+    }
+    const pathName = tritonInferPath(name, version);
+    const started = Date.now();
+    const result = await tritonHttp(pathName, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    res.status(result.ok ? 200 : 502).json({
+      ok: result.ok,
+      status: result.status,
+      durationMs: Date.now() - started,
+      inferPath: pathName,
+      body: result.body
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 

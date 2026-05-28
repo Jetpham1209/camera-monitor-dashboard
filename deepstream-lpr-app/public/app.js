@@ -205,7 +205,14 @@ const els = {
   tritonModelFile: document.querySelector("#tritonModelFile"),
   tritonConfigFile: document.querySelector("#tritonConfigFile"),
   uploadTritonModelBtn: document.querySelector("#uploadTritonModelBtn"),
-  tritonModelList: document.querySelector("#tritonModelList")
+  tritonModelList: document.querySelector("#tritonModelList"),
+  tritonInferModel: document.querySelector("#tritonInferModel"),
+  tritonInferVersion: document.querySelector("#tritonInferVersion"),
+  tritonInferUrl: document.querySelector("#tritonInferUrl"),
+  copyTritonInferUrlBtn: document.querySelector("#copyTritonInferUrlBtn"),
+  tritonInferPayload: document.querySelector("#tritonInferPayload"),
+  testTritonInferBtn: document.querySelector("#testTritonInferBtn"),
+  tritonInferOutput: document.querySelector("#tritonInferOutput")
 };
 
 let cameraDrafts = [];
@@ -757,6 +764,23 @@ async function clearAutomationRuns() {
   print(result);
 }
 
+function tritonPublicInferUrl(modelName = "", version = "") {
+  const status = latestTriton.status || {};
+  const port = status.httpPort || 8000;
+  const host = location.hostname || "localhost";
+  const versionPart = String(version || "").trim()
+    ? `/versions/${encodeURIComponent(String(version).trim())}`
+    : "";
+  return `http://${host}:${port}/v2/models/${encodeURIComponent(modelName)}${versionPart}/infer`;
+}
+
+function updateTritonInferUrl() {
+  if (!els.tritonInferUrl) return;
+  const modelName = els.tritonInferModel?.value || "";
+  const version = els.tritonInferVersion?.value || "";
+  els.tritonInferUrl.value = modelName ? tritonPublicInferUrl(modelName, version) : "";
+}
+
 function renderTriton(data = latestTriton) {
   latestTriton = data || { status: {}, models: [] };
   const status = latestTriton.status || {};
@@ -793,13 +817,24 @@ function renderTriton(data = latestTriton) {
           <strong>${escapeHtml(model.name)}</strong>
           <span>${model.versions?.length ? model.versions.map((item) => `v${item.version}: ${item.files.join(", ")}`).join(" | ") : "No version folder"}</span>
           <small>${model.hasConfig ? "config.pbtxt available" : "missing config.pbtxt"}</small>
+          <code class="triton-infer-url">${escapeHtml(tritonPublicInferUrl(model.name))}</code>
         </div>
         <div class="actions inline-actions">
+          <button type="button" class="secondary" data-use-triton-model="${escapeHtml(model.name)}">Use</button>
+          <button type="button" class="secondary" data-copy-triton-url="${escapeHtml(model.name)}">Copy URL</button>
           <button type="button" class="danger" data-delete-triton-model="${escapeHtml(model.name)}">Delete</button>
         </div>
       </article>
       ${model.configPreview ? `<pre class="triton-config-preview">${escapeHtml(model.configPreview)}</pre>` : ""}
     `).join("") : '<div class="empty">No Triton model yet.</div>';
+  }
+  if (els.tritonInferModel) {
+    const selected = els.tritonInferModel.value;
+    els.tritonInferModel.innerHTML = models.length
+      ? models.map((model) => `<option value="${escapeHtml(model.name)}">${escapeHtml(model.name)}</option>`).join("")
+      : '<option value="">No model</option>';
+    if (models.some((model) => model.name === selected)) els.tritonInferModel.value = selected;
+    updateTritonInferUrl();
   }
 }
 
@@ -851,6 +886,28 @@ async function deleteTritonModel(name) {
     return await api(`/api/triton/models/${encodeURIComponent(name)}`, { method: "DELETE" });
   });
   renderTriton(result);
+  print(result);
+}
+
+async function copyTritonInferUrl(modelName = "") {
+  const url = modelName ? tritonPublicInferUrl(modelName) : els.tritonInferUrl.value;
+  if (!url) return print("No Triton infer URL to copy.");
+  await navigator.clipboard.writeText(url);
+  setTaskStatus("triton", "success", "Triton infer URL copied.");
+}
+
+async function testTritonInfer(button = null) {
+  const modelName = els.tritonInferModel?.value || "";
+  if (!modelName) return print("Chon model Triton truoc khi test infer.");
+  const payload = parseJsonField(els.tritonInferPayload, {});
+  const version = els.tritonInferVersion?.value || "";
+  const result = await withTask("triton", button, "Running Triton infer...", async () => {
+    return await api(`/api/triton/models/${encodeURIComponent(modelName)}/infer`, {
+      method: "POST",
+      body: JSON.stringify({ version, payload })
+    });
+  });
+  if (els.tritonInferOutput) els.tritonInferOutput.textContent = JSON.stringify(result, null, 2);
   print(result);
 }
 
@@ -4271,8 +4328,26 @@ els.tritonModelFile?.addEventListener("change", () => {
   els.tritonModelName.value = file.name.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_.-]/g, "_");
 });
 els.tritonModelList?.addEventListener("click", (event) => {
+  const copyButton = event.target.closest("[data-copy-triton-url]");
+  if (copyButton) {
+    copyTritonInferUrl(copyButton.dataset.copyTritonUrl).catch((error) => print(error.message));
+    return;
+  }
+  const useButton = event.target.closest("[data-use-triton-model]");
+  if (useButton) {
+    if (els.tritonInferModel) els.tritonInferModel.value = useButton.dataset.useTritonModel;
+    updateTritonInferUrl();
+    return;
+  }
   const button = event.target.closest("[data-delete-triton-model]");
   if (!button) return;
   deleteTritonModel(button.dataset.deleteTritonModel).catch((error) => print(error.message));
 });
+els.tritonInferModel?.addEventListener("change", updateTritonInferUrl);
+els.tritonInferVersion?.addEventListener("input", updateTritonInferUrl);
+els.copyTritonInferUrlBtn?.addEventListener("click", () => copyTritonInferUrl().catch((error) => print(error.message)));
+els.testTritonInferBtn?.addEventListener("click", () => testTritonInfer(els.testTritonInferBtn).catch((error) => {
+  if (els.tritonInferOutput) els.tritonInferOutput.textContent = error.message;
+  print(error.message);
+}));
 init().catch((error) => print(error.message));
