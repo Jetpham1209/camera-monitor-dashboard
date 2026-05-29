@@ -210,8 +210,11 @@ const els = {
   tritonInferVersion: document.querySelector("#tritonInferVersion"),
   tritonInferUrl: document.querySelector("#tritonInferUrl"),
   copyTritonInferUrlBtn: document.querySelector("#copyTritonInferUrlBtn"),
+  loadTritonMetadataBtn: document.querySelector("#loadTritonMetadataBtn"),
+  sampleTritonPayloadBtn: document.querySelector("#sampleTritonPayloadBtn"),
   tritonInferPayload: document.querySelector("#tritonInferPayload"),
   testTritonInferBtn: document.querySelector("#testTritonInferBtn"),
+  dummyTritonInferBtn: document.querySelector("#dummyTritonInferBtn"),
   tritonInferOutput: document.querySelector("#tritonInferOutput")
 };
 
@@ -241,6 +244,7 @@ let agentSettings = null;
 let automationConfig = { services: [], environments: [], workflows: [] };
 let automationRuns = [];
 let latestTriton = { status: {}, models: [] };
+let latestTritonMetadata = null;
 
 function print(value) {
   els.output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -908,6 +912,52 @@ async function copyTritonInferUrl(modelName = "") {
   setTaskStatus("triton", "success", "Triton infer URL copied.");
 }
 
+function tritonZeroForDatatype(datatype = "") {
+  const value = String(datatype || "").toUpperCase();
+  if (value === "BOOL") return false;
+  if (value === "BYTES" || value === "STRING") return "";
+  return 0;
+}
+
+function sampleTritonPayload(metadata = latestTritonMetadata) {
+  const body = metadata?.body || metadata || {};
+  const inputs = Array.isArray(body.inputs) ? body.inputs : [];
+  if (!inputs.length) throw new Error("Load metadata truoc de tao sample payload.");
+  return {
+    inputs: inputs.map((input) => {
+      const shape = (input.shape || []).map((dim) => Number(dim) > 0 ? Number(dim) : 1);
+      const elements = shape.reduce((total, dim) => total * Math.max(1, Number(dim || 1)), 1);
+      const previewElements = Math.min(elements, 32);
+      return {
+        name: input.name,
+        shape,
+        datatype: input.datatype || "FP32",
+        data: Array.from({ length: previewElements }, () => tritonZeroForDatatype(input.datatype))
+      };
+    })
+  };
+}
+
+async function loadTritonMetadata(button = null) {
+  const modelName = els.tritonInferModel?.value || "";
+  if (!modelName) return print("Chon model Triton truoc khi load metadata.");
+  const version = els.tritonInferVersion?.value || "";
+  const result = await withTask("triton", button, "Loading Triton metadata...", async () => {
+    const query = version ? `?version=${encodeURIComponent(version)}` : "";
+    return await api(`/api/triton/models/${encodeURIComponent(modelName)}/metadata${query}`);
+  });
+  latestTritonMetadata = result;
+  if (els.tritonInferOutput) els.tritonInferOutput.textContent = JSON.stringify(result, null, 2);
+  print(result);
+  return result;
+}
+
+function useSampleTritonPayload() {
+  const payload = sampleTritonPayload();
+  els.tritonInferPayload.value = JSON.stringify(payload, null, 2);
+  setTaskStatus("triton", "success", "Sample payload generated from metadata. Large tensors are truncated for editing.");
+}
+
 async function testTritonInfer(button = null) {
   const modelName = els.tritonInferModel?.value || "";
   if (!modelName) return print("Chon model Triton truoc khi test infer.");
@@ -917,6 +967,20 @@ async function testTritonInfer(button = null) {
     return await api(`/api/triton/models/${encodeURIComponent(modelName)}/infer`, {
       method: "POST",
       body: JSON.stringify({ version, payload })
+    });
+  });
+  if (els.tritonInferOutput) els.tritonInferOutput.textContent = JSON.stringify(result, null, 2);
+  print(result);
+}
+
+async function dummyTritonInfer(button = null) {
+  const modelName = els.tritonInferModel?.value || "";
+  if (!modelName) return print("Chon model Triton truoc khi dummy infer.");
+  const version = els.tritonInferVersion?.value || "";
+  const result = await withTask("triton", button, "Running dummy Triton infer...", async () => {
+    return await api(`/api/triton/models/${encodeURIComponent(modelName)}/infer-dummy`, {
+      method: "POST",
+      body: JSON.stringify({ version })
     });
   });
   if (els.tritonInferOutput) els.tritonInferOutput.textContent = JSON.stringify(result, null, 2);
@@ -4363,7 +4427,22 @@ els.tritonModelList?.addEventListener("click", (event) => {
 els.tritonInferModel?.addEventListener("change", updateTritonInferUrl);
 els.tritonInferVersion?.addEventListener("input", updateTritonInferUrl);
 els.copyTritonInferUrlBtn?.addEventListener("click", () => copyTritonInferUrl().catch((error) => print(error.message)));
+els.loadTritonMetadataBtn?.addEventListener("click", () => loadTritonMetadata(els.loadTritonMetadataBtn).catch((error) => {
+  if (els.tritonInferOutput) els.tritonInferOutput.textContent = error.message;
+  print(error.message);
+}));
+els.sampleTritonPayloadBtn?.addEventListener("click", () => {
+  try {
+    useSampleTritonPayload();
+  } catch (error) {
+    print(error.message);
+  }
+});
 els.testTritonInferBtn?.addEventListener("click", () => testTritonInfer(els.testTritonInferBtn).catch((error) => {
+  if (els.tritonInferOutput) els.tritonInferOutput.textContent = error.message;
+  print(error.message);
+}));
+els.dummyTritonInferBtn?.addEventListener("click", () => dummyTritonInfer(els.dummyTritonInferBtn).catch((error) => {
   if (els.tritonInferOutput) els.tritonInferOutput.textContent = error.message;
   print(error.message);
 }));

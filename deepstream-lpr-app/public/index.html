@@ -353,6 +353,8 @@
                 <label>Infer URL <input id="tritonInferUrl" readonly /></label>
                 <div class="actions inline-actions">
                   <button id="copyTritonInferUrlBtn" type="button" class="secondary">Copy URL</button>
+                  <button id="loadTritonMetadataBtn" type="button" class="secondary">Load metadata</button>
+                  <button id="sampleTritonPayloadBtn" type="button" class="secondary">Use sample payload</button>
                 </div>
                 <label>Infer payload JSON <textarea id="tritonInferPayload" rows="10">{
   "inputs": [
@@ -366,6 +368,7 @@
 }</textarea></label>
                 <div class="actions inline-actions">
                   <button id="testTritonInferBtn" type="button">Test infer</button>
+                  <button id="dummyTritonInferBtn" type="button" class="secondary">Dummy zero infer</button>
                 </div>
                 <pre id="tritonInferOutput" class="triton-infer-output"></pre>
               </article>

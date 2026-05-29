@@ -57,7 +57,7 @@ const CAPTURE_TIMEOUT_MS = Number(process.env.PROBE_TIMEOUT_MS || 10000);
 const PING_TIMEOUT_MS = Number(process.env.PING_TIMEOUT_MS || 3000);
 
 const app = express();
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "25mb" }));
 const httpServer = http.createServer(app);
 const jobs = new Map();
 const automationSeenEvents = new Set();
@@ -801,6 +801,41 @@ function tritonInferPath(name, version = "") {
   return safeVersion
     ? `/v2/models/${safeName}/versions/${encodeURIComponent(sanitizeTritonVersion(safeVersion))}/infer`
     : `/v2/models/${safeName}/infer`;
+}
+
+function tritonMetadataPath(name, version = "") {
+  const safeName = encodeURIComponent(sanitizeTritonName(name));
+  const safeVersion = String(version || "").trim();
+  return safeVersion
+    ? `/v2/models/${safeName}/versions/${encodeURIComponent(sanitizeTritonVersion(safeVersion))}`
+    : `/v2/models/${safeName}`;
+}
+
+function zeroValueForTritonDatatype(datatype = "") {
+  const value = String(datatype || "").toUpperCase();
+  if (value === "BOOL") return false;
+  if (value === "BYTES" || value === "STRING") return "";
+  return 0;
+}
+
+function dummyTritonPayloadFromMetadata(metadata = {}, maxElements = 2000000) {
+  const inputs = Array.isArray(metadata.inputs) ? metadata.inputs : [];
+  if (!inputs.length) throw new Error("Triton model metadata has no inputs.");
+  return {
+    inputs: inputs.map((input) => {
+      const shape = (input.shape || []).map((dim) => Number(dim) > 0 ? Number(dim) : 1);
+      const elements = shape.reduce((total, dim) => total * Math.max(1, Number(dim || 1)), 1);
+      if (elements > maxElements) {
+        throw new Error(`Dummy input '${input.name}' is too large (${elements} elements). Paste a smaller payload manually.`);
+      }
+      return {
+        name: input.name,
+        shape,
+        datatype: input.datatype || "FP32",
+        data: Array.from({ length: elements }, () => zeroValueForTritonDatatype(input.datatype))
+      };
+    })
+  };
 }
 
 async function tritonHttp(pathname, options = {}) {
@@ -4212,6 +4247,21 @@ app.post("/api/triton/models/:name/config", async (req, res) => {
   }
 });
 
+app.get("/api/triton/models/:name/metadata", async (req, res) => {
+  try {
+    const pathName = tritonMetadataPath(req.params.name, req.query.version || "");
+    const result = await tritonHttp(pathName);
+    res.status(result.ok ? 200 : 502).json({
+      ok: result.ok,
+      status: result.status,
+      metadataPath: pathName,
+      body: result.body
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post("/api/triton/models/:name/infer", async (req, res) => {
   try {
     const name = sanitizeTritonName(req.params.name);
@@ -4232,6 +4282,45 @@ app.post("/api/triton/models/:name/infer", async (req, res) => {
       status: result.status,
       durationMs: Date.now() - started,
       inferPath: pathName,
+      body: result.body
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/triton/models/:name/infer-dummy", async (req, res) => {
+  try {
+    const name = sanitizeTritonName(req.params.name);
+    const version = String(req.body?.version || "").trim();
+    const metadataResult = await tritonHttp(tritonMetadataPath(name, version));
+    if (!metadataResult.ok) {
+      return res.status(502).json({
+        ok: false,
+        status: metadataResult.status,
+        error: "Could not load Triton model metadata.",
+        body: metadataResult.body
+      });
+    }
+    const payload = dummyTritonPayloadFromMetadata(metadataResult.body, Number(req.body?.maxElements || 2000000));
+    const pathName = tritonInferPath(name, version);
+    const started = Date.now();
+    const result = await tritonHttp(pathName, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    res.status(result.ok ? 200 : 502).json({
+      ok: result.ok,
+      status: result.status,
+      durationMs: Date.now() - started,
+      inferPath: pathName,
+      payloadSummary: payload.inputs.map((input) => ({
+        name: input.name,
+        shape: input.shape,
+        datatype: input.datatype,
+        elements: input.data.length
+      })),
       body: result.body
     });
   } catch (error) {
