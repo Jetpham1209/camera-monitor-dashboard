@@ -220,6 +220,7 @@ const els = {
   tritonInferImage: document.querySelector("#tritonInferImage"),
   tritonInferChannelOrder: document.querySelector("#tritonInferChannelOrder"),
   tritonInferScaleMode: document.querySelector("#tritonInferScaleMode"),
+  tritonInferResizeMode: document.querySelector("#tritonInferResizeMode"),
   tritonInferDecoderProfile: document.querySelector("#tritonInferDecoderProfile"),
   tritonInferConfidence: document.querySelector("#tritonInferConfidence"),
   tritonInferIou: document.querySelector("#tritonInferIou"),
@@ -1128,6 +1129,8 @@ function drawTritonImageResult(file, result) {
   const objectUrl = URL.createObjectURL(file);
   const detections = result?.decode?.detections || [];
   const warnings = result?.decode?.warnings || [];
+  const reading = result?.decode?.reading || {};
+  const preprocessing = result?.preprocessing || {};
   image.onload = () => {
     const maxWidth = 920;
     const scale = Math.min(1, maxWidth / image.naturalWidth);
@@ -1165,6 +1168,8 @@ function drawTritonImageResult(file, result) {
       <div class="triton-detection-summary">
         <strong>${detections.length}</strong>
         <span>detection(s)</span>
+        ${reading.text ? `<em>sorted: ${escapeHtml(reading.text)}</em>` : ""}
+        <small>${escapeHtml(preprocessing.resizeMode || "resize")} ${Number(preprocessing.originalWidth || image.naturalWidth)}x${Number(preprocessing.originalHeight || image.naturalHeight)} -> ${Number(preprocessing.width || 0)}x${Number(preprocessing.height || 0)}</small>
       </div>
       ${warnings.length ? `<div class="triton-warning">${warnings.map(escapeHtml).join("<br>")}</div>` : ""}
       <div class="triton-detection-items">
@@ -1195,6 +1200,7 @@ async function testTritonImageInfer(button = null) {
   form.append("version", els.tritonInferVersion?.value || "");
   form.append("channelOrder", els.tritonInferChannelOrder?.value || "rgb");
   form.append("scaleMode", els.tritonInferScaleMode?.value || "0-1");
+  form.append("resizeMode", els.tritonInferResizeMode?.value || "letterbox");
   form.append("decoderProfile", els.tritonInferDecoderProfile?.value || "");
   form.append("confidenceThreshold", els.tritonInferConfidence?.value || "0.25");
   form.append("iouThreshold", els.tritonInferIou?.value || "0.45");

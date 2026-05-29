@@ -2086,6 +2086,18 @@ pre {
   display: block;
   font-size: 24px;
 }
+.triton-detection-summary em,
+.triton-detection-summary small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-style: normal;
+}
+.triton-detection-summary em {
+  color: var(--text);
+  font-weight: 800;
+  word-break: break-all;
+}
 .triton-detection-items {
   display: grid;
   max-height: 360px;

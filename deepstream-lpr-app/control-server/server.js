@@ -980,13 +980,27 @@ async function tritonImagePayloadFromFile(imagePath, metadata = {}, options = {}
   }
   const channelOrder = String(options.channelOrder || "rgb").toLowerCase() === "bgr" ? "bgr" : "rgb";
   const scaleMode = String(options.scaleMode || "0-1");
+  const resizeMode = String(options.resizeMode || "letterbox").toLowerCase() === "stretch" ? "stretch" : "letterbox";
   const scale = scaleMode === "0-255" ? 1 : 1 / 255;
   const expectedBytes = input.width * input.height * 3;
+  const originalDimensions = await imageDimensions(imagePath).catch(() => ({ width: 0, height: 0 }));
+  const originalWidth = Number(originalDimensions.width || input.width);
+  const originalHeight = Number(originalDimensions.height || input.height);
+  const ratio = resizeMode === "letterbox"
+    ? Math.min(input.width / originalWidth, input.height / originalHeight)
+    : 1;
+  const resizedWidth = resizeMode === "letterbox" ? Math.round(originalWidth * ratio) : input.width;
+  const resizedHeight = resizeMode === "letterbox" ? Math.round(originalHeight * ratio) : input.height;
+  const padX = resizeMode === "letterbox" ? (input.width - resizedWidth) / 2 : 0;
+  const padY = resizeMode === "letterbox" ? (input.height - resizedHeight) / 2 : 0;
+  const filter = resizeMode === "letterbox"
+    ? `scale=${input.width}:${input.height}:force_original_aspect_ratio=decrease,pad=${input.width}:${input.height}:(ow-iw)/2:(oh-ih)/2:color=0x727272,format=rgb24`
+    : `scale=${input.width}:${input.height},format=rgb24`;
   const result = await runBinaryCommand(ffmpegExecutable(), [
     "-v", "error",
     "-i", imagePath,
     "-frames:v", "1",
-    "-vf", `scale=${input.width}:${input.height},format=rgb24`,
+    "-vf", filter,
     "-f", "rawvideo",
     "pipe:1"
   ], {
@@ -1044,6 +1058,16 @@ async function tritonImagePayloadFromFile(imagePath, metadata = {}, options = {}
       datatype: input.datatype || "FP32",
       channelOrder,
       scaleMode,
+      resizeMode,
+      originalWidth,
+      originalHeight,
+      resizedWidth,
+      resizedHeight,
+      letterbox: {
+        ratio,
+        padX,
+        padY
+      },
       elements: data.length
     }
   };
@@ -1101,6 +1125,52 @@ function nonMaxSuppression(detections, iouThreshold = 0.45, maxDetections = 100)
   return kept;
 }
 
+function mapResizedBoxToOriginal(bboxResized, options = {}) {
+  const inputWidth = Number(options.inputWidth || 640);
+  const inputHeight = Number(options.inputHeight || 640);
+  const originalWidth = Number(options.originalWidth || inputWidth);
+  const originalHeight = Number(options.originalHeight || inputHeight);
+  const resizeMode = String(options.resizeMode || "stretch").toLowerCase();
+  if (resizeMode === "letterbox") {
+    const ratio = Number(options.letterbox?.ratio || Math.min(inputWidth / originalWidth, inputHeight / originalHeight));
+    const padX = Number(options.letterbox?.padX || 0);
+    const padY = Number(options.letterbox?.padY || 0);
+    const left = (bboxResized.left - padX) / ratio;
+    const top = (bboxResized.top - padY) / ratio;
+    const right = (bboxResized.left + bboxResized.width - padX) / ratio;
+    const bottom = (bboxResized.top + bboxResized.height - padY) / ratio;
+    const clippedLeft = clamp(left, 0, originalWidth);
+    const clippedTop = clamp(top, 0, originalHeight);
+    const clippedRight = clamp(right, 0, originalWidth);
+    const clippedBottom = clamp(bottom, 0, originalHeight);
+    return {
+      left: clippedLeft,
+      top: clippedTop,
+      width: Math.max(0, clippedRight - clippedLeft),
+      height: Math.max(0, clippedBottom - clippedTop)
+    };
+  }
+  const xScale = originalWidth / inputWidth;
+  const yScale = originalHeight / inputHeight;
+  return {
+    left: bboxResized.left * xScale,
+    top: bboxResized.top * yScale,
+    width: bboxResized.width * xScale,
+    height: bboxResized.height * yScale
+  };
+}
+
+function summarizeDetectionReading(detections = []) {
+  const sorted = [...detections]
+    .filter((detection) => detection?.bboxOriginal && Number.isFinite(Number(detection.bboxOriginal.left)))
+    .sort((a, b) => Number(a.bboxOriginal.left) - Number(b.bboxOriginal.left));
+  return {
+    text: sorted.map((detection) => detection.label || `class_${detection.classId}`).join(""),
+    labels: sorted.map((detection) => detection.label || `class_${detection.classId}`),
+    count: sorted.length
+  };
+}
+
 function outputByName(body = {}, name = "") {
   const outputs = Array.isArray(body.outputs) ? body.outputs : [];
   return outputs.find((output) => String(output.name || "").toLowerCase() === String(name).toLowerCase());
@@ -1123,8 +1193,6 @@ function decodeUltralyticsYoloDetect(body = {}, labels = [], options = {}) {
   const inputHeight = Number(options.inputHeight || 640);
   const originalWidth = Number(options.originalWidth || inputWidth);
   const originalHeight = Number(options.originalHeight || inputHeight);
-  const xScale = originalWidth / inputWidth;
-  const yScale = originalHeight / inputHeight;
   const detections = [];
   const valueAt = (channel, box) => channelFirst
     ? data[(channel * boxes) + box]
@@ -1160,14 +1228,10 @@ function decodeUltralyticsYoloDetect(body = {}, labels = [], options = {}) {
       label: labels[classId] || `class_${classId}`,
       confidence,
       bboxResized,
-      bboxOriginal: {
-        left: bboxResized.left * xScale,
-        top: bboxResized.top * yScale,
-        width: bboxResized.width * xScale,
-        height: bboxResized.height * yScale
-      }
+      bboxOriginal: mapResizedBoxToOriginal(bboxResized, { ...options, inputWidth, inputHeight, originalWidth, originalHeight })
     });
   }
+  const finalDetections = nonMaxSuppression(detections, iouThreshold, maxDetections);
   const warnings = [];
   if (!labels.length) warnings.push("No labels.txt found; labels are shown as class_0, class_1, ...");
   if (labels.length && labels.length !== classCount) warnings.push(`labels.txt has ${labels.length} labels, YOLO output suggests ${classCount} classes.`);
@@ -1175,7 +1239,8 @@ function decodeUltralyticsYoloDetect(body = {}, labels = [], options = {}) {
     profile: "ultralytics_yolo_detect",
     tensor: { name: output.name, shape, layout: channelFirst ? "[batch, channels, boxes]" : "[batch, boxes, channels]", boxes, channels, classCount },
     thresholds: { confidenceThreshold, iouThreshold, maxDetections },
-    detections: nonMaxSuppression(detections, iouThreshold, maxDetections),
+    detections: finalDetections,
+    reading: summarizeDetectionReading(finalDetections),
     rawCandidates: detections.length,
     warnings
   };
@@ -1199,8 +1264,6 @@ function decodeLegacyBoxesScoresClasses(body = {}, labels = [], options = {}) {
   const inputHeight = Number(options.inputHeight || 640);
   const originalWidth = Number(options.originalWidth || inputWidth);
   const originalHeight = Number(options.originalHeight || inputHeight);
-  const xScale = originalWidth / inputWidth;
-  const yScale = originalHeight / inputHeight;
   const detections = [];
   for (let index = 0; index < count; index += 1) {
     const confidence = Number(scores[index]);
@@ -1222,14 +1285,10 @@ function decodeLegacyBoxesScoresClasses(body = {}, labels = [], options = {}) {
       label: labels[classId] || `class_${classId}`,
       confidence,
       bboxResized,
-      bboxOriginal: {
-        left: bboxResized.left * xScale,
-        top: bboxResized.top * yScale,
-        width: bboxResized.width * xScale,
-        height: bboxResized.height * yScale
-      }
+      bboxOriginal: mapResizedBoxToOriginal(bboxResized, { ...options, inputWidth, inputHeight, originalWidth, originalHeight })
     });
   }
+  const finalDetections = detections.slice(0, maxDetections);
   if (!labels.length) warnings.push("No labels.txt found; labels are shown as class_0, class_1, ...");
   return {
     profile: "legacy_boxes_scores_classes",
@@ -1239,7 +1298,8 @@ function decodeLegacyBoxesScoresClasses(body = {}, labels = [], options = {}) {
       classes: classesOutput.shape
     },
     thresholds: { confidenceThreshold, maxDetections },
-    detections: detections.slice(0, maxDetections),
+    detections: finalDetections,
+    reading: summarizeDetectionReading(finalDetections),
     rawCandidates: detections.length,
     warnings
   };
@@ -1868,16 +1928,18 @@ const uploadTritonLabels = multer({
 });
 
 async function imageDimensions(filePath) {
-  const ext = path.extname(filePath || "").toLowerCase();
   const buffer = await fsp.readFile(filePath);
-  if ((ext === ".jpg" || ext === ".jpeg") && buffer.length > 4) {
+  const isJpeg = buffer[0] === 0xff && buffer[1] === 0xd8;
+  const isPng = buffer.length > 24 && buffer[0] === 0x89 && buffer.slice(1, 4).toString("ascii") === "PNG";
+  if (isJpeg && buffer.length > 4) {
     let offset = 2;
-    while (offset < buffer.length) {
+    while (offset + 9 < buffer.length) {
       if (buffer[offset] !== 0xff) {
         offset += 1;
         continue;
       }
       const marker = buffer[offset + 1];
+      if (marker === 0xd9 || marker === 0xda) break;
       const length = buffer.readUInt16BE(offset + 2);
       if (marker >= 0xc0 && marker <= 0xc3) {
         return {
@@ -1888,7 +1950,7 @@ async function imageDimensions(filePath) {
       offset += 2 + length;
     }
   }
-  if (ext === ".png" && buffer.slice(1, 4).toString("ascii") === "PNG") {
+  if (isPng) {
     return {
       width: buffer.readUInt32BE(16),
       height: buffer.readUInt32BE(20)
@@ -4851,7 +4913,8 @@ app.post("/api/triton/models/:name/infer-image", uploadTritonInferImage.single("
     }
     const { payload, preprocessing } = await tritonImagePayloadFromFile(req.file.path, metadataResult.body, {
       channelOrder: req.body?.channelOrder,
-      scaleMode: req.body?.scaleMode
+      scaleMode: req.body?.scaleMode,
+      resizeMode: req.body?.resizeMode
     });
     const pathName = tritonInferPath(name, version);
     const started = Date.now();
@@ -4869,7 +4932,9 @@ app.post("/api/triton/models/:name/infer-image", uploadTritonInferImage.single("
         inputWidth: preprocessing.width,
         inputHeight: preprocessing.height,
         originalWidth: originalDimensions.width || preprocessing.width,
-        originalHeight: originalDimensions.height || preprocessing.height
+        originalHeight: originalDimensions.height || preprocessing.height,
+        resizeMode: preprocessing.resizeMode,
+        letterbox: preprocessing.letterbox
       })
       : null;
     res.status(result.ok ? 200 : 502).json({
