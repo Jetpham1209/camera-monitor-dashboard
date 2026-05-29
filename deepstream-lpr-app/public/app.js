@@ -44,6 +44,7 @@ const processorTypes = [
 const deepstreamPayloadFields = [
   { path: "__literal__", label: "User input" },
   { path: "__blank__", label: "Blank" },
+  { path: "__uuid__", label: "UUID" },
   { path: "eventType", label: "Event type" },
   { path: "eventId", label: "Event ID" },
   { path: "ts", label: "Timestamp" },

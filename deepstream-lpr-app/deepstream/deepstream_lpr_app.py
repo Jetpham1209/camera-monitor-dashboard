@@ -6,6 +6,7 @@ import re
 import socket
 import struct
 import time
+import uuid
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -235,6 +236,8 @@ class LprRuntime:
                 payload[key] = ""
             elif path == "__literal__":
                 payload[key] = str(item.get("literal") or item.get("text") or "")
+            elif path == "__uuid__":
+                payload[key] = str(uuid.uuid4())
             else:
                 payload[key] = self.event_path_value(event, path, None)
         return payload or self.compact_event_payload(event, "minimal")
