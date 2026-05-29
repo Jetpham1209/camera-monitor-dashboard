@@ -56,6 +56,12 @@ const TENSORRT_VERSION = process.env.TENSORRT_VERSION || "";
 const CAPTURE_TIMEOUT_MS = Number(process.env.PROBE_TIMEOUT_MS || 10000);
 const PING_TIMEOUT_MS = Number(process.env.PING_TIMEOUT_MS || 3000);
 
+const TRITON_DECODER_PROFILES = new Set([
+  "raw",
+  "ultralytics_yolo_detect",
+  "legacy_boxes_scores_classes"
+]);
+
 const app = express();
 app.use(express.json({ limit: "25mb" }));
 const httpServer = http.createServer(app);
@@ -782,6 +788,55 @@ function tritonConfigTemplate(name, platform, maxBatchSize = 0) {
   return `name: "${name}"\nplatform: "${platform}"\nmax_batch_size: ${batch}\n`;
 }
 
+function sanitizeTritonDecoderProfile(value) {
+  const profile = String(value || "raw").trim();
+  return TRITON_DECODER_PROFILES.has(profile) ? profile : "raw";
+}
+
+function tritonLabelsPath(name) {
+  return path.join(TRITON_MODELS_DIR, sanitizeTritonName(name), "labels.txt");
+}
+
+function tritonMetaPath(name) {
+  return path.join(TRITON_MODELS_DIR, sanitizeTritonName(name), "model.meta.json");
+}
+
+function parseLabelsText(text = "") {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+async function readTritonLabels(name) {
+  const text = await fsp.readFile(tritonLabelsPath(name), "utf8").catch(() => "");
+  return { text, labels: parseLabelsText(text) };
+}
+
+async function readTritonModelMeta(name) {
+  const meta = await readJson(tritonMetaPath(name), {});
+  return {
+    decoderProfile: sanitizeTritonDecoderProfile(meta.decoderProfile),
+    description: String(meta.description || ""),
+    updatedAt: meta.updatedAt || ""
+  };
+}
+
+async function writeTritonModelMeta(name, patch = {}) {
+  const safeName = sanitizeTritonName(name);
+  const modelDir = path.join(TRITON_MODELS_DIR, safeName);
+  await fsp.mkdir(modelDir, { recursive: true });
+  const current = await readTritonModelMeta(safeName);
+  const next = {
+    ...current,
+    ...patch,
+    decoderProfile: sanitizeTritonDecoderProfile(patch.decoderProfile ?? current.decoderProfile),
+    updatedAt: new Date().toISOString()
+  };
+  await writeJson(tritonMetaPath(safeName), next);
+  return next;
+}
+
 async function inferTritonPlatformFromRepo(name) {
   const modelDir = path.join(TRITON_MODELS_DIR, sanitizeTritonName(name));
   const entries = await fsp.readdir(modelDir, { withFileTypes: true }).catch(() => []);
@@ -824,11 +879,20 @@ async function listTritonModels() {
     }
     const configPath = path.join(modelDir, "config.pbtxt");
     const config = await fsp.readFile(configPath, "utf8").catch(() => "");
+    const labels = await readTritonLabels(name);
+    const meta = await readTritonModelMeta(name);
     models.push({
       name,
       versions: versions.sort((a, b) => Number(a.version) - Number(b.version)),
       hasConfig: Boolean(config),
       configPreview: config.slice(0, 1200),
+      labels: {
+        count: labels.labels.length,
+        preview: labels.labels.slice(0, 20),
+        text: labels.text
+      },
+      decoderProfile: meta.decoderProfile,
+      meta,
       inferPath: `/v2/models/${encodeURIComponent(name)}/infer`,
       path: modelDir
     });
@@ -1001,6 +1065,195 @@ function summarizeTritonBody(body, maxOutputItems = 64) {
     });
   }
   return next;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function intersectionOverUnion(a, b) {
+  const ax2 = a.left + a.width;
+  const ay2 = a.top + a.height;
+  const bx2 = b.left + b.width;
+  const by2 = b.top + b.height;
+  const left = Math.max(a.left, b.left);
+  const top = Math.max(a.top, b.top);
+  const right = Math.min(ax2, bx2);
+  const bottom = Math.min(ay2, by2);
+  const width = Math.max(0, right - left);
+  const height = Math.max(0, bottom - top);
+  const intersection = width * height;
+  const union = (a.width * a.height) + (b.width * b.height) - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
+function nonMaxSuppression(detections, iouThreshold = 0.45, maxDetections = 100) {
+  const sorted = [...detections].sort((a, b) => b.confidence - a.confidence);
+  const kept = [];
+  for (const detection of sorted) {
+    if (kept.length >= maxDetections) break;
+    const overlaps = kept.some((item) => (
+      item.classId === detection.classId
+      && intersectionOverUnion(item.bboxResized, detection.bboxResized) > iouThreshold
+    ));
+    if (!overlaps) kept.push(detection);
+  }
+  return kept;
+}
+
+function outputByName(body = {}, name = "") {
+  const outputs = Array.isArray(body.outputs) ? body.outputs : [];
+  return outputs.find((output) => String(output.name || "").toLowerCase() === String(name).toLowerCase());
+}
+
+function decodeUltralyticsYoloDetect(body = {}, labels = [], options = {}) {
+  const outputs = Array.isArray(body.outputs) ? body.outputs : [];
+  const output = outputs.find((item) => Array.isArray(item.data) && Array.isArray(item.shape) && item.shape.length === 3);
+  if (!output) return { profile: "ultralytics_yolo_detect", detections: [], warnings: ["No 3D YOLO output tensor found."] };
+  const shape = output.shape.map(Number);
+  const data = output.data;
+  const channelFirst = shape[1] <= shape[2];
+  const channels = channelFirst ? shape[1] : shape[2];
+  const boxes = channelFirst ? shape[2] : shape[1];
+  const classCount = Math.max(0, channels - 4);
+  const confidenceThreshold = Number(options.confidenceThreshold ?? 0.25);
+  const iouThreshold = Number(options.iouThreshold ?? 0.45);
+  const maxDetections = Math.max(1, Number(options.maxDetections || 100));
+  const inputWidth = Number(options.inputWidth || 640);
+  const inputHeight = Number(options.inputHeight || 640);
+  const originalWidth = Number(options.originalWidth || inputWidth);
+  const originalHeight = Number(options.originalHeight || inputHeight);
+  const xScale = originalWidth / inputWidth;
+  const yScale = originalHeight / inputHeight;
+  const detections = [];
+  const valueAt = (channel, box) => channelFirst
+    ? data[(channel * boxes) + box]
+    : data[(box * channels) + channel];
+  for (let box = 0; box < boxes; box += 1) {
+    let classId = -1;
+    let confidence = -Infinity;
+    for (let classIndex = 0; classIndex < classCount; classIndex += 1) {
+      const score = Number(valueAt(4 + classIndex, box));
+      if (score > confidence) {
+        confidence = score;
+        classId = classIndex;
+      }
+    }
+    if (!Number.isFinite(confidence) || confidence < confidenceThreshold) continue;
+    const cx = Number(valueAt(0, box));
+    const cy = Number(valueAt(1, box));
+    const width = Number(valueAt(2, box));
+    const height = Number(valueAt(3, box));
+    if (![cx, cy, width, height].every(Number.isFinite) || width <= 0 || height <= 0) continue;
+    const left = clamp(cx - (width / 2), 0, inputWidth);
+    const top = clamp(cy - (height / 2), 0, inputHeight);
+    const right = clamp(cx + (width / 2), 0, inputWidth);
+    const bottom = clamp(cy + (height / 2), 0, inputHeight);
+    const bboxResized = {
+      left,
+      top,
+      width: Math.max(0, right - left),
+      height: Math.max(0, bottom - top)
+    };
+    detections.push({
+      classId,
+      label: labels[classId] || `class_${classId}`,
+      confidence,
+      bboxResized,
+      bboxOriginal: {
+        left: bboxResized.left * xScale,
+        top: bboxResized.top * yScale,
+        width: bboxResized.width * xScale,
+        height: bboxResized.height * yScale
+      }
+    });
+  }
+  const warnings = [];
+  if (!labels.length) warnings.push("No labels.txt found; labels are shown as class_0, class_1, ...");
+  if (labels.length && labels.length !== classCount) warnings.push(`labels.txt has ${labels.length} labels, YOLO output suggests ${classCount} classes.`);
+  return {
+    profile: "ultralytics_yolo_detect",
+    tensor: { name: output.name, shape, layout: channelFirst ? "[batch, channels, boxes]" : "[batch, boxes, channels]", boxes, channels, classCount },
+    thresholds: { confidenceThreshold, iouThreshold, maxDetections },
+    detections: nonMaxSuppression(detections, iouThreshold, maxDetections),
+    rawCandidates: detections.length,
+    warnings
+  };
+}
+
+function decodeLegacyBoxesScoresClasses(body = {}, labels = [], options = {}) {
+  const boxesOutput = outputByName(body, "boxes");
+  const scoresOutput = outputByName(body, "scores");
+  const classesOutput = outputByName(body, "classes");
+  const warnings = [];
+  if (!boxesOutput || !scoresOutput || !classesOutput) {
+    return { profile: "legacy_boxes_scores_classes", detections: [], warnings: ["Expected outputs named boxes, scores and classes."] };
+  }
+  const boxes = boxesOutput.data || [];
+  const scores = scoresOutput.data || [];
+  const classes = classesOutput.data || [];
+  const count = Math.min(scores.length, classes.length, Math.floor(boxes.length / 4));
+  const confidenceThreshold = Number(options.confidenceThreshold ?? 0.25);
+  const maxDetections = Math.max(1, Number(options.maxDetections || 100));
+  const inputWidth = Number(options.inputWidth || 640);
+  const inputHeight = Number(options.inputHeight || 640);
+  const originalWidth = Number(options.originalWidth || inputWidth);
+  const originalHeight = Number(options.originalHeight || inputHeight);
+  const xScale = originalWidth / inputWidth;
+  const yScale = originalHeight / inputHeight;
+  const detections = [];
+  for (let index = 0; index < count; index += 1) {
+    const confidence = Number(scores[index]);
+    if (!Number.isFinite(confidence) || confidence < confidenceThreshold) continue;
+    const classId = Math.max(0, Math.round(Number(classes[index])));
+    const base = index * 4;
+    const x1 = clamp(Number(boxes[base]), 0, inputWidth);
+    const y1 = clamp(Number(boxes[base + 1]), 0, inputHeight);
+    const x2 = clamp(Number(boxes[base + 2]), 0, inputWidth);
+    const y2 = clamp(Number(boxes[base + 3]), 0, inputHeight);
+    const bboxResized = {
+      left: Math.min(x1, x2),
+      top: Math.min(y1, y2),
+      width: Math.abs(x2 - x1),
+      height: Math.abs(y2 - y1)
+    };
+    detections.push({
+      classId,
+      label: labels[classId] || `class_${classId}`,
+      confidence,
+      bboxResized,
+      bboxOriginal: {
+        left: bboxResized.left * xScale,
+        top: bboxResized.top * yScale,
+        width: bboxResized.width * xScale,
+        height: bboxResized.height * yScale
+      }
+    });
+  }
+  if (!labels.length) warnings.push("No labels.txt found; labels are shown as class_0, class_1, ...");
+  return {
+    profile: "legacy_boxes_scores_classes",
+    tensor: {
+      boxes: boxesOutput.shape,
+      scores: scoresOutput.shape,
+      classes: classesOutput.shape
+    },
+    thresholds: { confidenceThreshold, maxDetections },
+    detections: detections.slice(0, maxDetections),
+    rawCandidates: detections.length,
+    warnings
+  };
+}
+
+function decodeTritonDetections(body = {}, labels = [], options = {}) {
+  const profile = sanitizeTritonDecoderProfile(options.decoderProfile);
+  if (profile === "ultralytics_yolo_detect") return decodeUltralyticsYoloDetect(body, labels, options);
+  if (profile === "legacy_boxes_scores_classes") return decodeLegacyBoxesScoresClasses(body, labels, options);
+  return {
+    profile: "raw",
+    detections: [],
+    warnings: ["Decoder profile is raw, so no detection post-process was applied."]
+  };
 }
 
 async function tritonHttp(pathname, options = {}) {
@@ -1567,6 +1820,14 @@ const uploadTritonModel = multer({
   dest: TRITON_UPLOAD_DIR,
   fileFilter(_req, file, cb) {
     const ext = path.extname(file.originalname).toLowerCase();
+    if (file.fieldname === "labels") {
+      if (ext !== ".txt") {
+        cb(new Error("Triton labels must be a .txt file."));
+        return;
+      }
+      cb(null, true);
+      return;
+    }
     if (file.fieldname === "config") {
       if (file.originalname !== "config.pbtxt" && ext !== ".pbtxt" && ext !== ".txt") {
         cb(new Error("Triton config must be config.pbtxt."));
@@ -1589,6 +1850,17 @@ const uploadTritonInferImage = multer({
     const ext = path.extname(file.originalname).toLowerCase();
     if (![".jpg", ".jpeg", ".png", ".bmp", ".webp"].includes(ext)) {
       cb(new Error("Triton infer image must be .jpg, .jpeg, .png, .bmp, or .webp."));
+      return;
+    }
+    cb(null, true);
+  }
+});
+
+const uploadTritonLabels = multer({
+  dest: TRITON_UPLOAD_DIR,
+  fileFilter(_req, file, cb) {
+    if (path.extname(file.originalname).toLowerCase() !== ".txt") {
+      cb(new Error("Triton labels must be a .txt file."));
       return;
     }
     cb(null, true);
@@ -4369,7 +4641,8 @@ app.post("/api/triton/stop", async (_req, res) => {
 
 app.post("/api/triton/models", uploadTritonModel.fields([
   { name: "model", maxCount: 1 },
-  { name: "config", maxCount: 1 }
+  { name: "config", maxCount: 1 },
+  { name: "labels", maxCount: 1 }
 ]), async (req, res) => {
   try {
     const modelFile = req.files?.model?.[0];
@@ -4389,6 +4662,14 @@ app.post("/api/triton/models", uploadTritonModel.fields([
       const configText = tritonConfigTemplate(name, platform, req.body?.maxBatchSize || 0);
       await fsp.writeFile(path.join(modelDir, "config.pbtxt"), configText);
     }
+    const labelsFile = req.files?.labels?.[0] || null;
+    if (labelsFile) {
+      await fsp.rename(labelsFile.path, path.join(modelDir, "labels.txt"));
+    }
+    await writeTritonModelMeta(name, {
+      decoderProfile: req.body?.decoderProfile,
+      description: req.body?.description
+    });
     res.json({
       model: { name, version, platform, file: targetName },
       models: await listTritonModels(),
@@ -4419,6 +4700,51 @@ app.post("/api/triton/models/:name/config", async (req, res) => {
       maxBatchSize: req.body?.maxBatchSize ?? 0
     });
     res.json({ config, models: await listTritonModels(), status: await readTritonStatus() });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.get("/api/triton/models/:name/labels", async (req, res) => {
+  try {
+    const name = sanitizeTritonName(req.params.name);
+    const labels = await readTritonLabels(name);
+    const meta = await readTritonModelMeta(name);
+    res.json({ name, labels: labels.labels, text: labels.text, meta });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/triton/models/:name/labels", uploadTritonLabels.single("labels"), async (req, res) => {
+  try {
+    const name = sanitizeTritonName(req.params.name);
+    if (!req.file) return res.status(400).json({ error: "No labels file uploaded." });
+    if (path.extname(req.file.originalname).toLowerCase() !== ".txt") {
+      return res.status(400).json({ error: "Labels file must be .txt." });
+    }
+    await fsp.mkdir(path.join(TRITON_MODELS_DIR, name), { recursive: true });
+    await fsp.rename(req.file.path, tritonLabelsPath(name));
+    res.json({ labels: await readTritonLabels(name), models: await listTritonModels() });
+  } catch (error) {
+    if (req.file?.path) await fsp.unlink(req.file.path).catch(() => {});
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.put("/api/triton/models/:name/meta", async (req, res) => {
+  try {
+    const name = sanitizeTritonName(req.params.name);
+    const modelDir = path.join(TRITON_MODELS_DIR, name);
+    await fsp.mkdir(modelDir, { recursive: true });
+    if (typeof req.body?.labelsText === "string") {
+      await fsp.writeFile(tritonLabelsPath(name), req.body.labelsText.trim() ? `${req.body.labelsText.trim()}\n` : "");
+    }
+    const meta = await writeTritonModelMeta(name, {
+      decoderProfile: req.body?.decoderProfile,
+      description: req.body?.description
+    });
+    res.json({ meta, labels: await readTritonLabels(name), models: await listTritonModels() });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -4510,6 +4836,10 @@ app.post("/api/triton/models/:name/infer-image", uploadTritonInferImage.single("
     if (!req.file) return res.status(400).json({ error: "No image uploaded." });
     const name = sanitizeTritonName(req.params.name);
     const version = String(req.body?.version || "").trim();
+    const modelLabels = await readTritonLabels(name);
+    const modelMeta = await readTritonModelMeta(name);
+    const decoderProfile = sanitizeTritonDecoderProfile(req.body?.decoderProfile || modelMeta.decoderProfile);
+    const originalDimensions = await imageDimensions(req.file.path).catch(() => ({ width: 0, height: 0 }));
     const metadataResult = await tritonHttp(tritonMetadataPath(name, version));
     if (!metadataResult.ok) {
       return res.status(502).json({
@@ -4530,6 +4860,18 @@ app.post("/api/triton/models/:name/infer-image", uploadTritonInferImage.single("
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
+    const decode = result.ok
+      ? decodeTritonDetections(result.body, modelLabels.labels, {
+        decoderProfile,
+        confidenceThreshold: req.body?.confidenceThreshold,
+        iouThreshold: req.body?.iouThreshold,
+        maxDetections: req.body?.maxDetections,
+        inputWidth: preprocessing.width,
+        inputHeight: preprocessing.height,
+        originalWidth: originalDimensions.width || preprocessing.width,
+        originalHeight: originalDimensions.height || preprocessing.height
+      })
+      : null;
     res.status(result.ok ? 200 : 502).json({
       ok: result.ok,
       status: result.status,
@@ -4537,9 +4879,16 @@ app.post("/api/triton/models/:name/infer-image", uploadTritonInferImage.single("
       inferPath: pathName,
       image: {
         originalName: req.file.originalname,
-        size: req.file.size
+        size: req.file.size,
+        width: originalDimensions.width || 0,
+        height: originalDimensions.height || 0
       },
       preprocessing,
+      decoder: {
+        profile: decoderProfile,
+        labelsCount: modelLabels.labels.length
+      },
+      decode,
       body: summarizeTritonBody(result.body)
     });
   } catch (error) {

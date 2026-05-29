@@ -202,8 +202,10 @@ const els = {
   tritonModelVersion: document.querySelector("#tritonModelVersion"),
   tritonModelPlatform: document.querySelector("#tritonModelPlatform"),
   tritonMaxBatchSize: document.querySelector("#tritonMaxBatchSize"),
+  tritonDecoderProfile: document.querySelector("#tritonDecoderProfile"),
   tritonModelFile: document.querySelector("#tritonModelFile"),
   tritonConfigFile: document.querySelector("#tritonConfigFile"),
+  tritonLabelsFile: document.querySelector("#tritonLabelsFile"),
   uploadTritonModelBtn: document.querySelector("#uploadTritonModelBtn"),
   tritonModelList: document.querySelector("#tritonModelList"),
   tritonInferModel: document.querySelector("#tritonInferModel"),
@@ -218,6 +220,9 @@ const els = {
   tritonInferImage: document.querySelector("#tritonInferImage"),
   tritonInferChannelOrder: document.querySelector("#tritonInferChannelOrder"),
   tritonInferScaleMode: document.querySelector("#tritonInferScaleMode"),
+  tritonInferDecoderProfile: document.querySelector("#tritonInferDecoderProfile"),
+  tritonInferConfidence: document.querySelector("#tritonInferConfidence"),
+  tritonInferIou: document.querySelector("#tritonInferIou"),
   testTritonImageInferBtn: document.querySelector("#testTritonImageInferBtn"),
   tritonInferOutput: document.querySelector("#tritonInferOutput")
 };
@@ -819,6 +824,22 @@ function setTritonInferOutput(value) {
   print(value);
 }
 
+function cssEscape(value) {
+  return window.CSS?.escape ? window.CSS.escape(String(value)) : String(value).replace(/["\\]/g, "\\$&");
+}
+
+function tritonDecoderOptions(selected = "raw", includeDefault = false) {
+  const options = [
+    ...(includeDefault ? [{ value: "", label: "Use model setting" }] : []),
+    { value: "raw", label: "Raw tensor" },
+    { value: "ultralytics_yolo_detect", label: "Ultralytics YOLO detect" },
+    { value: "legacy_boxes_scores_classes", label: "Legacy boxes/scores/classes" }
+  ];
+  return options.map((option) => (
+    `<option value="${option.value}" ${option.value === selected ? "selected" : ""}>${escapeHtml(option.label)}</option>`
+  )).join("");
+}
+
 function renderTriton(data = latestTriton) {
   latestTriton = data || { status: {}, models: [] };
   const status = latestTriton.status || {};
@@ -854,7 +875,7 @@ function renderTriton(data = latestTriton) {
         <div>
           <strong>${escapeHtml(model.name)}</strong>
           <span>${model.versions?.length ? model.versions.map((item) => `v${item.version}: ${item.files.join(", ")}`).join(" | ") : "No version folder"}</span>
-          <small>${model.hasConfig ? "config.pbtxt available" : "missing config.pbtxt"}</small>
+          <small>${model.hasConfig ? "config.pbtxt available" : "missing config.pbtxt"} | decoder ${escapeHtml(model.decoderProfile || "raw")} | ${model.labels?.count || 0} label(s)</small>
           <code class="triton-infer-url">${escapeHtml(tritonPublicInferUrl(model.name))}</code>
         </div>
         <div class="actions inline-actions">
@@ -864,6 +885,21 @@ function renderTriton(data = latestTriton) {
           <button type="button" class="danger" data-delete-triton-model="${escapeHtml(model.name)}">Delete</button>
         </div>
       </article>
+      <div class="triton-model-controls" data-triton-model-controls="${escapeHtml(model.name)}">
+        <label>Decoder
+          <select data-triton-decoder-select="${escapeHtml(model.name)}">
+            ${tritonDecoderOptions(model.decoderProfile || "raw")}
+          </select>
+        </label>
+        <label>Upload labels.txt <input type="file" accept=".txt" data-triton-label-file="${escapeHtml(model.name)}" /></label>
+        <label class="triton-label-editor">Labels
+          <textarea rows="4" data-triton-labels-text="${escapeHtml(model.name)}" placeholder="one label per line">${escapeHtml(model.labels?.text || "")}</textarea>
+        </label>
+        <div class="actions inline-actions">
+          <button type="button" class="secondary" data-save-triton-meta="${escapeHtml(model.name)}">Save labels/profile</button>
+          <button type="button" class="secondary" data-upload-triton-labels="${escapeHtml(model.name)}">Upload labels</button>
+        </div>
+      </div>
       ${model.configPreview ? `<pre class="triton-config-preview">${escapeHtml(model.configPreview)}</pre>` : ""}
     `).join("") : '<div class="empty">No Triton model yet.</div>';
   }
@@ -907,15 +943,18 @@ async function uploadTritonModel(button = null) {
   const form = new FormData();
   form.append("model", els.tritonModelFile.files[0]);
   if (els.tritonConfigFile?.files?.length) form.append("config", els.tritonConfigFile.files[0]);
+  if (els.tritonLabelsFile?.files?.length) form.append("labels", els.tritonLabelsFile.files[0]);
   form.append("name", els.tritonModelName.value.trim());
   form.append("version", els.tritonModelVersion.value.trim() || "1");
   form.append("platform", els.tritonModelPlatform.value);
   form.append("maxBatchSize", els.tritonMaxBatchSize.value || "0");
+  form.append("decoderProfile", els.tritonDecoderProfile?.value || "raw");
   const result = await withTask("triton", button, "Uploading Triton model...", async () => {
     return await api("/api/triton/models", { method: "POST", body: form });
   });
   els.tritonModelFile.value = "";
   if (els.tritonConfigFile) els.tritonConfigFile.value = "";
+  if (els.tritonLabelsFile) els.tritonLabelsFile.value = "";
   renderTriton(result);
   print(result);
 }
@@ -933,6 +972,34 @@ async function fixTritonConfig(name) {
     return await api(`/api/triton/models/${encodeURIComponent(name)}/config`, {
       method: "POST",
       body: JSON.stringify({ maxBatchSize: 0 })
+    });
+  });
+  renderTriton(result);
+  print(result);
+}
+
+async function saveTritonMeta(name) {
+  const decoder = document.querySelector(`[data-triton-decoder-select="${cssEscape(name)}"]`)?.value || "raw";
+  const labelsText = document.querySelector(`[data-triton-labels-text="${cssEscape(name)}"]`)?.value || "";
+  const result = await withTask("triton", null, `Saving ${name} labels/profile...`, async () => {
+    return await api(`/api/triton/models/${encodeURIComponent(name)}/meta`, {
+      method: "PUT",
+      body: JSON.stringify({ decoderProfile: decoder, labelsText })
+    });
+  });
+  renderTriton(result);
+  print(result);
+}
+
+async function uploadTritonLabels(name) {
+  const input = document.querySelector(`[data-triton-label-file="${cssEscape(name)}"]`);
+  if (!input?.files?.length) return print("Chon labels.txt truoc khi upload.");
+  const form = new FormData();
+  form.append("labels", input.files[0]);
+  const result = await withTask("triton", null, `Uploading ${name} labels...`, async () => {
+    return await api(`/api/triton/models/${encodeURIComponent(name)}/labels`, {
+      method: "POST",
+      body: form
     });
   });
   renderTriton(result);
@@ -1043,6 +1110,9 @@ async function testTritonImageInfer(button = null) {
   form.append("version", els.tritonInferVersion?.value || "");
   form.append("channelOrder", els.tritonInferChannelOrder?.value || "rgb");
   form.append("scaleMode", els.tritonInferScaleMode?.value || "0-1");
+  form.append("decoderProfile", els.tritonInferDecoderProfile?.value || "");
+  form.append("confidenceThreshold", els.tritonInferConfidence?.value || "0.25");
+  form.append("iouThreshold", els.tritonInferIou?.value || "0.45");
   const result = await withTask("triton", button, "Running Triton image infer...", async () => {
     return await api(`/api/triton/models/${encodeURIComponent(modelName)}/infer-image`, {
       method: "POST",
@@ -4486,6 +4556,16 @@ els.tritonModelList?.addEventListener("click", (event) => {
   const fixButton = event.target.closest("[data-fix-triton-config]");
   if (fixButton) {
     fixTritonConfig(fixButton.dataset.fixTritonConfig).catch((error) => print(error.message));
+    return;
+  }
+  const saveMetaButton = event.target.closest("[data-save-triton-meta]");
+  if (saveMetaButton) {
+    saveTritonMeta(saveMetaButton.dataset.saveTritonMeta).catch((error) => print(error.message));
+    return;
+  }
+  const uploadLabelsButton = event.target.closest("[data-upload-triton-labels]");
+  if (uploadLabelsButton) {
+    uploadTritonLabels(uploadLabelsButton.dataset.uploadTritonLabels).catch((error) => print(error.message));
     return;
   }
   const button = event.target.closest("[data-delete-triton-model]");

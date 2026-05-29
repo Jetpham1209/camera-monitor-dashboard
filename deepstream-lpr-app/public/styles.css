@@ -1968,6 +1968,18 @@ pre {
   margin: -4px 0 8px;
   font-size: 11px;
 }
+.triton-model-controls {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(180px, 260px) 1fr auto;
+  gap: 10px;
+  align-items: end;
+  border-bottom: 1px solid var(--line);
+  padding: 0 0 12px;
+}
+.triton-label-editor textarea {
+  min-height: 72px;
+  resize: vertical;
+}
 .triton-infer-output {
   min-height: 80px;
   max-height: 280px;
@@ -2005,7 +2017,8 @@ pre {
   .monitor-detail-grid,
   .monitor-frame-layout,
   .automation-grid,
-  .triton-layout {
+  .triton-layout,
+  .triton-model-controls {
     grid-template-columns: 1fr;
   }
   .automation-wide {

@@ -332,9 +332,17 @@
                     </select>
                   </label>
                   <label>Max batch size <input id="tritonMaxBatchSize" type="number" value="0" min="0" /></label>
+                  <label>Decoder profile
+                    <select id="tritonDecoderProfile">
+                      <option value="raw">Raw tensor</option>
+                      <option value="ultralytics_yolo_detect">Ultralytics YOLO detect</option>
+                      <option value="legacy_boxes_scores_classes">Legacy boxes/scores/classes</option>
+                    </select>
+                  </label>
                 </div>
                 <label>Model file <input id="tritonModelFile" type="file" accept=".onnx,.plan,.engine,.py" /></label>
                 <label>config.pbtxt optional <input id="tritonConfigFile" type="file" accept=".pbtxt,.txt" /></label>
+                <label>labels.txt optional <input id="tritonLabelsFile" type="file" accept=".txt" /></label>
                 <div class="actions inline-actions">
                   <button id="uploadTritonModelBtn" type="button">Upload model</button>
                 </div>
@@ -386,6 +394,16 @@
                         <option value="0-255">0-255</option>
                       </select>
                     </label>
+                    <label>Decoder
+                      <select id="tritonInferDecoderProfile">
+                        <option value="">Use model setting</option>
+                        <option value="raw">Raw tensor</option>
+                        <option value="ultralytics_yolo_detect">Ultralytics YOLO detect</option>
+                        <option value="legacy_boxes_scores_classes">Legacy boxes/scores/classes</option>
+                      </select>
+                    </label>
+                    <label>Confidence <input id="tritonInferConfidence" type="number" min="0" max="1" step="0.01" value="0.25" /></label>
+                    <label>IoU NMS <input id="tritonInferIou" type="number" min="0" max="1" step="0.01" value="0.45" /></label>
                   </div>
                   <div class="actions inline-actions">
                     <button id="testTritonImageInferBtn" type="button">Test image infer</button>
