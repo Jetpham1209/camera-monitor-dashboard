@@ -3253,34 +3253,10 @@ function attachDeployAppHandlers() {
       if (!list) return;
       if (list.querySelector(".empty")) list.innerHTML = "";
       list.insertAdjacentHTML("beforeend", eventOutputRowMarkup({ eventType: "vehicle_capture", payload: "schema", schema: defaultPayloadSchema(), enabled: true }));
-      renderDeployApps(readDeployApps(), readCameraCards());
+      attachDeployEventOutputHandlers(list);
     });
   });
-  document.querySelectorAll("[data-remove-deploy-event-output]").forEach((button) => {
-    button.addEventListener("click", () => {
-      button.closest("[data-deploy-event-output]")?.remove();
-      deployApps = readDeployApps();
-    });
-  });
-  document.querySelectorAll("[data-add-payload-field]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const list = button.closest("[data-deploy-event-output]")?.querySelector("[data-payload-schema-list]");
-      if (!list) return;
-      const next = deepstreamPayloadFields[Math.min(list.querySelectorAll("[data-payload-schema-row]").length, deepstreamPayloadFields.length - 1)];
-      list.insertAdjacentHTML("beforeend", payloadSchemaRowsMarkup([{ key: next.path.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, ""), value: next.path }]));
-      renderDeployApps(readDeployApps(), readCameraCards());
-    });
-  });
-  document.querySelectorAll("[data-remove-payload-field]").forEach((button) => {
-    button.addEventListener("click", () => {
-      button.closest("[data-payload-schema-row]")?.remove();
-      deployApps = readDeployApps();
-    });
-  });
-  document.querySelectorAll("[data-deploy-event-output] input, [data-deploy-event-output] select, [data-deploy-event-output] textarea").forEach((field) => {
-    field.addEventListener("change", () => { deployApps = readDeployApps(); });
-    field.addEventListener("input", () => { deployApps = readDeployApps(); });
-  });
+  attachDeployEventOutputHandlers(document);
   document.querySelectorAll("[data-zone-class-option]").forEach((checkbox) => {
     checkbox.addEventListener("change", () => syncDeployZoneClassOptions(checkbox.closest("[data-deploy-zone-row]")));
   });
@@ -3309,6 +3285,43 @@ function attachDeployAppHandlers() {
   });
   document.querySelectorAll("[data-delete-deploy-rule]").forEach((button) => {
     button.addEventListener("click", () => deleteDeploySequenceRule(button));
+  });
+}
+
+function attachDeployEventOutputHandlers(root = document) {
+  document.querySelectorAll("[data-remove-deploy-event-output]").forEach((button) => {
+    if (button.dataset.bound === "1") return;
+    button.dataset.bound = "1";
+    button.addEventListener("click", () => {
+      button.closest("[data-deploy-event-output]")?.remove();
+      deployApps = readDeployApps();
+    });
+  });
+  document.querySelectorAll("[data-add-payload-field]").forEach((button) => {
+    if (button.dataset.bound === "1") return;
+    button.dataset.bound = "1";
+    button.addEventListener("click", () => {
+      const list = button.closest("[data-deploy-event-output]")?.querySelector("[data-payload-schema-list]");
+      if (!list) return;
+      const next = deepstreamPayloadFields[Math.min(list.querySelectorAll("[data-payload-schema-row]").length, deepstreamPayloadFields.length - 1)];
+      list.insertAdjacentHTML("beforeend", payloadSchemaRowsMarkup([{ key: next.path.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, ""), value: next.path }]));
+      attachDeployEventOutputHandlers(list);
+      deployApps = readDeployApps();
+    });
+  });
+  document.querySelectorAll("[data-remove-payload-field]").forEach((button) => {
+    if (button.dataset.bound === "1") return;
+    button.dataset.bound = "1";
+    button.addEventListener("click", () => {
+      button.closest("[data-payload-schema-row]")?.remove();
+      deployApps = readDeployApps();
+    });
+  });
+  document.querySelectorAll("[data-deploy-event-output] input, [data-deploy-event-output] select, [data-deploy-event-output] textarea").forEach((field) => {
+    if (field.dataset.bound === "1") return;
+    field.dataset.bound = "1";
+    field.addEventListener("change", () => { deployApps = readDeployApps(); });
+    field.addEventListener("input", () => { deployApps = readDeployApps(); });
   });
 }
 
