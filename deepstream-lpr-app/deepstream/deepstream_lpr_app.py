@@ -1059,31 +1059,55 @@ class LprRuntime:
         box = outer["bbox"]
         return box["left"] <= x <= box["left"] + box["width"] and box["top"] <= y <= box["top"] + box["height"]
 
-    def sorted_character_text(self, characters):
-        if not characters:
-            return "", []
-        sorted_chars = sorted(characters, key=lambda item: item["bbox"]["top"])
+    def plate_layout(self, plate):
+        label = re.sub(r"[^a-z0-9]", "", str((plate or {}).get("label") or "").lower())
+        if label in {"longlp", "longplate", "horizontalplate", "horizontallp"}:
+            return "long"
+        if label in {"squarelp", "squareplate", "twolineplate", "twolinelp"}:
+            return "square"
+        return "auto"
+
+    def group_character_lines(self, characters):
+        sorted_chars = sorted(characters, key=lambda item: item["center"]["y"])
         lines = []
         for char in sorted_chars:
-            char_anchor = abs((char["bbox"]["top"] + char["bbox"]["height"]) - char.get("plateTop", 0.0))
+            char_height = max(1.0, float(char["bbox"].get("height", 1.0)))
             target = None
             for line in lines:
-                if max(char_anchor, line["anchor"]) and min(char_anchor, line["anchor"]) / max(char_anchor, line["anchor"]) >= 0.8:
+                tolerance = max(char_height, line["avgHeight"]) * 0.65
+                if abs(char["center"]["y"] - line["avgY"]) <= tolerance:
                     target = line
                     break
             if target is None:
-                target = {"anchor": char_anchor, "chars": []}
+                target = {"avgY": char["center"]["y"], "avgHeight": char_height, "chars": []}
                 lines.append(target)
             target["chars"].append(char)
-            target["anchor"] = sum(abs((item["bbox"]["top"] + item["bbox"]["height"]) - item.get("plateTop", 0.0)) for item in target["chars"]) / len(target["chars"])
+            target["avgY"] = sum(item["center"]["y"] for item in target["chars"]) / len(target["chars"])
+            target["avgHeight"] = sum(max(1.0, float(item["bbox"].get("height", 1.0))) for item in target["chars"]) / len(target["chars"])
+        return lines
+
+    def sorted_character_text(self, characters, plate=None):
+        if not characters:
+            return "", []
+        layout = self.plate_layout(plate)
+        if layout == "long":
+            chars = sorted(characters, key=lambda item: item["center"]["x"])
+            text = "".join(item["label"] for item in chars)
+            return text, [{"text": text, "avgY": sum(item["center"]["y"] for item in chars) / len(chars), "layout": "long", "chars": chars}]
+
+        lines = self.group_character_lines(characters)
+        if layout == "square" and len(lines) > 2:
+            top_lines = sorted(lines, key=lambda item: len(item["chars"]), reverse=True)[:2]
+            lines = sorted(top_lines, key=lambda item: item["avgY"])
 
         line_outputs = []
-        for line in sorted(lines, key=lambda item: item["anchor"]):
+        for line in sorted(lines, key=lambda item: item["avgY"]):
             chars = sorted(line["chars"], key=lambda item: item["center"]["x"])
             text = "".join(item["label"] for item in chars)
             line_outputs.append({
                 "text": text,
                 "avgY": sum(item["center"]["y"] for item in chars) / len(chars),
+                "layout": layout,
                 "chars": chars,
             })
         return "".join(line["text"] for line in line_outputs), line_outputs
@@ -1220,7 +1244,7 @@ class LprRuntime:
                     if item["parentObjectId"] == plate_id or (item["parentObjectId"] is None and self.bbox_contains(plate, item))
                 ]
                 kept_chars, rejected_chars = self.filter_plate_characters(plate, related_ocr)
-                char_text, char_lines = self.sorted_character_text(kept_chars)
+                char_text, char_lines = self.sorted_character_text(kept_chars, plate)
                 valid_plate = self.is_valid_license_plate(char_text)
                 plate_results.append({
                     **plate,
