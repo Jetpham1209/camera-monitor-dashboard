@@ -838,6 +838,24 @@ function dummyTritonPayloadFromMetadata(metadata = {}, maxElements = 2000000) {
   };
 }
 
+function summarizeTritonBody(body, maxOutputItems = 64) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+  const next = { ...body };
+  if (Array.isArray(body.outputs)) {
+    next.outputs = body.outputs.map((output) => {
+      if (!Array.isArray(output.data)) return output;
+      const dataLength = output.data.length;
+      return {
+        ...output,
+        dataLength,
+        dataPreview: output.data.slice(0, maxOutputItems),
+        data: dataLength > maxOutputItems ? undefined : output.data
+      };
+    });
+  }
+  return next;
+}
+
 async function tritonHttp(pathname, options = {}) {
   const response = await fetch(`http://127.0.0.1:${TRITON_HTTP_PORT}${pathname}`, options);
   const text = await response.text();
@@ -4282,7 +4300,7 @@ app.post("/api/triton/models/:name/infer", async (req, res) => {
       status: result.status,
       durationMs: Date.now() - started,
       inferPath: pathName,
-      body: result.body
+      body: summarizeTritonBody(result.body)
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -4321,7 +4339,7 @@ app.post("/api/triton/models/:name/infer-dummy", async (req, res) => {
         datatype: input.datatype,
         elements: input.data.length
       })),
-      body: result.body
+      body: summarizeTritonBody(result.body)
     });
   } catch (error) {
     res.status(500).json({ error: error.message });

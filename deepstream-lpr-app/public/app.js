@@ -927,12 +927,14 @@ function sampleTritonPayload(metadata = latestTritonMetadata) {
     inputs: inputs.map((input) => {
       const shape = (input.shape || []).map((dim) => Number(dim) > 0 ? Number(dim) : 1);
       const elements = shape.reduce((total, dim) => total * Math.max(1, Number(dim || 1)), 1);
-      const previewElements = Math.min(elements, 32);
+      if (elements > 2000000) {
+        throw new Error(`Input ${input.name} qua lon (${elements} elements). Dung Dummy zero infer hoac paste payload rieng.`);
+      }
       return {
         name: input.name,
         shape,
         datatype: input.datatype || "FP32",
-        data: Array.from({ length: previewElements }, () => tritonZeroForDatatype(input.datatype))
+        data: Array.from({ length: elements }, () => tritonZeroForDatatype(input.datatype))
       };
     })
   };
@@ -955,7 +957,7 @@ async function loadTritonMetadata(button = null) {
 function useSampleTritonPayload() {
   const payload = sampleTritonPayload();
   els.tritonInferPayload.value = JSON.stringify(payload, null, 2);
-  setTaskStatus("triton", "success", "Sample payload generated from metadata. Large tensors are truncated for editing.");
+  setTaskStatus("triton", "success", "Sample payload generated from metadata.");
 }
 
 async function testTritonInfer(button = null) {
