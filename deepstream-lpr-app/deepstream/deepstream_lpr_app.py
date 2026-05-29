@@ -231,7 +231,12 @@ class LprRuntime:
             path = str(item.get("value") or item.get("path") or "").strip()
             if not key or not path:
                 continue
-            payload[key] = self.event_path_value(event, path, None)
+            if path == "__blank__":
+                payload[key] = ""
+            elif path == "__literal__":
+                payload[key] = str(item.get("literal") or item.get("text") or "")
+            else:
+                payload[key] = self.event_path_value(event, path, None)
         return payload or self.compact_event_payload(event, "minimal")
 
     def transform_event_payload(self, event, script):

@@ -42,6 +42,8 @@ const processorTypes = [
 ];
 
 const deepstreamPayloadFields = [
+  { path: "__literal__", label: "User input" },
+  { path: "__blank__", label: "Blank" },
   { path: "eventType", label: "Event type" },
   { path: "eventId", label: "Event ID" },
   { path: "ts", label: "Timestamp" },
@@ -2662,7 +2664,8 @@ function normalizePayloadSchema(value) {
     return value
       .map((item) => ({
         key: String(item?.key || "").trim(),
-        value: String(item?.value || item?.path || "").trim()
+        value: String(item?.value || item?.path || "").trim(),
+        literal: String(item?.literal || item?.text || "")
       }))
       .filter((item) => item.key && item.value);
   }
@@ -2695,16 +2698,24 @@ function payloadSchemaRowsMarkup(schema = []) {
     <div class="payload-schema-row" data-payload-schema-row>
       <input data-payload-schema-key value="${escapeHtml(item.key)}" placeholder="vd: plate" />
       <select data-payload-schema-value>${payloadFieldOptions(item.value)}</select>
+      <input data-payload-schema-literal value="${escapeHtml(item.literal || "")}" placeholder="Custom text" ${item.value === "__literal__" ? "" : "hidden"} />
       <button type="button" class="danger small-button" data-remove-payload-field>Remove</button>
     </div>
   `).join("");
 }
 
 function readPayloadSchema(row) {
-  return [...row.querySelectorAll("[data-payload-schema-row]")].map((schemaRow) => ({
-    key: schemaRow.querySelector("[data-payload-schema-key]")?.value.trim() || "",
-    value: schemaRow.querySelector("[data-payload-schema-value]")?.value || ""
-  })).filter((item) => item.key && item.value);
+  return [...row.querySelectorAll("[data-payload-schema-row]")].map((schemaRow) => {
+    const value = schemaRow.querySelector("[data-payload-schema-value]")?.value || "";
+    const item = {
+      key: schemaRow.querySelector("[data-payload-schema-key]")?.value.trim() || "",
+      value
+    };
+    if (value === "__literal__") {
+      item.literal = schemaRow.querySelector("[data-payload-schema-literal]")?.value || "";
+    }
+    return item;
+  }).filter((item) => item.key && item.value);
 }
 
 function eventOutputRowMarkup(output = {}) {
@@ -3289,7 +3300,7 @@ function attachDeployAppHandlers() {
 }
 
 function attachDeployEventOutputHandlers(root = document) {
-  document.querySelectorAll("[data-remove-deploy-event-output]").forEach((button) => {
+  root.querySelectorAll("[data-remove-deploy-event-output]").forEach((button) => {
     if (button.dataset.bound === "1") return;
     button.dataset.bound = "1";
     button.addEventListener("click", () => {
@@ -3297,7 +3308,7 @@ function attachDeployEventOutputHandlers(root = document) {
       deployApps = readDeployApps();
     });
   });
-  document.querySelectorAll("[data-add-payload-field]").forEach((button) => {
+  root.querySelectorAll("[data-add-payload-field]").forEach((button) => {
     if (button.dataset.bound === "1") return;
     button.dataset.bound = "1";
     button.addEventListener("click", () => {
@@ -3309,7 +3320,7 @@ function attachDeployEventOutputHandlers(root = document) {
       deployApps = readDeployApps();
     });
   });
-  document.querySelectorAll("[data-remove-payload-field]").forEach((button) => {
+  root.querySelectorAll("[data-remove-payload-field]").forEach((button) => {
     if (button.dataset.bound === "1") return;
     button.dataset.bound = "1";
     button.addEventListener("click", () => {
@@ -3317,12 +3328,26 @@ function attachDeployEventOutputHandlers(root = document) {
       deployApps = readDeployApps();
     });
   });
-  document.querySelectorAll("[data-deploy-event-output] input, [data-deploy-event-output] select, [data-deploy-event-output] textarea").forEach((field) => {
+  root.querySelectorAll("[data-payload-schema-value]").forEach((field) => {
+    syncPayloadLiteralInput(field.closest("[data-payload-schema-row]"));
+    if (field.dataset.literalBound === "1") return;
+    field.dataset.literalBound = "1";
+    field.addEventListener("change", () => syncPayloadLiteralInput(field.closest("[data-payload-schema-row]")));
+  });
+  root.querySelectorAll("[data-deploy-event-output] input, [data-deploy-event-output] select, [data-deploy-event-output] textarea").forEach((field) => {
     if (field.dataset.bound === "1") return;
     field.dataset.bound = "1";
     field.addEventListener("change", () => { deployApps = readDeployApps(); });
     field.addEventListener("input", () => { deployApps = readDeployApps(); });
   });
+}
+
+function syncPayloadLiteralInput(row) {
+  if (!row) return;
+  const select = row.querySelector("[data-payload-schema-value]");
+  const input = row.querySelector("[data-payload-schema-literal]");
+  if (!select || !input) return;
+  input.hidden = select.value !== "__literal__";
 }
 
 async function persistConfigAfterDeployAppChange(message, button = null) {
