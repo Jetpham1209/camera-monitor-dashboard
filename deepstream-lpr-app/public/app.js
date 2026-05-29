@@ -2617,7 +2617,7 @@ function renderDeployAppCard(app, index, cameras) {
       <div class="pipeline-stage-list" data-deploy-stage-list data-deploy-stage-owner="${index}">
         ${stageRowsMarkup(app.pipelineStages)}
       </div>
-      <details class="deploy-event-output-panel">
+      <details class="deploy-event-output-panel" open>
         <summary>Event outputs</summary>
         <p class="muted">Publish DeepStream events to message channels. Channels are created in the Connections tab.</p>
         <div class="deploy-event-output-list">
@@ -2742,7 +2742,7 @@ function eventOutputRowMarkup(output = {}) {
       </label>
       <button type="button" class="danger small-button" data-remove-deploy-event-output>Remove</button>
       <details class="deploy-payload-editor" ${payload === "schema" || payload === "template" || payload === "transform" ? "open" : ""}>
-        <summary>Custom payload</summary>
+        <summary>Custom schema / transform</summary>
         <p class="muted">Custom schema maps your output keys to friendly DeepStream event fields. Transform receives <code>event</code> and returns a JSON-serializable object.</p>
         <div class="deploy-payload-fields">
           <div class="payload-schema-builder">
