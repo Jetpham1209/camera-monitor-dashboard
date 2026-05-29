@@ -3,6 +3,7 @@ import argparse
 import ctypes
 import json
 import re
+import socket
 import struct
 import time
 from pathlib import Path
@@ -45,9 +46,12 @@ class LprRuntime:
         self.capture_dir = self.runtime_dir / "captures"
         self.events_file = self.runtime_dir / "events.jsonl"
         self.status_file = self.runtime_dir / "status.json"
+        self.connections_file = self.runtime_dir / "connections.json"
         self.capture_dir.mkdir(parents=True, exist_ok=True)
         self.last_capture_error = ""
         self.streams = self.normalize_streams(config)
+        self.connections = self.load_connections()
+        self.event_outputs = self.normalize_event_outputs(config)
         self.captured = {}
         self.object_zone_history = {}
         self.started_at = time.time()
@@ -81,6 +85,207 @@ class LprRuntime:
             "maxHeightRatio": float(config.get("ocrPostprocess", {}).get("maxHeightRatio", 1.15)),
         }
         self.write_status("starting", "Runtime initialized.")
+
+    def load_connections(self):
+        try:
+            if self.connections_file.exists():
+                return json.loads(self.connections_file.read_text(encoding="utf-8"))
+        except Exception as exc:
+            print(f"Failed to load connections config: {exc}")
+        return {"providers": {}, "channels": []}
+
+    def normalize_event_outputs(self, config):
+        outputs = []
+        raw = config.get("eventOutputs")
+        if not raw and isinstance(config.get("deployApps"), list):
+            active_id = config.get("activeAppId") or config.get("selectedAppId")
+            for app in config.get("deployApps", []):
+                if active_id and app.get("id") != active_id:
+                    continue
+                for item in app.get("eventOutputs") or []:
+                    outputs.append(item)
+            if not outputs:
+                for app in config.get("deployApps", []):
+                    for item in app.get("eventOutputs") or []:
+                        outputs.append(item)
+        elif isinstance(raw, list):
+            outputs = raw
+        normalized = []
+        for item in outputs:
+            if not isinstance(item, dict) or item.get("enabled") is False:
+                continue
+            channel_id = str(item.get("channelId") or "").strip()
+            if not channel_id:
+                continue
+            normalized.append({
+                "eventType": str(item.get("eventType") or "*").strip() or "*",
+                "channelId": channel_id,
+                "payload": str(item.get("payload") or "full").strip() or "full",
+                "template": item.get("template") if isinstance(item.get("template"), (dict, list, str)) else "",
+                "transformLanguage": str(item.get("transformLanguage") or "python").strip() or "python",
+                "transformScript": str(item.get("transformScript") or "").strip(),
+            })
+        if normalized:
+            print(f"Message outputs enabled: {len(normalized)}")
+        return normalized
+
+    def connection_channel(self, channel_id):
+        for channel in self.connections.get("channels") or []:
+            if str(channel.get("id")) == str(channel_id):
+                return channel
+        return None
+
+    def connection_provider(self, provider_name):
+        return (self.connections.get("providers") or {}).get(provider_name)
+
+    def redis_command(self, provider, args, timeout=1.5):
+        def encode(parts):
+            payload = f"*{len(parts)}\r\n"
+            for part in parts:
+                value = str(part)
+                payload += f"${len(value.encode('utf-8'))}\r\n{value}\r\n"
+            return payload.encode("utf-8")
+
+        def read_response(sock):
+            data = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+                if b"\r\n" in data:
+                    break
+            if data.startswith(b"-"):
+                raise RuntimeError(data.decode("utf-8", "replace").strip())
+            return data
+
+        with socket.create_connection((provider.get("host", "127.0.0.1"), int(provider.get("port", 6379))), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            sock.sendall(encode(args))
+            return read_response(sock)
+
+    def compact_event_payload(self, event, mode):
+        if mode in {"minimal", "compact"}:
+            return {
+                "eventType": event.get("eventType"),
+                "eventId": event.get("eventId"),
+                "ts": event.get("ts"),
+                "cameraId": event.get("cameraId"),
+                "cameraName": event.get("cameraName"),
+                "zoneId": event.get("zoneId"),
+                "zoneName": event.get("zoneName"),
+                "classId": event.get("classId"),
+                "plateText": event.get("plateText"),
+                "imageUrl": event.get("imageUrl"),
+            }
+        return event
+
+    def event_path_value(self, event, path, default=""):
+        current = event
+        for part in str(path or "").split("."):
+            if part == "":
+                continue
+            if isinstance(current, list) and part.isdigit():
+                index = int(part)
+                current = current[index] if 0 <= index < len(current) else default
+            elif isinstance(current, dict):
+                current = current.get(part, default)
+            else:
+                return default
+        return current
+
+    def render_template_value(self, value, event):
+        if isinstance(value, dict):
+            return {key: self.render_template_value(item, event) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self.render_template_value(item, event) for item in value]
+        if not isinstance(value, str):
+            return value
+        exact = re.fullmatch(r"\{\{\s*([^}]+?)\s*\}\}", value)
+        if exact:
+            return self.event_path_value(event, exact.group(1))
+        def replace(match):
+            replacement = self.event_path_value(event, match.group(1))
+            if replacement is None:
+                return ""
+            if isinstance(replacement, (dict, list)):
+                return json.dumps(replacement, ensure_ascii=False)
+            return str(replacement)
+        return re.sub(r"\{\{\s*([^}]+?)\s*\}\}", replace, value)
+
+    def template_event_payload(self, event, template):
+        if not template:
+            return self.compact_event_payload(event, "minimal")
+        parsed = template
+        if isinstance(template, str):
+            parsed = json.loads(template)
+        return self.render_template_value(parsed, event)
+
+    def transform_event_payload(self, event, script):
+        if not script:
+            return self.compact_event_payload(event, "minimal")
+        safe_builtins = {
+            "abs": abs,
+            "bool": bool,
+            "dict": dict,
+            "float": float,
+            "int": int,
+            "len": len,
+            "list": list,
+            "max": max,
+            "min": min,
+            "round": round,
+            "str": str,
+            "sum": sum,
+        }
+        globals_scope = {"__builtins__": safe_builtins, "json": json}
+        if re.search(r"(^|\n)\s*return\s+", script):
+            body = "\n".join(f"    {line}" for line in script.splitlines())
+            wrapped = f"def transform(event):\n{body}\n"
+            locals_scope = {}
+            exec(wrapped, globals_scope, locals_scope)
+            result = locals_scope["transform"](event)
+        else:
+            locals_scope = {"event": event, "result": None}
+            exec(script, globals_scope, locals_scope)
+            result = locals_scope.get("result")
+        json.dumps(result, ensure_ascii=False)
+        return result
+
+    def output_event_payload(self, event, output):
+        mode = output.get("payload") or "full"
+        if mode == "template":
+            return self.template_event_payload(event, output.get("template"))
+        if mode == "transform":
+            return self.transform_event_payload(event, output.get("transformScript"))
+        return self.compact_event_payload(event, mode)
+
+    def publish_event(self, event):
+        if not self.event_outputs:
+            return
+        for output in self.event_outputs:
+            event_type = output.get("eventType") or "*"
+            if event_type not in {"*", event.get("eventType")}:
+                continue
+            channel = self.connection_channel(output.get("channelId"))
+            if not channel or channel.get("enabled") is False:
+                print(f"Message output skipped: channel not found/disabled ({output.get('channelId')})")
+                continue
+            provider = self.connection_provider(channel.get("provider"))
+            if not provider or provider.get("enabled") is False:
+                print(f"Message output skipped: provider disabled ({channel.get('provider')})")
+                continue
+            try:
+                payload = json.dumps(self.output_event_payload(event, output), ensure_ascii=False)
+                if channel.get("provider") == "redis":
+                    if channel.get("type") == "stream":
+                        self.redis_command(provider, ["XADD", channel.get("name"), "*", "event", payload])
+                    else:
+                        self.redis_command(provider, ["PUBLISH", channel.get("name"), payload])
+                else:
+                    print(f"Message output skipped: provider not implemented in runtime ({channel.get('provider')})")
+            except Exception as exc:
+                print(f"Message output failed for {channel.get('name')}: {exc}")
 
     def normalize_processor_type(self, config):
         processor = config.get("processor") or {}
@@ -510,6 +715,7 @@ class LprRuntime:
     def save_event(self, event):
         with self.events_file.open("a", encoding="utf-8") as file:
             file.write(json.dumps(event, ensure_ascii=False) + "\n")
+        self.publish_event(event)
 
     def draw_box_rgba(self, frame, left, top, right, bottom):
         height, width = frame.shape[:2]

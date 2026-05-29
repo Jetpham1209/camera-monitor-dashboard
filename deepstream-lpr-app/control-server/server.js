@@ -28,6 +28,7 @@ const ROI_CAPTURE_DIR = path.join(RUNTIME_DIR, "roi-captures");
 const CONFIG_FILE = path.join(RUNTIME_DIR, "config.json");
 const AUTOMATION_FILE = path.join(RUNTIME_DIR, "automation.json");
 const AUTOMATION_RUNS_FILE = path.join(RUNTIME_DIR, "automation-runs.json");
+const CONNECTIONS_FILE = path.join(RUNTIME_DIR, "connections.json");
 const COMPOSE_FILE = path.join(RUNTIME_DIR, "docker-compose.generated.yml");
 const PORT = Number(process.env.LPR_CONTROL_PORT || 5190);
 const DEEPSTREAM_YOLO_REPO = process.env.DEEPSTREAM_YOLO_REPO || "https://github.com/marcoslucianops/DeepStream-Yolo.git";
@@ -45,6 +46,8 @@ const TRITON_CONTAINER_NAME = process.env.TRITON_CONTAINER_NAME || "jetson-trito
 const TRITON_HTTP_PORT = Number(process.env.TRITON_HTTP_PORT || 8010);
 const TRITON_GRPC_PORT = Number(process.env.TRITON_GRPC_PORT || 8011);
 const TRITON_METRICS_PORT = Number(process.env.TRITON_METRICS_PORT || 8012);
+const REDIS_IMAGE = process.env.REDIS_IMAGE || "redis:7-alpine";
+const KAFKA_IMAGE = process.env.KAFKA_IMAGE || "bitnami/kafka:3.7";
 const MODEL_BUILDER_IMAGE = process.env.MODEL_BUILDER_IMAGE || "deepstream-lpr-model-builder:local";
 const MODEL_BUILDER_BASE_IMAGE = process.env.MODEL_BUILDER_BASE_IMAGE || "ultralytics/ultralytics:latest-jetson-jetpack6";
 const MODEL_BUILDER_DOCKERFILE = process.env.MODEL_BUILDER_DOCKERFILE || path.join(APP_ROOT, "docker", "model-builder.Dockerfile");
@@ -568,6 +571,354 @@ function startAutomationLoop() {
   automationTimer = setInterval(() => {
     pollAutomationEvents().catch(() => {});
   }, 2000);
+}
+
+function defaultConnectionsConfig() {
+  return {
+    version: 1,
+    providers: {
+      redis: {
+        enabled: false,
+        mode: "managed",
+        host: "127.0.0.1",
+        port: 6379,
+        image: REDIS_IMAGE,
+        containerName: "jetson-redis-bus",
+        description: "Lightweight pub/sub, streams and cache bus for local Jetson services."
+      },
+      kafka: {
+        enabled: false,
+        mode: "external",
+        host: "127.0.0.1",
+        port: 9092,
+        image: KAFKA_IMAGE,
+        containerName: "jetson-kafka-bus",
+        description: "Durable event bus for larger multi-service pipelines."
+      }
+    },
+    channels: []
+  };
+}
+
+function normalizeConnectionProvider(name, value = {}) {
+  const base = defaultConnectionsConfig().providers[name] || {};
+  return {
+    enabled: value.enabled === true,
+    mode: ["managed", "external"].includes(value.mode) ? value.mode : base.mode || "external",
+    host: String(value.host || base.host || "127.0.0.1").trim(),
+    port: Math.max(1, Math.min(65535, Number(value.port || base.port || 0))),
+    image: String(value.image || base.image || "").trim(),
+    containerName: sanitizeCameraId(value.containerName || base.containerName || `jetson-${name}-bus`),
+    description: String(value.description || base.description || "").trim()
+  };
+}
+
+function normalizeConnectionsConfig(value = {}) {
+  const base = defaultConnectionsConfig();
+  const providers = {
+    redis: normalizeConnectionProvider("redis", value.providers?.redis || {}),
+    kafka: normalizeConnectionProvider("kafka", value.providers?.kafka || {})
+  };
+  const channels = Array.isArray(value.channels) ? value.channels : [];
+  return {
+    version: 1,
+    providers,
+    channels: channels.map((item, index) => ({
+      id: String(item.id || automationId("channel")),
+      name: String(item.name || `channel-${index + 1}`).trim(),
+      provider: ["redis", "kafka"].includes(item.provider) ? item.provider : "redis",
+      type: ["pubsub", "stream", "topic", "queue"].includes(item.type) ? item.type : "topic",
+      enabled: item.enabled !== false,
+      description: String(item.description || "").trim()
+    })).filter((item) => item.name)
+  };
+}
+
+async function readConnectionsConfig() {
+  return normalizeConnectionsConfig(await readJson(CONNECTIONS_FILE, defaultConnectionsConfig()));
+}
+
+async function writeConnectionsConfig(config) {
+  const normalized = normalizeConnectionsConfig(config);
+  await writeJson(CONNECTIONS_FILE, normalized);
+  return normalized;
+}
+
+async function tcpProbe(host, port, timeoutMs = 1500) {
+  return await new Promise((resolve) => {
+    const socket = new net.Socket();
+    let settled = false;
+    const finish = (ok, message = "") => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve({ ok, message });
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finish(true, "TCP connection ok."));
+    socket.once("timeout", () => finish(false, `TCP timeout after ${timeoutMs}ms.`));
+    socket.once("error", (error) => finish(false, error.message));
+    socket.connect(Number(port), host);
+  });
+}
+
+function redisEncodeCommand(args = []) {
+  return `*${args.length}\r\n${args.map((arg) => {
+    const value = String(arg);
+    return `$${Buffer.byteLength(value)}\r\n${value}\r\n`;
+  }).join("")}`;
+}
+
+function redisReadLine(buffer, offset) {
+  const end = buffer.indexOf("\r\n", offset, "utf8");
+  if (end < 0) return null;
+  return {
+    line: buffer.toString("utf8", offset, end),
+    offset: end + 2
+  };
+}
+
+function parseRedisResp(buffer, offset = 0) {
+  if (offset >= buffer.length) return null;
+  const prefix = String.fromCharCode(buffer[offset]);
+  const start = offset + 1;
+  if (prefix === "+" || prefix === "-" || prefix === ":") {
+    const item = redisReadLine(buffer, start);
+    if (!item) return null;
+    if (prefix === "-") throw new Error(item.line);
+    return {
+      value: prefix === ":" ? Number(item.line) : item.line,
+      offset: item.offset
+    };
+  }
+  if (prefix === "$") {
+    const item = redisReadLine(buffer, start);
+    if (!item) return null;
+    const length = Number(item.line);
+    if (length < 0) return { value: null, offset: item.offset };
+    const end = item.offset + length;
+    if (buffer.length < end + 2) return null;
+    return {
+      value: buffer.toString("utf8", item.offset, end),
+      offset: end + 2
+    };
+  }
+  if (prefix === "*") {
+    const item = redisReadLine(buffer, start);
+    if (!item) return null;
+    const count = Number(item.line);
+    if (count < 0) return { value: null, offset: item.offset };
+    const values = [];
+    let nextOffset = item.offset;
+    for (let index = 0; index < count; index += 1) {
+      const parsed = parseRedisResp(buffer, nextOffset);
+      if (!parsed) return null;
+      values.push(parsed.value);
+      nextOffset = parsed.offset;
+    }
+    return { value: values, offset: nextOffset };
+  }
+  throw new Error(`Unsupported Redis response prefix: ${prefix}`);
+}
+
+async function redisCommand(provider, args = [], timeoutMs = 3000) {
+  return await new Promise((resolve, reject) => {
+    const socket = new net.Socket();
+    let buffer = Buffer.alloc(0);
+    let settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      if (error) reject(error);
+      else resolve(value);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => socket.write(redisEncodeCommand(args)));
+    socket.on("data", (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      try {
+        const parsed = parseRedisResp(buffer);
+        if (parsed) finish(null, parsed.value);
+      } catch (error) {
+        finish(error);
+      }
+    });
+    socket.once("timeout", () => finish(new Error(`Redis command timeout after ${timeoutMs}ms.`)));
+    socket.once("error", (error) => finish(error));
+    socket.connect(Number(provider.port), provider.host);
+  });
+}
+
+function redisStreamMessageToObject(item) {
+  const [id, pairs] = Array.isArray(item) ? item : ["", []];
+  const fields = {};
+  if (Array.isArray(pairs)) {
+    for (let index = 0; index < pairs.length; index += 2) {
+      fields[pairs[index]] = pairs[index + 1] ?? "";
+    }
+  }
+  return {
+    id,
+    fields,
+    text: Object.entries(fields).map(([key, value]) => `${key}=${value}`).join(" ")
+  };
+}
+
+async function readConnectionsStatus(config = null) {
+  const current = config || await readConnectionsConfig();
+  const providers = {};
+  for (const [name, provider] of Object.entries(current.providers || {})) {
+    const container = provider.mode === "managed"
+      ? await inspectContainer(provider.containerName).catch((error) => ({ exists: false, running: false, error: error.message }))
+      : { exists: false, running: false };
+    const probe = provider.enabled
+      ? await tcpProbe(provider.host, provider.port).catch((error) => ({ ok: false, message: error.message }))
+      : { ok: false, message: "disabled" };
+    providers[name] = {
+      ...provider,
+      container,
+      reachable: Boolean(probe.ok),
+      message: probe.message
+    };
+  }
+  return {
+    providers,
+    channels: current.channels || [],
+    activeChannels: (current.channels || []).filter((channel) => channel.enabled).length,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function startManagedConnection(providerName) {
+  const config = await readConnectionsConfig();
+  const provider = config.providers?.[providerName];
+  if (!provider) throw new Error(`Unknown connection provider: ${providerName}`);
+  if (provider.mode !== "managed") throw new Error(`${providerName} is configured as external. Switch to managed Docker before starting it here.`);
+  await runCommand("docker", ["rm", "-f", provider.containerName], { cwd: APP_ROOT }).catch(() => {});
+  let args;
+  if (providerName === "redis") {
+    args = [
+      "run", "-d",
+      "--name", provider.containerName,
+      "--network", "host",
+      "--restart", "always",
+      provider.image || REDIS_IMAGE,
+      "redis-server",
+      "--appendonly", "yes",
+      "--port", String(provider.port)
+    ];
+  } else if (providerName === "kafka") {
+    args = [
+      "run", "-d",
+      "--name", provider.containerName,
+      "--network", "host",
+      "--restart", "always",
+      "-e", "ALLOW_PLAINTEXT_LISTENER=yes",
+      "-e", "KAFKA_CFG_NODE_ID=0",
+      "-e", "KAFKA_CFG_PROCESS_ROLES=controller,broker",
+      "-e", "KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+      "-e", "KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@127.0.0.1:9093",
+      "-e", `KAFKA_CFG_LISTENERS=PLAINTEXT://:${provider.port},CONTROLLER://:9093`,
+      "-e", `KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://${provider.host}:${provider.port}`,
+      "-e", "KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+      "-e", "KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true",
+      provider.image || KAFKA_IMAGE
+    ];
+  } else {
+    throw new Error(`Cannot start provider: ${providerName}`);
+  }
+  const result = await runCommand("docker", args, { cwd: APP_ROOT, timeoutMs: 120000 });
+  if (result.code !== 0) throw new Error(`Cannot start ${providerName}.\n${result.output}`);
+  config.providers[providerName].enabled = true;
+  await writeConnectionsConfig(config);
+  return result;
+}
+
+async function stopManagedConnection(providerName) {
+  const config = await readConnectionsConfig();
+  const provider = config.providers?.[providerName];
+  if (!provider) throw new Error(`Unknown connection provider: ${providerName}`);
+  const result = await runCommand("docker", ["rm", "-f", provider.containerName], { cwd: APP_ROOT, timeoutMs: 30000 });
+  config.providers[providerName].enabled = false;
+  await writeConnectionsConfig(config);
+  return result;
+}
+
+async function testConnectionChannel(channelId) {
+  const config = await readConnectionsConfig();
+  const channel = config.channels.find((item) => item.id === channelId);
+  if (!channel) throw new Error(`Channel not found: ${channelId}`);
+  const provider = config.providers[channel.provider];
+  if (!provider?.enabled) throw new Error(`${channel.provider} is disabled.`);
+  const probe = await tcpProbe(provider.host, provider.port, 2500);
+  if (!probe.ok) throw new Error(`${channel.provider} is not reachable: ${probe.message}`);
+  return {
+    ok: true,
+    provider: channel.provider,
+    channel: channel.name,
+    message: channel.provider === "redis"
+      ? "Redis TCP is reachable. Pub/sub and stream names are configuration-ready."
+      : "Kafka TCP is reachable. Topic creation is left to broker auto-create or external admin tools."
+  };
+}
+
+async function inspectConnectionChannelMessages(channelId, options = {}) {
+  const config = await readConnectionsConfig();
+  const channel = config.channels.find((item) => item.id === channelId);
+  if (!channel) throw new Error(`Channel not found: ${channelId}`);
+  const provider = config.providers[channel.provider];
+  if (!provider?.enabled) throw new Error(`${channel.provider} is disabled.`);
+  const limit = Math.max(1, Math.min(500, Number(options.limit || 50)));
+  const sort = options.sort === "oldest" ? "oldest" : "latest";
+  const probe = await tcpProbe(provider.host, provider.port, 2500);
+  if (!probe.ok) throw new Error(`${channel.provider} is not reachable: ${probe.message}`);
+
+  if (channel.provider === "redis") {
+    if (channel.type === "stream") {
+      const count = Number(await redisCommand(provider, ["XLEN", channel.name]));
+      const command = sort === "oldest"
+        ? ["XRANGE", channel.name, "-", "+", "COUNT", String(limit)]
+        : ["XREVRANGE", channel.name, "+", "-", "COUNT", String(limit)];
+      const rawMessages = await redisCommand(provider, command);
+      const messages = (Array.isArray(rawMessages) ? rawMessages : []).map(redisStreamMessageToObject);
+      if (sort === "oldest") messages.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+      return {
+        ok: true,
+        provider: "redis",
+        channel,
+        sort,
+        limit,
+        count,
+        messages,
+        note: "Redis Stream keeps message history, so these are retained entries from the stream."
+      };
+    }
+    const numsub = await redisCommand(provider, ["PUBSUB", "NUMSUB", channel.name]).catch(() => []);
+    const subscriberCount = Array.isArray(numsub) ? Number(numsub[1] || 0) : 0;
+    return {
+      ok: true,
+      provider: "redis",
+      channel,
+      sort,
+      limit,
+      count: 0,
+      subscriberCount,
+      messages: [],
+      note: "Redis Pub/Sub does not retain message history. Use Redis Stream when you need to view past messages in the UI."
+    };
+  }
+
+  return {
+    ok: true,
+    provider: channel.provider,
+    channel,
+    sort,
+    limit,
+    count: null,
+    messages: [],
+    note: "Kafka/topic browsing is configuration-ready, but retained message inspection is not enabled in this lightweight UI yet."
+  };
 }
 
 async function inspectContainer(name) {
@@ -4669,6 +5020,71 @@ app.get("/api/system/profile", async (_req, res) => {
     modelBuilderBaseImage: MODEL_BUILDER_BASE_IMAGE,
     dockerRuntimeArgs: dockerRuntimeArgs()
   });
+});
+
+app.get("/api/connections", async (_req, res) => {
+  try {
+    const config = await readConnectionsConfig();
+    const status = await readConnectionsStatus(config);
+    res.json({ config, status });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put("/api/connections", async (req, res) => {
+  try {
+    const config = await writeConnectionsConfig(req.body || {});
+    const status = await readConnectionsStatus(config);
+    res.json({ config, status });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/connections/providers/:provider/start", async (req, res) => {
+  try {
+    const provider = String(req.params.provider || "").toLowerCase();
+    const result = await startManagedConnection(provider);
+    res.json({
+      output: tailOutput(result.output, 4000),
+      status: await readConnectionsStatus()
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/connections/providers/:provider/stop", async (req, res) => {
+  try {
+    const provider = String(req.params.provider || "").toLowerCase();
+    const result = await stopManagedConnection(provider);
+    res.json({
+      output: tailOutput(result.output, 4000),
+      status: await readConnectionsStatus()
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/connections/channels/:id/test", async (req, res) => {
+  try {
+    res.json(await testConnectionChannel(req.params.id));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/connections/channels/:id/messages", async (req, res) => {
+  try {
+    res.json(await inspectConnectionChannelMessages(req.params.id, {
+      sort: req.query.sort,
+      limit: req.query.limit
+    }));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.get("/api/triton/status", async (_req, res) => {

@@ -194,6 +194,26 @@ const els = {
   refreshAutomationRunsBtn: document.querySelector("#refreshAutomationRunsBtn"),
   clearAutomationRunsBtn: document.querySelector("#clearAutomationRunsBtn"),
   automationRunList: document.querySelector("#automationRunList"),
+  refreshConnectionsBtn: document.querySelector("#refreshConnectionsBtn"),
+  saveConnectionsBtn: document.querySelector("#saveConnectionsBtn"),
+  connectionStatusCards: document.querySelector("#connectionStatusCards"),
+  connectionProviderList: document.querySelector("#connectionProviderList"),
+  connectionChannelName: document.querySelector("#connectionChannelName"),
+  connectionChannelProvider: document.querySelector("#connectionChannelProvider"),
+  connectionChannelType: document.querySelector("#connectionChannelType"),
+  connectionChannelDescription: document.querySelector("#connectionChannelDescription"),
+  addConnectionChannelBtn: document.querySelector("#addConnectionChannelBtn"),
+  connectionChannelList: document.querySelector("#connectionChannelList"),
+  connectionInspectChannel: document.querySelector("#connectionInspectChannel"),
+  connectionInspectSort: document.querySelector("#connectionInspectSort"),
+  connectionInspectLimit: document.querySelector("#connectionInspectLimit"),
+  inspectConnectionChannelBtn: document.querySelector("#inspectConnectionChannelBtn"),
+  connectionMessageViewer: document.querySelector("#connectionMessageViewer"),
+  automationServiceInputChannel: document.querySelector("#automationServiceInputChannel"),
+  automationServiceOutputChannel: document.querySelector("#automationServiceOutputChannel"),
+  automationServiceInputMode: document.querySelector("#automationServiceInputMode"),
+  automationServiceOutputMode: document.querySelector("#automationServiceOutputMode"),
+  automationWorkflowInputChannel: document.querySelector("#automationWorkflowInputChannel"),
   refreshTritonBtn: document.querySelector("#refreshTritonBtn"),
   startTritonBtn: document.querySelector("#startTritonBtn"),
   stopTritonBtn: document.querySelector("#stopTritonBtn"),
@@ -256,6 +276,8 @@ let agentMessages = [];
 let agentSettings = null;
 let automationConfig = { services: [], environments: [], workflows: [] };
 let automationRuns = [];
+let connectionsConfig = { providers: {}, channels: [] };
+let connectionsStatus = { providers: {}, channels: [] };
 let latestTriton = { status: {}, models: [] };
 let latestTritonMetadata = null;
 let latestTritonMetadataKey = "";
@@ -366,6 +388,7 @@ const dashboardViewTitles = {
   deploy: "Deploy Settings",
   models: "Model Factory",
   triton: "Triton Server",
+  connections: "Connections",
   tests: "Test Lab",
   agent: "Operator Agent",
   automation: "Automation",
@@ -385,6 +408,7 @@ function selectDashboardView(view = "dashboard") {
   if (next === "agent") refreshAgent().catch((error) => setTaskStatus("agent", "failed", error.message));
   if (next === "automation") refreshAutomation().catch((error) => setTaskStatus("automation", "failed", error.message));
   if (next === "triton") refreshTriton().catch((error) => setTaskStatus("triton", "failed", error.message));
+  if (next === "connections") refreshConnections().catch((error) => setTaskStatus("connections", "failed", error.message));
 }
 
 function dashboardTag(label, tone = "") {
@@ -609,9 +633,16 @@ function renderAutomation() {
   const environments = automationConfig.environments || [];
   const services = automationConfig.services || [];
   const workflows = automationConfig.workflows || [];
+  const channels = connectionsConfig.channels || [];
+  const channelOptions = `<option value="">No channel</option>${channels.map((channel) => (
+    `<option value="${escapeHtml(channel.id)}">${escapeHtml(channel.name)} (${escapeHtml(channel.provider)})</option>`
+  )).join("")}`;
   els.automationServiceEnv.innerHTML = `<option value="">No environment</option>${environments.map((env) => `
     <option value="${escapeHtml(env.id)}">${escapeHtml(env.name)}</option>
   `).join("")}`;
+  if (els.automationServiceInputChannel) els.automationServiceInputChannel.innerHTML = channelOptions;
+  if (els.automationServiceOutputChannel) els.automationServiceOutputChannel.innerHTML = channelOptions;
+  if (els.automationWorkflowInputChannel) els.automationWorkflowInputChannel.innerHTML = channelOptions;
   els.automationWorkflowService.innerHTML = services.length
     ? services.map((service) => `<option value="${escapeHtml(service.id)}">${escapeHtml(service.name)}</option>`).join("")
     : '<option value="">No service</option>';
@@ -630,7 +661,7 @@ function renderAutomation() {
       <div>
         <strong>${escapeHtml(service.name)}</strong>
         <span>${escapeHtml(service.type)} - ${escapeHtml(service.endpoint || service.scriptPath || service.command || "not configured")}</span>
-        <small>${escapeHtml(service.description || `${service.timeoutMs || 30000}ms timeout`)}</small>
+        <small>${escapeHtml(service.description || `${service.timeoutMs || 30000}ms timeout`)}${bindingSummary(service.bindings)}</small>
       </div>
       <div class="actions inline-actions">
         <button type="button" class="secondary" data-test-automation-service="${escapeHtml(service.id)}">Test</button>
@@ -645,7 +676,7 @@ function renderAutomation() {
         <div>
           <strong>${escapeHtml(workflow.name)}</strong>
           <span>${escapeHtml(workflow.triggerEventType)} -> ${escapeHtml(service?.name || "missing service")} after ${Number(workflow.delaySec || 0)}s</span>
-          <small>${workflow.enabled !== false ? "enabled" : "disabled"} - filters ${escapeHtml(JSON.stringify(workflow.filters || {}))}</small>
+          <small>${workflow.enabled !== false ? "enabled" : "disabled"} - filters ${escapeHtml(JSON.stringify(workflow.filters || {}))}${workflow.inputChannelId ? ` - from ${escapeHtml(channelName(workflow.inputChannelId))}` : ""}</small>
         </div>
         <div class="actions inline-actions">
           <button type="button" class="secondary" data-test-automation-workflow="${escapeHtml(workflow.id)}">Test</button>
@@ -655,6 +686,17 @@ function renderAutomation() {
     `;
   }).join("") : '<div class="empty">No workflow registered yet.</div>';
   renderAutomationRuns();
+}
+
+function channelName(channelId) {
+  return (connectionsConfig.channels || []).find((channel) => channel.id === channelId)?.name || channelId || "";
+}
+
+function bindingSummary(bindings = {}) {
+  const parts = [];
+  if (bindings.inputChannelId) parts.push(`in ${channelName(bindings.inputChannelId)}`);
+  if (bindings.outputChannelId) parts.push(`out ${channelName(bindings.outputChannelId)}`);
+  return parts.length ? ` - ${parts.join(" / ")}` : "";
 }
 
 function renderAutomationRuns() {
@@ -724,6 +766,12 @@ function addAutomationService() {
     command: els.automationServiceCommand.value.trim(),
     timeoutMs: Number(els.automationServiceTimeout.value || 30000),
     params: parseJsonField(els.automationServiceParams, {}),
+    bindings: {
+      inputChannelId: els.automationServiceInputChannel?.value || "",
+      inputMode: els.automationServiceInputMode?.value || "",
+      outputChannelId: els.automationServiceOutputChannel?.value || "",
+      outputMode: els.automationServiceOutputMode?.value || ""
+    },
     description: ""
   });
   els.automationServiceName.value = "";
@@ -741,6 +789,7 @@ function addAutomationWorkflow() {
     filters,
     delaySec: Number(els.automationWorkflowDelay.value || 0),
     serviceId: els.automationWorkflowService.value,
+    inputChannelId: els.automationWorkflowInputChannel?.value || "",
     params: parseJsonField(els.automationWorkflowParams, {}),
     description: ""
   });
@@ -798,6 +847,221 @@ async function clearAutomationRuns() {
   });
   automationRuns = result.runs || [];
   renderAutomationRuns();
+  print(result);
+}
+
+function providerLabel(provider) {
+  return provider === "redis" ? "Redis" : provider === "kafka" ? "Kafka" : provider;
+}
+
+function renderConnections() {
+  const providers = connectionsConfig.providers || {};
+  const statusProviders = connectionsStatus.providers || {};
+  const channels = connectionsConfig.channels || [];
+  if (els.connectionStatusCards) {
+    els.connectionStatusCards.innerHTML = ["redis", "kafka"].map((name) => {
+      const provider = statusProviders[name] || providers[name] || {};
+      const active = provider.enabled && provider.reachable;
+      return `
+        <article class="deploy-status-card ${active ? "success" : provider.enabled ? "failed" : ""}">
+          <span>${providerLabel(name)}</span>
+          <strong>${active ? "Reachable" : provider.enabled ? "Not reachable" : "Disabled"}</strong>
+          <small>${escapeHtml(provider.mode || "external")} - ${escapeHtml(provider.host || "127.0.0.1")}:${Number(provider.port || 0)} ${provider.container?.running ? "- container running" : ""}</small>
+        </article>
+      `;
+    }).join("") + `
+      <article class="deploy-status-card">
+        <span>Channels</span>
+        <strong>${channels.filter((item) => item.enabled !== false).length}/${channels.length}</strong>
+        <small>enabled / total configured</small>
+      </article>
+    `;
+  }
+  if (els.connectionProviderList) {
+    els.connectionProviderList.innerHTML = ["redis", "kafka"].map((name) => {
+      const provider = providers[name] || {};
+      const status = statusProviders[name] || {};
+      const statusText = status.reachable ? "TCP ok" : escapeHtml(status.message || "not checked");
+      return `
+        <details class="connection-provider-card" data-connection-provider="${name}">
+          <summary class="connection-provider-head">
+            <div>
+              <strong>${providerLabel(name)}</strong>
+              <span>${escapeHtml(provider.mode || "external")} - ${escapeHtml(provider.host || "127.0.0.1")}:${Number(provider.port || 0)}</span>
+            </div>
+            <span class="connection-provider-state ${status.reachable ? "ok" : "warn"}">${status.reachable ? "Reachable" : "Not ready"}</span>
+          </summary>
+          <p class="muted">${escapeHtml(provider.description || "")}</p>
+          <label class="inline-check"><input data-connection-provider-field="enabled" type="checkbox" ${provider.enabled ? "checked" : ""} /> Enabled</label>
+          <div class="grid">
+            <label>Mode
+              <select data-connection-provider-field="mode">
+                <option value="managed" ${provider.mode === "managed" ? "selected" : ""}>Managed Docker</option>
+                <option value="external" ${provider.mode === "external" ? "selected" : ""}>External endpoint</option>
+              </select>
+            </label>
+            <label>Host <input data-connection-provider-field="host" value="${escapeHtml(provider.host || "127.0.0.1")}" /></label>
+            <label>Port <input data-connection-provider-field="port" type="number" min="1" max="65535" value="${Number(provider.port || 0)}" /></label>
+            <label>Container <input data-connection-provider-field="containerName" value="${escapeHtml(provider.containerName || "")}" /></label>
+          </div>
+          <label>Docker image <input data-connection-provider-field="image" value="${escapeHtml(provider.image || "")}" /></label>
+          <div class="connection-provider-foot">
+            <span class="${status.reachable ? "ok" : "warn"}">${statusText}</span>
+            <div class="actions inline-actions">
+              <button type="button" class="secondary" data-start-connection-provider="${name}">Start</button>
+              <button type="button" class="danger" data-stop-connection-provider="${name}">Stop</button>
+            </div>
+          </div>
+        </details>
+      `;
+    }).join("");
+  }
+  if (els.connectionChannelList) {
+    els.connectionChannelList.innerHTML = channels.length ? channels.map((channel, index) => `
+      <article class="connection-channel-row">
+        <div>
+          <strong>${escapeHtml(channel.name)}</strong>
+          <span>${providerLabel(channel.provider)} ${escapeHtml(channel.type)}</span>
+          <small>${channel.enabled !== false ? "enabled" : "disabled"}${channel.description ? ` - ${escapeHtml(channel.description)}` : ""}</small>
+        </div>
+        <div class="actions inline-actions">
+          <button type="button" class="secondary" data-test-connection-channel="${escapeHtml(channel.id)}">Test</button>
+          <button type="button" class="danger" data-remove-connection-channel="${index}">Remove</button>
+        </div>
+      </article>
+    `).join("") : '<div class="empty">No message channel yet.</div>';
+  }
+  if (els.connectionInspectChannel) {
+    const selected = els.connectionInspectChannel.value;
+    els.connectionInspectChannel.innerHTML = channels.length
+      ? channels.map((channel) => `<option value="${escapeHtml(channel.id)}" ${channel.id === selected ? "selected" : ""}>${escapeHtml(channel.name)} (${providerLabel(channel.provider)} ${escapeHtml(channel.type)})</option>`).join("")
+      : '<option value="">No channels</option>';
+  }
+}
+
+function readConnectionProviders() {
+  document.querySelectorAll("[data-connection-provider]").forEach((card) => {
+    const name = card.dataset.connectionProvider;
+    const provider = connectionsConfig.providers?.[name] || {};
+    const field = (key) => card.querySelector(`[data-connection-provider-field="${key}"]`);
+    connectionsConfig.providers[name] = {
+      ...provider,
+      enabled: Boolean(field("enabled")?.checked),
+      mode: field("mode")?.value || "external",
+      host: field("host")?.value.trim() || "127.0.0.1",
+      port: Number(field("port")?.value || provider.port || 0),
+      containerName: field("containerName")?.value.trim() || provider.containerName || `jetson-${name}-bus`,
+      image: field("image")?.value.trim() || provider.image || ""
+    };
+  });
+}
+
+async function refreshConnections(button = null) {
+  const result = await withTask("connections", button, "Loading connections...", async () => {
+    return await api("/api/connections");
+  });
+  connectionsConfig = result.config || { providers: {}, channels: [] };
+  connectionsStatus = result.status || { providers: {}, channels: [] };
+  renderConnections();
+  print(result);
+}
+
+async function saveConnections(button = null) {
+  readConnectionProviders();
+  const result = await withTask("connections", button, "Saving connections...", async () => {
+    return await api("/api/connections", {
+      method: "PUT",
+      body: JSON.stringify(connectionsConfig)
+    });
+  });
+  connectionsConfig = result.config || connectionsConfig;
+  connectionsStatus = result.status || connectionsStatus;
+  renderConnections();
+  print(result);
+}
+
+function addConnectionChannel() {
+  readConnectionProviders();
+  connectionsConfig.channels = connectionsConfig.channels || [];
+  connectionsConfig.channels.push({
+    id: `channel-${Date.now()}`,
+    name: els.connectionChannelName.value.trim() || `channel-${connectionsConfig.channels.length + 1}`,
+    provider: els.connectionChannelProvider.value,
+    type: els.connectionChannelType.value,
+    description: els.connectionChannelDescription.value.trim(),
+    enabled: true
+  });
+  els.connectionChannelName.value = "";
+  els.connectionChannelDescription.value = "";
+  renderConnections();
+}
+
+async function startConnectionProvider(provider, button = null) {
+  await saveConnections();
+  const result = await withTask("connections", button, `Starting ${providerLabel(provider)}...`, async () => {
+    return await api(`/api/connections/providers/${encodeURIComponent(provider)}/start`, { method: "POST" });
+  });
+  await refreshConnections();
+  print(result);
+}
+
+async function stopConnectionProvider(provider, button = null) {
+  const result = await withTask("connections", button, `Stopping ${providerLabel(provider)}...`, async () => {
+    return await api(`/api/connections/providers/${encodeURIComponent(provider)}/stop`, { method: "POST" });
+  });
+  await refreshConnections();
+  print(result);
+}
+
+async function testConnectionChannel(channelId, button = null) {
+  await saveConnections();
+  const result = await withTask("connections", button, "Testing channel...", async () => {
+    return await api(`/api/connections/channels/${encodeURIComponent(channelId)}/test`, { method: "POST" });
+  });
+  print(result);
+}
+
+function renderConnectionMessages(result = null) {
+  if (!els.connectionMessageViewer) return;
+  if (!result) {
+    els.connectionMessageViewer.innerHTML = '<div class="empty">Choose a channel to inspect retained messages.</div>';
+    return;
+  }
+  const messages = Array.isArray(result.messages) ? result.messages : [];
+  const countText = result.count === null || result.count === undefined
+    ? `${messages.length} shown`
+    : `${Number(result.count)} retained, ${messages.length} shown`;
+  els.connectionMessageViewer.innerHTML = `
+    <div class="connection-message-summary">
+      <div>
+        <strong>${escapeHtml(result.channel?.name || "")}</strong>
+        <span>${providerLabel(result.provider)} ${escapeHtml(result.channel?.type || "")} - ${escapeHtml(result.sort || "latest")}</span>
+      </div>
+      <b>${countText}</b>
+    </div>
+    ${result.subscriberCount !== undefined ? `<p class="muted">Live subscribers: ${Number(result.subscriberCount || 0)}</p>` : ""}
+    ${result.note ? `<p class="muted">${escapeHtml(result.note)}</p>` : ""}
+    <div class="connection-message-list">
+      ${messages.length ? messages.map((message) => `
+        <article class="connection-message-row">
+          <strong>${escapeHtml(message.id || "")}</strong>
+          <pre>${escapeHtml(JSON.stringify(message.fields || message, null, 2))}</pre>
+        </article>
+      `).join("") : '<div class="empty">No retained messages for this channel.</div>'}
+    </div>
+  `;
+}
+
+async function inspectConnectionChannelMessages(button = null) {
+  await saveConnections();
+  const channelId = els.connectionInspectChannel?.value;
+  if (!channelId) throw new Error("Choose a message channel first.");
+  const sort = els.connectionInspectSort?.value || "latest";
+  const limit = Math.max(1, Math.min(500, Number(els.connectionInspectLimit?.value || 50)));
+  const result = await withTask("connections", button, "Loading channel messages...", async () => {
+    return await api(`/api/connections/channels/${encodeURIComponent(channelId)}/messages?sort=${encodeURIComponent(sort)}&limit=${encodeURIComponent(limit)}`);
+  });
+  renderConnectionMessages(result);
   print(result);
 }
 
@@ -881,45 +1145,53 @@ function renderTriton(data = latestTriton) {
   }
   if (els.tritonModelList) {
     els.tritonModelList.innerHTML = models.length ? models.map((model) => `
-      <article class="triton-repo-item">
-        <div class="triton-repo-main">
-          <div class="triton-repo-head">
-            <div>
-              <strong>${escapeHtml(model.name)}</strong>
-              <span>${model.versions?.length ? model.versions.map((item) => `v${item.version}: ${item.files.join(", ")}`).join(" | ") : "No version folder"}</span>
-            </div>
-            <div class="triton-repo-badges">
-              <small>${model.hasConfig ? "config" : "missing config"}</small>
-              <small>${escapeHtml(model.decoderProfile || "raw")}</small>
-              <small>${model.labels?.count || 0} labels</small>
+      <article class="triton-repo-card">
+        <div class="triton-repo-top">
+          <div class="triton-repo-title">
+            <strong>${escapeHtml(model.name)}</strong>
+            <span>${model.versions?.length ? model.versions.map((item) => `v${item.version}: ${item.files.join(", ")}`).join(" | ") : "No version folder"}</span>
+          </div>
+          <div class="triton-repo-actions">
+            <button type="button" class="secondary" data-use-triton-model="${escapeHtml(model.name)}">Use</button>
+            <button type="button" class="secondary" data-copy-triton-url="${escapeHtml(model.name)}">Copy URL</button>
+            <button type="button" class="danger" data-delete-triton-model="${escapeHtml(model.name)}">Delete</button>
+          </div>
+        </div>
+        <div class="triton-repo-meta">
+          <span class="${model.hasConfig ? "ok" : "warn"}">${model.hasConfig ? "config ready" : "missing config"}</span>
+          <span>${escapeHtml(model.decoderProfile || "raw")}</span>
+          <span>${model.labels?.count || 0} label(s)</span>
+        </div>
+        <div class="triton-repo-url-row">
+          <code class="triton-infer-url">${escapeHtml(tritonPublicInferUrl(model.name))}</code>
+          <button type="button" class="secondary compact" data-fix-triton-config="${escapeHtml(model.name)}">Make non-batch config</button>
+        </div>
+        <small class="triton-label-preview">${tritonLabelPreview(model.labels?.preview || [])}</small>
+        <details class="triton-repo-details">
+          <summary>Model settings</summary>
+          <div class="triton-model-controls" data-triton-model-controls="${escapeHtml(model.name)}">
+            <label class="triton-control-decoder">Decoder
+              <select data-triton-decoder-select="${escapeHtml(model.name)}">
+                ${tritonDecoderOptions(model.decoderProfile || "raw")}
+              </select>
+            </label>
+            <label class="triton-control-upload">Upload labels.txt <input type="file" accept=".txt" data-triton-label-file="${escapeHtml(model.name)}" /></label>
+            <label class="triton-label-editor">Labels
+              <textarea rows="8" data-triton-labels-text="${escapeHtml(model.name)}" placeholder="one label per line">${escapeHtml(model.labels?.text || "")}</textarea>
+            </label>
+            <div class="actions inline-actions triton-control-actions">
+              <button type="button" class="secondary" data-save-triton-meta="${escapeHtml(model.name)}">Save labels/profile</button>
+              <button type="button" class="secondary" data-upload-triton-labels="${escapeHtml(model.name)}">Upload labels</button>
             </div>
           </div>
-          <code class="triton-infer-url">${escapeHtml(tritonPublicInferUrl(model.name))}</code>
-          <small class="triton-label-preview">${tritonLabelPreview(model.labels?.preview || [])}</small>
-        </div>
-        <div class="actions inline-actions triton-repo-actions">
-          <button type="button" class="secondary" data-use-triton-model="${escapeHtml(model.name)}">Use</button>
-          <button type="button" class="secondary" data-copy-triton-url="${escapeHtml(model.name)}">Copy URL</button>
-          <button type="button" class="secondary" data-fix-triton-config="${escapeHtml(model.name)}">Non-batch config</button>
-          <button type="button" class="danger" data-delete-triton-model="${escapeHtml(model.name)}">Delete</button>
-        </div>
+        </details>
+        ${model.configPreview ? `
+          <details class="triton-repo-details">
+            <summary>Config preview</summary>
+            <pre class="triton-config-preview">${escapeHtml(model.configPreview)}</pre>
+          </details>
+        ` : ""}
       </article>
-      <div class="triton-model-controls" data-triton-model-controls="${escapeHtml(model.name)}">
-        <label class="triton-control-decoder">Decoder
-          <select data-triton-decoder-select="${escapeHtml(model.name)}">
-            ${tritonDecoderOptions(model.decoderProfile || "raw")}
-          </select>
-        </label>
-        <label class="triton-control-upload">Upload labels.txt <input type="file" accept=".txt" data-triton-label-file="${escapeHtml(model.name)}" /></label>
-        <label class="triton-label-editor">Labels
-          <textarea rows="8" data-triton-labels-text="${escapeHtml(model.name)}" placeholder="one label per line">${escapeHtml(model.labels?.text || "")}</textarea>
-        </label>
-        <div class="actions inline-actions triton-control-actions">
-          <button type="button" class="secondary" data-save-triton-meta="${escapeHtml(model.name)}">Save labels/profile</button>
-          <button type="button" class="secondary" data-upload-triton-labels="${escapeHtml(model.name)}">Upload labels</button>
-        </div>
-      </div>
-      ${model.configPreview ? `<pre class="triton-config-preview">${escapeHtml(model.configPreview)}</pre>` : ""}
     `).join("") : '<div class="empty">No Triton model yet.</div>';
   }
   if (els.tritonInferModel) {
@@ -2201,6 +2473,15 @@ function readDeployApps(cameras = readCameraCards()) {
       cameraSettings: { ...previousSettings, ...readDeployCameraSettings(card, cameras) },
       processorType: normalizeProcessorType(card.querySelector("[data-deploy-field='processorType']")?.value),
       pipelineStages,
+      eventOutputs: [...card.querySelectorAll("[data-deploy-event-output]")].map((row) => ({
+        eventType: row.querySelector("[data-deploy-event-field='eventType']")?.value.trim() || "",
+        channelId: row.querySelector("[data-deploy-event-field='channelId']")?.value || "",
+        payload: row.querySelector("[data-deploy-event-field='payload']")?.value || "full",
+        template: row.querySelector("[data-deploy-event-field='template']")?.value.trim() || "",
+        transformLanguage: row.querySelector("[data-deploy-event-field='transformLanguage']")?.value || "python",
+        transformScript: row.querySelector("[data-deploy-event-field='transformScript']")?.value.trim() || "",
+        enabled: row.querySelector("[data-deploy-event-field='enabled']")?.checked !== false
+      })).filter((item) => item.eventType && item.channelId),
       selectedModels: selectedModelsFromStages(pipelineStages)
     };
   });
@@ -2248,6 +2529,7 @@ function renderDeployApps(apps = [], cameras = readCameraCards()) {
     active: false,
     cameraIds: Array.isArray(app.cameraIds) ? app.cameraIds : defaultDeployApp(index, normalizedCameras).cameraIds,
     cameraSettings: app.cameraSettings || {},
+    eventOutputs: Array.isArray(app.eventOutputs) ? app.eventOutputs : [],
     pipelineStages: normalizePipelineStages(app.pipelineStages || stagesFromSelectedModels(app.selectedModels)),
     selectedModels: selectedModelsFromStages(app.pipelineStages || stagesFromSelectedModels(app.selectedModels))
   }));
@@ -2293,6 +2575,14 @@ function renderDeployAppCard(app, index, cameras) {
       <div class="pipeline-stage-list" data-deploy-stage-list data-deploy-stage-owner="${index}">
         ${stageRowsMarkup(app.pipelineStages)}
       </div>
+      <details class="deploy-event-output-panel">
+        <summary>Event outputs</summary>
+        <p class="muted">Publish DeepStream events to message channels. Channels are created in the Connections tab.</p>
+        <div class="deploy-event-output-list">
+          ${eventOutputRowsMarkup(app.eventOutputs)}
+        </div>
+        <button type="button" class="secondary" data-add-deploy-event-output="${index}">Add event output</button>
+      </details>
       <div class="deploy-camera-picker">
         ${cameras.map((camera) => `
           <label class="inline-check deploy-camera-option">
@@ -2305,6 +2595,71 @@ function renderDeployAppCard(app, index, cameras) {
         ${selectedCameras.length ? selectedCameras.map((camera) => renderDeployCameraPreview(camera, app, index)).join("") : '<div class="empty">Chon it nhat mot camera cho app nay.</div>'}
       </div>
     </article>
+  `;
+}
+
+function eventOutputRowsMarkup(outputs = []) {
+  const rows = outputs.length ? outputs : [];
+  return rows.map((output) => eventOutputRowMarkup(output)).join("") || '<div class="empty">No event output configured.</div>';
+}
+
+function eventOutputRowMarkup(output = {}) {
+  const channels = connectionsConfig.channels || [];
+  const channelOptions = `<option value="">Select channel</option>${channels.map((channel) => (
+    `<option value="${escapeHtml(channel.id)}" ${channel.id === output.channelId ? "selected" : ""}>${escapeHtml(channel.name)} (${escapeHtml(channel.provider)})</option>`
+  )).join("")}`;
+  const payload = output.payload || "full";
+  const templateValue = output.template || `{
+  "event_type": "{{eventType}}",
+  "event_id": "{{eventId}}",
+  "camera": "{{cameraName}}",
+  "plate": "{{plateText}}",
+  "zone": "{{zoneName}}",
+  "image": "{{imageUrl}}",
+  "time": "{{ts}}"
+}`;
+  const transformValue = output.transformScript || `return {
+  "event_type": event.get("eventType"),
+  "camera": event.get("cameraName"),
+  "plate": None if event.get("plateText") == "UNKNOWN" else event.get("plateText"),
+  "image": event.get("imageUrl"),
+  "meta": {
+    "zone": event.get("zoneName"),
+    "direction": event.get("ruleDirection")
+  }
+}`;
+  return `
+    <div class="deploy-event-output-row" data-deploy-event-output>
+      <label class="inline-check"><input data-deploy-event-field="enabled" type="checkbox" ${output.enabled !== false ? "checked" : ""} /> enabled</label>
+      <label>Event <input data-deploy-event-field="eventType" value="${escapeHtml(output.eventType || "vehicle_capture")}" /></label>
+      <label>Publish to <select data-deploy-event-field="channelId">${channelOptions}</select></label>
+      <label>Payload
+        <select data-deploy-event-field="payload">
+          <option value="full" ${payload === "full" ? "selected" : ""}>Full event</option>
+          <option value="minimal" ${payload === "minimal" || payload === "compact" ? "selected" : ""}>Minimal</option>
+          <option value="template" ${payload === "template" ? "selected" : ""}>Template JSON</option>
+          <option value="transform" ${payload === "transform" ? "selected" : ""}>Python transform</option>
+        </select>
+      </label>
+      <button type="button" class="danger small-button" data-remove-deploy-event-output>Remove</button>
+      <details class="deploy-payload-editor" ${payload === "template" || payload === "transform" ? "open" : ""}>
+        <summary>Custom payload</summary>
+        <p class="muted">Template supports fields like {{plateText}}, {{cameraName}}, {{bbox.left}}. Transform receives <code>event</code> and returns a JSON-serializable object.</p>
+        <div class="deploy-payload-fields">
+          <label>Template JSON
+            <textarea data-deploy-event-field="template" rows="8">${escapeHtml(templateValue)}</textarea>
+          </label>
+          <label>Transform language
+            <select data-deploy-event-field="transformLanguage">
+              <option value="python" ${(output.transformLanguage || "python") === "python" ? "selected" : ""}>Python</option>
+            </select>
+          </label>
+          <label>Python transform
+            <textarea data-deploy-event-field="transformScript" rows="8">${escapeHtml(transformValue)}</textarea>
+          </label>
+        </div>
+      </details>
+    </div>
   `;
 }
 
@@ -2786,6 +3141,17 @@ function attachDeployAppHandlers() {
       addStageRow(list);
       renderDeployApps(readDeployApps(), readCameraCards());
     });
+  });
+  document.querySelectorAll("[data-add-deploy-event-output]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const list = button.closest("[data-deploy-app-card]")?.querySelector(".deploy-event-output-list");
+      if (!list) return;
+      if (list.querySelector(".empty")) list.innerHTML = "";
+      list.insertAdjacentHTML("beforeend", eventOutputRowMarkup({ eventType: "vehicle_capture", payload: "full", enabled: true }));
+    });
+  });
+  document.querySelectorAll("[data-remove-deploy-event-output]").forEach((button) => {
+    button.addEventListener("click", () => button.closest("[data-deploy-event-output]")?.remove());
   });
   document.querySelectorAll("[data-zone-class-option]").forEach((checkbox) => {
     checkbox.addEventListener("change", () => syncDeployZoneClassOptions(checkbox.closest("[data-deploy-zone-row]")));
@@ -4426,6 +4792,7 @@ async function init() {
   await refreshDeployStatus().catch(() => {});
   await refreshAgent().catch((error) => setTaskStatus("agent", "failed", error.message));
   await refreshAutomation().catch((error) => setTaskStatus("automation", "failed", error.message));
+  await refreshConnections().catch((error) => setTaskStatus("connections", "failed", error.message));
   await refreshTriton().catch((error) => setTaskStatus("triton", "failed", error.message));
   startDeployStatusPolling();
 }
@@ -4621,6 +4988,40 @@ els.automationWorkflowList?.addEventListener("click", (event) => {
 });
 els.refreshAutomationRunsBtn?.addEventListener("click", () => refreshAutomationRuns(els.refreshAutomationRunsBtn).then((result) => print(result)).catch((error) => print(error.message)));
 els.clearAutomationRunsBtn?.addEventListener("click", () => clearAutomationRuns().catch((error) => print(error.message)));
+els.refreshConnectionsBtn?.addEventListener("click", () => refreshConnections(els.refreshConnectionsBtn).catch((error) => print(error.message)));
+els.saveConnectionsBtn?.addEventListener("click", () => saveConnections(els.saveConnectionsBtn).catch((error) => print(error.message)));
+els.addConnectionChannelBtn?.addEventListener("click", () => {
+  try {
+    addConnectionChannel();
+  } catch (error) {
+    print(error.message);
+  }
+});
+els.connectionProviderList?.addEventListener("change", readConnectionProviders);
+els.connectionProviderList?.addEventListener("input", readConnectionProviders);
+els.connectionProviderList?.addEventListener("click", (event) => {
+  const startButton = event.target.closest("[data-start-connection-provider]");
+  if (startButton) {
+    startConnectionProvider(startButton.dataset.startConnectionProvider, startButton).catch((error) => print(error.message));
+    return;
+  }
+  const stopButton = event.target.closest("[data-stop-connection-provider]");
+  if (stopButton) {
+    stopConnectionProvider(stopButton.dataset.stopConnectionProvider, stopButton).catch((error) => print(error.message));
+  }
+});
+els.connectionChannelList?.addEventListener("click", (event) => {
+  const testButton = event.target.closest("[data-test-connection-channel]");
+  if (testButton) {
+    testConnectionChannel(testButton.dataset.testConnectionChannel, testButton).catch((error) => print(error.message));
+    return;
+  }
+  const removeButton = event.target.closest("[data-remove-connection-channel]");
+  if (!removeButton) return;
+  connectionsConfig.channels.splice(Number(removeButton.dataset.removeConnectionChannel), 1);
+  renderConnections();
+});
+els.inspectConnectionChannelBtn?.addEventListener("click", () => inspectConnectionChannelMessages(els.inspectConnectionChannelBtn).catch((error) => print(error.message)));
 els.refreshTritonBtn?.addEventListener("click", () => refreshTriton(els.refreshTritonBtn).catch((error) => print(error.message)));
 els.startTritonBtn?.addEventListener("click", () => startTriton(els.startTritonBtn).catch((error) => print(error.message)));
 els.stopTritonBtn?.addEventListener("click", () => stopTriton(els.stopTritonBtn).catch((error) => print(error.message)));
