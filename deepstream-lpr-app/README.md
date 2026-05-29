@@ -54,6 +54,8 @@ http://<ip-jetson>:5190
 
 Jetson Console la web app product duy nhat tren port nay. Sidebar `Camera Monitor` mo lai luong monitor RTSP cu trong cung server tai `/camera-monitor/`; khong can start them dashboard monitor port `5174` khi chay product Docker.
 
+Sidebar `Triton` quan ly Triton server rieng cua Jetson Console. Mac dinh app dung port `8010/8011/8012` cho HTTP/gRPC/metrics de tranh xung dot voi Triton server cu thuong chay tren `8000/8001/8002`. Neu muon doi, sua `TRITON_HTTP_PORT`, `TRITON_GRPC_PORT`, `TRITON_METRICS_PORT` trong `.env.product` roi chay lai `update-product.sh`.
+
 ### Operator Agent
 
 Sidebar `Agent` cung cap mot operator agent de hoi dap ve camera, model library, deploy status, FPS, logs, events va result captures. Agent duoc thiet ke read-only: no co the doc trang thai va de xuat buoc thao tac, nhung khong tu deploy/stop/delete. Trong tab nay co **Agent Settings** de chon provider, model, API key/base URL va cac tham so LLM nhu temperature, max tokens, top P.

@@ -42,9 +42,9 @@ const DEEPSTREAM_YOLO_POSE_REF = process.env.DEEPSTREAM_YOLO_POSE_REF || "master
 const DEFAULT_DEEPSTREAM_IMAGE = process.env.DEEPSTREAM_IMAGE || "camera-monitor-deepstream-runtime:local";
 const TRITON_IMAGE = process.env.TRITON_IMAGE || "nvcr.io/nvidia/tritonserver:24.03-py3-igpu";
 const TRITON_CONTAINER_NAME = process.env.TRITON_CONTAINER_NAME || "jetson-triton-server";
-const TRITON_HTTP_PORT = Number(process.env.TRITON_HTTP_PORT || 8000);
-const TRITON_GRPC_PORT = Number(process.env.TRITON_GRPC_PORT || 8001);
-const TRITON_METRICS_PORT = Number(process.env.TRITON_METRICS_PORT || 8002);
+const TRITON_HTTP_PORT = Number(process.env.TRITON_HTTP_PORT || 8010);
+const TRITON_GRPC_PORT = Number(process.env.TRITON_GRPC_PORT || 8011);
+const TRITON_METRICS_PORT = Number(process.env.TRITON_METRICS_PORT || 8012);
 const MODEL_BUILDER_IMAGE = process.env.MODEL_BUILDER_IMAGE || "deepstream-lpr-model-builder:local";
 const MODEL_BUILDER_BASE_IMAGE = process.env.MODEL_BUILDER_BASE_IMAGE || "ultralytics/ultralytics:latest-jetson-jetpack6";
 const MODEL_BUILDER_DOCKERFILE = process.env.MODEL_BUILDER_DOCKERFILE || path.join(APP_ROOT, "docker", "model-builder.Dockerfile");
@@ -741,6 +741,32 @@ function tritonConfigTemplate(name, platform, maxBatchSize = 0) {
   return `name: "${name}"\nplatform: "${platform}"\nmax_batch_size: ${batch}\n`;
 }
 
+async function inferTritonPlatformFromRepo(name) {
+  const modelDir = path.join(TRITON_MODELS_DIR, sanitizeTritonName(name));
+  const entries = await fsp.readdir(modelDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries.filter((item) => item.isDirectory() && /^\d+$/.test(item.name))) {
+    const files = await fsp.readdir(path.join(modelDir, entry.name)).catch(() => []);
+    if (files.includes("model.onnx")) return "onnxruntime_onnx";
+    if (files.includes("model.plan")) return "tensorrt_plan";
+    if (files.includes("model.py")) return "python";
+  }
+  const config = await fsp.readFile(path.join(modelDir, "config.pbtxt"), "utf8").catch(() => "");
+  const platform = config.match(/platform:\s*"([^"]+)"/)?.[1];
+  if (platform) return platform;
+  if (/backend:\s*"python"/.test(config)) return "python";
+  return "onnxruntime_onnx";
+}
+
+async function rewriteTritonModelConfig(name, options = {}) {
+  const safeName = sanitizeTritonName(name);
+  const platform = tritonPlatformFromFile("", options.platform || await inferTritonPlatformFromRepo(safeName));
+  const maxBatchSize = Math.max(0, Number(options.maxBatchSize ?? 0));
+  const modelDir = path.join(TRITON_MODELS_DIR, safeName);
+  await fsp.mkdir(modelDir, { recursive: true });
+  await fsp.writeFile(path.join(modelDir, "config.pbtxt"), tritonConfigTemplate(safeName, platform, maxBatchSize));
+  return { name: safeName, platform, maxBatchSize };
+}
+
 async function listTritonModels() {
   await fsp.mkdir(TRITON_MODELS_DIR, { recursive: true });
   const entries = await fsp.readdir(TRITON_MODELS_DIR, { withFileTypes: true }).catch(() => []);
@@ -793,15 +819,23 @@ async function readTritonStatus() {
   const container = await inspectContainer(TRITON_CONTAINER_NAME);
   let ready = false;
   let server = {};
-  if (container.running) {
+  let logs = "";
+  if (container.exists) {
+    const logResult = await runCommand("docker", ["logs", "--tail", "80", TRITON_CONTAINER_NAME], { cwd: APP_ROOT }).catch((error) => ({ output: error.message }));
+    logs = tailOutput(logResult.output || "", 8000);
+  }
+  if (container.running && container.status === "running") {
     const health = await tritonHttp("/v2/health/ready").catch((error) => ({ ok: false, body: error.message }));
     ready = Boolean(health.ok);
     server = await tritonHttp("/v2").then((result) => result.body).catch((error) => ({ error: error.message }));
+  } else if (container.status === "restarting") {
+    server = { error: "Managed Triton container is restarting. Check logs and model config." };
   }
   return {
     container,
     ready,
     server,
+    logs,
     image: TRITON_IMAGE,
     modelRepository: TRITON_MODELS_DIR,
     httpPort: TRITON_HTTP_PORT,
@@ -826,6 +860,7 @@ async function startTritonContainer() {
     "--model-repository=/models",
     "--model-control-mode=poll",
     "--repository-poll-secs=5",
+    "--exit-on-error=false",
     "--allow-http=true",
     "--allow-grpc=true",
     "--allow-metrics=true",
@@ -4160,6 +4195,18 @@ app.delete("/api/triton/models/:name", async (req, res) => {
     const name = sanitizeTritonName(req.params.name);
     await fsp.rm(path.join(TRITON_MODELS_DIR, name), { recursive: true, force: true });
     res.json({ models: await listTritonModels(), status: await readTritonStatus() });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/triton/models/:name/config", async (req, res) => {
+  try {
+    const config = await rewriteTritonModelConfig(req.params.name, {
+      platform: req.body?.platform,
+      maxBatchSize: req.body?.maxBatchSize ?? 0
+    });
+    res.json({ config, models: await listTritonModels(), status: await readTritonStatus() });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }

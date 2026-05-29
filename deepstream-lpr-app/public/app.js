@@ -805,8 +805,8 @@ function renderTriton(data = latestTriton) {
       </article>
       <article class="deploy-status-card">
         <span>Ports</span>
-        <strong>${status.httpPort || 8000} / ${status.grpcPort || 8001}</strong>
-        <small>HTTP / gRPC, metrics ${status.metricsPort || 8002}</small>
+        <strong>${status.httpPort || 8010} / ${status.grpcPort || 8011}</strong>
+        <small>HTTP / gRPC, metrics ${status.metricsPort || 8012}</small>
       </article>
     `;
   }
@@ -822,6 +822,7 @@ function renderTriton(data = latestTriton) {
         <div class="actions inline-actions">
           <button type="button" class="secondary" data-use-triton-model="${escapeHtml(model.name)}">Use</button>
           <button type="button" class="secondary" data-copy-triton-url="${escapeHtml(model.name)}">Copy URL</button>
+          <button type="button" class="secondary" data-fix-triton-config="${escapeHtml(model.name)}">Non-batch config</button>
           <button type="button" class="danger" data-delete-triton-model="${escapeHtml(model.name)}">Delete</button>
         </div>
       </article>
@@ -884,6 +885,17 @@ async function uploadTritonModel(button = null) {
 async function deleteTritonModel(name) {
   const result = await withTask("triton", null, `Deleting ${name}...`, async () => {
     return await api(`/api/triton/models/${encodeURIComponent(name)}`, { method: "DELETE" });
+  });
+  renderTriton(result);
+  print(result);
+}
+
+async function fixTritonConfig(name) {
+  const result = await withTask("triton", null, `Fixing ${name} config...`, async () => {
+    return await api(`/api/triton/models/${encodeURIComponent(name)}/config`, {
+      method: "POST",
+      body: JSON.stringify({ maxBatchSize: 0 })
+    });
   });
   renderTriton(result);
   print(result);
@@ -4337,6 +4349,11 @@ els.tritonModelList?.addEventListener("click", (event) => {
   if (useButton) {
     if (els.tritonInferModel) els.tritonInferModel.value = useButton.dataset.useTritonModel;
     updateTritonInferUrl();
+    return;
+  }
+  const fixButton = event.target.closest("[data-fix-triton-config]");
+  if (fixButton) {
+    fixTritonConfig(fixButton.dataset.fixTritonConfig).catch((error) => print(error.message));
     return;
   }
   const button = event.target.closest("[data-delete-triton-model]");
