@@ -2602,6 +2602,10 @@ function modelConfig(slot, model, gieId, networkType, operateOnGieId = null, bat
     lines.push(`operate-on-gie-id=${operateOnGieId}`);
     lines.push("input-object-min-width=1");
     lines.push("input-object-min-height=1");
+    if (!profile.outputInstanceMask) {
+      lines.push("scaling-compute-hw=1");
+      if (!lines.includes("scaling-filter=2")) lines.push("scaling-filter=2");
+    }
     const classIds = normalizeClassIds(operateOnClassIds);
     if (classIds.length) {
       lines.push(`operate-on-class-ids=${classIds.join(";")}`);
