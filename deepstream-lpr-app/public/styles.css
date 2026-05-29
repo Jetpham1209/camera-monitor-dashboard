@@ -1972,6 +1972,16 @@ pre {
   min-height: 80px;
   max-height: 280px;
 }
+.triton-image-test {
+  display: grid;
+  gap: 10px;
+  margin-top: 6px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.triton-image-test h4 {
+  margin: 0;
+}
 @media (max-width: 760px) {
   .shell {
     width: min(100% - 20px, 100%);

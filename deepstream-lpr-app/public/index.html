@@ -370,6 +370,27 @@
                   <button id="testTritonInferBtn" type="button">Test infer</button>
                   <button id="dummyTritonInferBtn" type="button" class="secondary">Dummy zero infer</button>
                 </div>
+                <div class="triton-image-test">
+                  <h4>Test by image</h4>
+                  <div class="grid">
+                    <label>Image <input id="tritonInferImage" type="file" accept=".jpg,.jpeg,.png,.bmp,.webp,image/*" /></label>
+                    <label>Channel order
+                      <select id="tritonInferChannelOrder">
+                        <option value="rgb">RGB</option>
+                        <option value="bgr">BGR</option>
+                      </select>
+                    </label>
+                    <label>Scale
+                      <select id="tritonInferScaleMode">
+                        <option value="0-1">0-1</option>
+                        <option value="0-255">0-255</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="actions inline-actions">
+                    <button id="testTritonImageInferBtn" type="button">Test image infer</button>
+                  </div>
+                </div>
                 <pre id="tritonInferOutput" class="triton-infer-output"></pre>
               </article>
             </div>

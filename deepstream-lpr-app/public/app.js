@@ -215,6 +215,10 @@ const els = {
   tritonInferPayload: document.querySelector("#tritonInferPayload"),
   testTritonInferBtn: document.querySelector("#testTritonInferBtn"),
   dummyTritonInferBtn: document.querySelector("#dummyTritonInferBtn"),
+  tritonInferImage: document.querySelector("#tritonInferImage"),
+  tritonInferChannelOrder: document.querySelector("#tritonInferChannelOrder"),
+  tritonInferScaleMode: document.querySelector("#tritonInferScaleMode"),
+  testTritonImageInferBtn: document.querySelector("#testTritonImageInferBtn"),
   tritonInferOutput: document.querySelector("#tritonInferOutput")
 };
 
@@ -1025,6 +1029,24 @@ async function dummyTritonInfer(button = null) {
     return await api(`/api/triton/models/${encodeURIComponent(modelName)}/infer-dummy`, {
       method: "POST",
       body: JSON.stringify({ version })
+    });
+  });
+  setTritonInferOutput(result);
+}
+
+async function testTritonImageInfer(button = null) {
+  const modelName = els.tritonInferModel?.value || "";
+  if (!modelName) return print("Chon model Triton truoc khi test image infer.");
+  if (!els.tritonInferImage?.files?.length) return print("Chon anh truoc khi test image infer.");
+  const form = new FormData();
+  form.append("image", els.tritonInferImage.files[0]);
+  form.append("version", els.tritonInferVersion?.value || "");
+  form.append("channelOrder", els.tritonInferChannelOrder?.value || "rgb");
+  form.append("scaleMode", els.tritonInferScaleMode?.value || "0-1");
+  const result = await withTask("triton", button, "Running Triton image infer...", async () => {
+    return await api(`/api/triton/models/${encodeURIComponent(modelName)}/infer-image`, {
+      method: "POST",
+      body: form
     });
   });
   setTritonInferOutput(result);
@@ -4495,6 +4517,10 @@ els.testTritonInferBtn?.addEventListener("click", () => testTritonInfer(els.test
   print(error.message);
 }));
 els.dummyTritonInferBtn?.addEventListener("click", () => dummyTritonInfer(els.dummyTritonInferBtn).catch((error) => {
+  if (els.tritonInferOutput) els.tritonInferOutput.textContent = error.message;
+  print(error.message);
+}));
+els.testTritonImageInferBtn?.addEventListener("click", () => testTritonImageInfer(els.testTritonImageInferBtn).catch((error) => {
   if (els.tritonInferOutput) els.tritonInferOutput.textContent = error.message;
   print(error.message);
 }));

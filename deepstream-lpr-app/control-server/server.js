@@ -357,6 +357,47 @@ function runCommandWithInput(command, args, options = {}) {
   });
 }
 
+function runBinaryCommand(command, args, options = {}) {
+  return new Promise((resolve) => {
+    const { timeoutMs = 30000, maxBufferBytes = 100 * 1024 * 1024, ...spawnOptions } = options;
+    const child = spawn(command, args, {
+      ...spawnOptions,
+      shell: process.platform === "win32"
+    });
+    const stdout = [];
+    const stderr = [];
+    let stdoutBytes = 0;
+    let settled = false;
+    const timer = setTimeout(() => {
+      stderr.push(Buffer.from(`\nCommand timed out after ${timeoutMs}ms.`));
+      child.kill("SIGKILL");
+    }, timeoutMs);
+    const finish = (code, extra = "") => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (extra) stderr.push(Buffer.from(extra));
+      resolve({
+        code,
+        stdout: Buffer.concat(stdout, stdoutBytes),
+        stderr: Buffer.concat(stderr).toString("utf8")
+      });
+    };
+    child.stdout.on("data", (chunk) => {
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > maxBufferBytes) {
+        stderr.push(Buffer.from(`\nCommand exceeded max buffer ${maxBufferBytes} bytes.`));
+        child.kill("SIGKILL");
+        return;
+      }
+      stdout.push(chunk);
+    });
+    child.stderr.on("data", (chunk) => { stderr.push(chunk); });
+    child.on("close", (code) => finish(code));
+    child.on("error", (error) => finish(1, error.message));
+  });
+}
+
 async function executeAutomationService(service, environment, payload) {
   const started = Date.now();
   const servicePayload = {
@@ -835,6 +876,112 @@ function dummyTritonPayloadFromMetadata(metadata = {}, maxElements = 2000000) {
         data: Array.from({ length: elements }, () => zeroValueForTritonDatatype(input.datatype))
       };
     })
+  };
+}
+
+function imageInputSpecFromMetadata(metadata = {}) {
+  const inputs = Array.isArray(metadata.inputs) ? metadata.inputs : [];
+  const input = inputs.find((item) => {
+    const shape = Array.isArray(item.shape) ? item.shape.map(Number) : [];
+    return shape.length === 4 && (shape[1] === 3 || shape[3] === 3);
+  }) || inputs[0];
+  if (!input) throw new Error("Triton model metadata has no inputs.");
+  const shape = (input.shape || []).map((dim) => Number(dim) > 0 ? Number(dim) : 1);
+  if (shape.length !== 4) {
+    throw new Error(`Image infer currently supports 4D image inputs only. Found ${input.name}: [${shape.join(", ")}].`);
+  }
+  const nchw = shape[1] === 3;
+  const nhwc = shape[3] === 3;
+  if (!nchw && !nhwc) {
+    throw new Error(`Image infer expects channel dimension 3. Found ${input.name}: [${shape.join(", ")}].`);
+  }
+  const height = nchw ? shape[2] : shape[1];
+  const width = nchw ? shape[3] : shape[2];
+  if (height <= 0 || width <= 0) throw new Error(`Invalid image input shape for ${input.name}.`);
+  return {
+    name: input.name,
+    datatype: input.datatype || "FP32",
+    shape,
+    layout: nchw ? "NCHW" : "NHWC",
+    height,
+    width
+  };
+}
+
+async function tritonImagePayloadFromFile(imagePath, metadata = {}, options = {}) {
+  const input = imageInputSpecFromMetadata(metadata);
+  const datatype = String(input.datatype || "").toUpperCase();
+  if (datatype !== "FP32") {
+    throw new Error(`Image infer currently supports FP32 image inputs. Found ${input.name}: ${input.datatype}.`);
+  }
+  const channelOrder = String(options.channelOrder || "rgb").toLowerCase() === "bgr" ? "bgr" : "rgb";
+  const scaleMode = String(options.scaleMode || "0-1");
+  const scale = scaleMode === "0-255" ? 1 : 1 / 255;
+  const expectedBytes = input.width * input.height * 3;
+  const result = await runBinaryCommand(ffmpegExecutable(), [
+    "-v", "error",
+    "-i", imagePath,
+    "-frames:v", "1",
+    "-vf", `scale=${input.width}:${input.height},format=rgb24`,
+    "-f", "rawvideo",
+    "pipe:1"
+  ], {
+    cwd: APP_ROOT,
+    timeoutMs: 30000,
+    maxBufferBytes: expectedBytes + 1024
+  });
+  if (result.code !== 0) {
+    throw new Error(`Cannot preprocess image with ffmpeg.\n${result.stderr}`);
+  }
+  if (result.stdout.length !== expectedBytes) {
+    throw new Error(`Unexpected preprocessed image size: ${result.stdout.length} bytes, expected ${expectedBytes}.`);
+  }
+  const rgb = result.stdout;
+  const pixels = input.width * input.height;
+  let data;
+  if (input.layout === "NCHW") {
+    data = new Array(pixels * 3);
+    for (let i = 0; i < pixels; i += 1) {
+      const base = i * 3;
+      const r = rgb[base];
+      const g = rgb[base + 1];
+      const b = rgb[base + 2];
+      data[i] = (channelOrder === "bgr" ? b : r) * scale;
+      data[pixels + i] = g * scale;
+      data[(pixels * 2) + i] = (channelOrder === "bgr" ? r : b) * scale;
+    }
+  } else {
+    data = new Array(pixels * 3);
+    for (let i = 0; i < pixels; i += 1) {
+      const base = i * 3;
+      const r = rgb[base];
+      const g = rgb[base + 1];
+      const b = rgb[base + 2];
+      data[base] = (channelOrder === "bgr" ? b : r) * scale;
+      data[base + 1] = g * scale;
+      data[base + 2] = (channelOrder === "bgr" ? r : b) * scale;
+    }
+  }
+  return {
+    payload: {
+      inputs: [{
+        name: input.name,
+        shape: input.shape,
+        datatype: input.datatype || "FP32",
+        data
+      }]
+    },
+    preprocessing: {
+      inputName: input.name,
+      shape: input.shape,
+      layout: input.layout,
+      width: input.width,
+      height: input.height,
+      datatype: input.datatype || "FP32",
+      channelOrder,
+      scaleMode,
+      elements: data.length
+    }
   };
 }
 
@@ -1430,6 +1577,18 @@ const uploadTritonModel = multer({
     }
     if (![".onnx", ".plan", ".engine", ".py"].includes(ext)) {
       cb(new Error("Triton model file must be .onnx, .plan, .engine or .py."));
+      return;
+    }
+    cb(null, true);
+  }
+});
+
+const uploadTritonInferImage = multer({
+  dest: TRITON_UPLOAD_DIR,
+  fileFilter(_req, file, cb) {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (![".jpg", ".jpeg", ".png", ".bmp", ".webp"].includes(ext)) {
+      cb(new Error("Triton infer image must be .jpg, .jpeg, .png, .bmp, or .webp."));
       return;
     }
     cb(null, true);
@@ -4343,6 +4502,50 @@ app.post("/api/triton/models/:name/infer-dummy", async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/triton/models/:name/infer-image", uploadTritonInferImage.single("image"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No image uploaded." });
+    const name = sanitizeTritonName(req.params.name);
+    const version = String(req.body?.version || "").trim();
+    const metadataResult = await tritonHttp(tritonMetadataPath(name, version));
+    if (!metadataResult.ok) {
+      return res.status(502).json({
+        ok: false,
+        status: metadataResult.status,
+        error: "Could not load Triton model metadata.",
+        body: metadataResult.body
+      });
+    }
+    const { payload, preprocessing } = await tritonImagePayloadFromFile(req.file.path, metadataResult.body, {
+      channelOrder: req.body?.channelOrder,
+      scaleMode: req.body?.scaleMode
+    });
+    const pathName = tritonInferPath(name, version);
+    const started = Date.now();
+    const result = await tritonHttp(pathName, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    res.status(result.ok ? 200 : 502).json({
+      ok: result.ok,
+      status: result.status,
+      durationMs: Date.now() - started,
+      inferPath: pathName,
+      image: {
+        originalName: req.file.originalname,
+        size: req.file.size
+      },
+      preprocessing,
+      body: summarizeTritonBody(result.body)
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  } finally {
+    if (req.file?.path) await fsp.unlink(req.file.path).catch(() => {});
   }
 });
 
