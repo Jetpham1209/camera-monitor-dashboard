@@ -245,13 +245,33 @@ let automationConfig = { services: [], environments: [], workflows: [] };
 let automationRuns = [];
 let latestTriton = { status: {}, models: [] };
 let latestTritonMetadata = null;
+let latestTritonMetadataKey = "";
 
 function print(value) {
   els.output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
 }
 
+async function copyText(text) {
+  const value = String(text || "");
+  if (!value) throw new Error("Nothing to copy.");
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+  if (!copied) throw new Error("Browser blocked clipboard access. Select and copy the text manually.");
+}
+
 async function copyOutput() {
-  await navigator.clipboard.writeText(els.output.textContent || "");
+  await copyText(els.output.textContent || "");
   setTaskStatus("output", "success", "Output copied.");
 }
 
@@ -785,6 +805,16 @@ function updateTritonInferUrl() {
   els.tritonInferUrl.value = modelName ? tritonPublicInferUrl(modelName, version) : "";
 }
 
+function currentTritonMetadataKey() {
+  return `${els.tritonInferModel?.value || ""}::${els.tritonInferVersion?.value || ""}`;
+}
+
+function setTritonInferOutput(value) {
+  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  if (els.tritonInferOutput) els.tritonInferOutput.textContent = text;
+  print(value);
+}
+
 function renderTriton(data = latestTriton) {
   latestTriton = data || { status: {}, models: [] };
   const status = latestTriton.status || {};
@@ -908,7 +938,8 @@ async function fixTritonConfig(name) {
 async function copyTritonInferUrl(modelName = "") {
   const url = modelName ? tritonPublicInferUrl(modelName) : els.tritonInferUrl.value;
   if (!url) return print("No Triton infer URL to copy.");
-  await navigator.clipboard.writeText(url);
+  await copyText(url);
+  setTritonInferOutput(`Copied Triton infer URL:\n${url}`);
   setTaskStatus("triton", "success", "Triton infer URL copied.");
 }
 
@@ -949,14 +980,26 @@ async function loadTritonMetadata(button = null) {
     return await api(`/api/triton/models/${encodeURIComponent(modelName)}/metadata${query}`);
   });
   latestTritonMetadata = result;
-  if (els.tritonInferOutput) els.tritonInferOutput.textContent = JSON.stringify(result, null, 2);
-  print(result);
+  latestTritonMetadataKey = currentTritonMetadataKey();
+  setTritonInferOutput(result);
   return result;
 }
 
-function useSampleTritonPayload() {
+async function useSampleTritonPayload(button = null) {
+  if (!latestTritonMetadata || latestTritonMetadataKey !== currentTritonMetadataKey()) {
+    await loadTritonMetadata(button);
+  }
   const payload = sampleTritonPayload();
   els.tritonInferPayload.value = JSON.stringify(payload, null, 2);
+  setTritonInferOutput({
+    message: "Sample payload generated from Triton metadata.",
+    inputs: payload.inputs.map((input) => ({
+      name: input.name,
+      shape: input.shape,
+      datatype: input.datatype,
+      elements: input.data.length
+    }))
+  });
   setTaskStatus("triton", "success", "Sample payload generated from metadata.");
 }
 
@@ -971,8 +1014,7 @@ async function testTritonInfer(button = null) {
       body: JSON.stringify({ version, payload })
     });
   });
-  if (els.tritonInferOutput) els.tritonInferOutput.textContent = JSON.stringify(result, null, 2);
-  print(result);
+  setTritonInferOutput(result);
 }
 
 async function dummyTritonInfer(button = null) {
@@ -985,8 +1027,7 @@ async function dummyTritonInfer(button = null) {
       body: JSON.stringify({ version })
     });
   });
-  if (els.tritonInferOutput) els.tritonInferOutput.textContent = JSON.stringify(result, null, 2);
-  print(result);
+  setTritonInferOutput(result);
 }
 
 function renderAgentStatus(status = {}) {
@@ -4414,7 +4455,10 @@ els.tritonModelList?.addEventListener("click", (event) => {
   const useButton = event.target.closest("[data-use-triton-model]");
   if (useButton) {
     if (els.tritonInferModel) els.tritonInferModel.value = useButton.dataset.useTritonModel;
+    latestTritonMetadata = null;
+    latestTritonMetadataKey = "";
     updateTritonInferUrl();
+    setTaskStatus("triton", "success", `Selected Triton model ${useButton.dataset.useTritonModel}.`);
     return;
   }
   const fixButton = event.target.closest("[data-fix-triton-config]");
@@ -4426,19 +4470,25 @@ els.tritonModelList?.addEventListener("click", (event) => {
   if (!button) return;
   deleteTritonModel(button.dataset.deleteTritonModel).catch((error) => print(error.message));
 });
-els.tritonInferModel?.addEventListener("change", updateTritonInferUrl);
-els.tritonInferVersion?.addEventListener("input", updateTritonInferUrl);
+els.tritonInferModel?.addEventListener("change", () => {
+  latestTritonMetadata = null;
+  latestTritonMetadataKey = "";
+  updateTritonInferUrl();
+});
+els.tritonInferVersion?.addEventListener("input", () => {
+  latestTritonMetadata = null;
+  latestTritonMetadataKey = "";
+  updateTritonInferUrl();
+});
 els.copyTritonInferUrlBtn?.addEventListener("click", () => copyTritonInferUrl().catch((error) => print(error.message)));
 els.loadTritonMetadataBtn?.addEventListener("click", () => loadTritonMetadata(els.loadTritonMetadataBtn).catch((error) => {
   if (els.tritonInferOutput) els.tritonInferOutput.textContent = error.message;
   print(error.message);
 }));
 els.sampleTritonPayloadBtn?.addEventListener("click", () => {
-  try {
-    useSampleTritonPayload();
-  } catch (error) {
-    print(error.message);
-  }
+  useSampleTritonPayload(els.sampleTritonPayloadBtn).catch((error) => {
+    setTritonInferOutput(error.message);
+  });
 });
 els.testTritonInferBtn?.addEventListener("click", () => testTritonInfer(els.testTritonInferBtn).catch((error) => {
   if (els.tritonInferOutput) els.tritonInferOutput.textContent = error.message;
