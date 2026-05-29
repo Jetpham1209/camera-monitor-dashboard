@@ -408,6 +408,13 @@
                   <div class="actions inline-actions">
                     <button id="testTritonImageInferBtn" type="button">Test image infer</button>
                   </div>
+                  <div id="tritonImagePreview" class="triton-image-preview">
+                    <div class="triton-image-canvas-wrap">
+                      <canvas id="tritonImageCanvas"></canvas>
+                      <span>No image test result yet.</span>
+                    </div>
+                    <div id="tritonDetectionList" class="triton-detection-list"></div>
+                  </div>
                 </div>
                 <pre id="tritonInferOutput" class="triton-infer-output"></pre>
               </article>

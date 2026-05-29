@@ -224,6 +224,9 @@ const els = {
   tritonInferConfidence: document.querySelector("#tritonInferConfidence"),
   tritonInferIou: document.querySelector("#tritonInferIou"),
   testTritonImageInferBtn: document.querySelector("#testTritonImageInferBtn"),
+  tritonImagePreview: document.querySelector("#tritonImagePreview"),
+  tritonImageCanvas: document.querySelector("#tritonImageCanvas"),
+  tritonDetectionList: document.querySelector("#tritonDetectionList"),
   tritonInferOutput: document.querySelector("#tritonInferOutput")
 };
 
@@ -840,6 +843,12 @@ function tritonDecoderOptions(selected = "raw", includeDefault = false) {
   )).join("");
 }
 
+function tritonLabelPreview(labels = []) {
+  if (!labels.length) return "No labels";
+  const shown = labels.slice(0, 8).map(escapeHtml).join(", ");
+  return `${shown}${labels.length > 8 ? ` +${labels.length - 8}` : ""}`;
+}
+
 function renderTriton(data = latestTriton) {
   latestTriton = data || { status: {}, models: [] };
   const status = latestTriton.status || {};
@@ -871,14 +880,23 @@ function renderTriton(data = latestTriton) {
   }
   if (els.tritonModelList) {
     els.tritonModelList.innerHTML = models.length ? models.map((model) => `
-      <article class="automation-row">
-        <div>
-          <strong>${escapeHtml(model.name)}</strong>
-          <span>${model.versions?.length ? model.versions.map((item) => `v${item.version}: ${item.files.join(", ")}`).join(" | ") : "No version folder"}</span>
-          <small>${model.hasConfig ? "config.pbtxt available" : "missing config.pbtxt"} | decoder ${escapeHtml(model.decoderProfile || "raw")} | ${model.labels?.count || 0} label(s)</small>
+      <article class="triton-repo-item">
+        <div class="triton-repo-main">
+          <div class="triton-repo-head">
+            <div>
+              <strong>${escapeHtml(model.name)}</strong>
+              <span>${model.versions?.length ? model.versions.map((item) => `v${item.version}: ${item.files.join(", ")}`).join(" | ") : "No version folder"}</span>
+            </div>
+            <div class="triton-repo-badges">
+              <small>${model.hasConfig ? "config" : "missing config"}</small>
+              <small>${escapeHtml(model.decoderProfile || "raw")}</small>
+              <small>${model.labels?.count || 0} labels</small>
+            </div>
+          </div>
           <code class="triton-infer-url">${escapeHtml(tritonPublicInferUrl(model.name))}</code>
+          <small class="triton-label-preview">${tritonLabelPreview(model.labels?.preview || [])}</small>
         </div>
-        <div class="actions inline-actions">
+        <div class="actions inline-actions triton-repo-actions">
           <button type="button" class="secondary" data-use-triton-model="${escapeHtml(model.name)}">Use</button>
           <button type="button" class="secondary" data-copy-triton-url="${escapeHtml(model.name)}">Copy URL</button>
           <button type="button" class="secondary" data-fix-triton-config="${escapeHtml(model.name)}">Non-batch config</button>
@@ -886,16 +904,16 @@ function renderTriton(data = latestTriton) {
         </div>
       </article>
       <div class="triton-model-controls" data-triton-model-controls="${escapeHtml(model.name)}">
-        <label>Decoder
+        <label class="triton-control-decoder">Decoder
           <select data-triton-decoder-select="${escapeHtml(model.name)}">
             ${tritonDecoderOptions(model.decoderProfile || "raw")}
           </select>
         </label>
-        <label>Upload labels.txt <input type="file" accept=".txt" data-triton-label-file="${escapeHtml(model.name)}" /></label>
+        <label class="triton-control-upload">Upload labels.txt <input type="file" accept=".txt" data-triton-label-file="${escapeHtml(model.name)}" /></label>
         <label class="triton-label-editor">Labels
-          <textarea rows="4" data-triton-labels-text="${escapeHtml(model.name)}" placeholder="one label per line">${escapeHtml(model.labels?.text || "")}</textarea>
+          <textarea rows="8" data-triton-labels-text="${escapeHtml(model.name)}" placeholder="one label per line">${escapeHtml(model.labels?.text || "")}</textarea>
         </label>
-        <div class="actions inline-actions">
+        <div class="actions inline-actions triton-control-actions">
           <button type="button" class="secondary" data-save-triton-meta="${escapeHtml(model.name)}">Save labels/profile</button>
           <button type="button" class="secondary" data-upload-triton-labels="${escapeHtml(model.name)}">Upload labels</button>
         </div>
@@ -1101,12 +1119,79 @@ async function dummyTritonInfer(button = null) {
   setTritonInferOutput(result);
 }
 
+function drawTritonImageResult(file, result) {
+  const canvas = els.tritonImageCanvas;
+  const list = els.tritonDetectionList;
+  if (!canvas || !list || !file) return;
+  const wrapper = els.tritonImagePreview;
+  const image = new Image();
+  const objectUrl = URL.createObjectURL(file);
+  const detections = result?.decode?.detections || [];
+  const warnings = result?.decode?.warnings || [];
+  image.onload = () => {
+    const maxWidth = 920;
+    const scale = Math.min(1, maxWidth / image.naturalWidth);
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, width, height);
+    ctx.drawImage(image, 0, 0, width, height);
+    ctx.lineWidth = Math.max(2, Math.round(width / 420));
+    ctx.font = `${Math.max(12, Math.round(width / 60))}px system-ui, sans-serif`;
+    detections.forEach((detection, index) => {
+      const box = detection.bboxOriginal || detection.bboxResized || {};
+      const x = Number(box.left || 0) * scale;
+      const y = Number(box.top || 0) * scale;
+      const w = Number(box.width || 0) * scale;
+      const h = Number(box.height || 0) * scale;
+      const hue = (index * 71) % 360;
+      const stroke = `hsl(${hue} 85% 45%)`;
+      ctx.strokeStyle = stroke;
+      ctx.fillStyle = "rgba(8, 15, 30, 0.82)";
+      ctx.strokeRect(x, y, w, h);
+      const label = `${detection.label || `class_${detection.classId}`} ${(Number(detection.confidence || 0) * 100).toFixed(1)}%`;
+      const metrics = ctx.measureText(label);
+      const labelHeight = Math.max(20, Math.round(width / 38));
+      const labelY = y > labelHeight ? y - labelHeight : y;
+      ctx.fillRect(x, labelY, Math.min(width - x, metrics.width + 12), labelHeight);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(label, x + 6, labelY + Math.round(labelHeight * 0.7));
+    });
+    URL.revokeObjectURL(objectUrl);
+    if (wrapper) wrapper.classList.add("has-result");
+    list.innerHTML = `
+      <div class="triton-detection-summary">
+        <strong>${detections.length}</strong>
+        <span>detection(s)</span>
+      </div>
+      ${warnings.length ? `<div class="triton-warning">${warnings.map(escapeHtml).join("<br>")}</div>` : ""}
+      <div class="triton-detection-items">
+        ${detections.length ? detections.map((detection) => `
+          <article>
+            <strong>${escapeHtml(detection.label || `class_${detection.classId}`)}</strong>
+            <span>${(Number(detection.confidence || 0) * 100).toFixed(2)}%</span>
+            <small>x ${Number(detection.bboxOriginal?.left || 0).toFixed(1)}, y ${Number(detection.bboxOriginal?.top || 0).toFixed(1)}, w ${Number(detection.bboxOriginal?.width || 0).toFixed(1)}, h ${Number(detection.bboxOriginal?.height || 0).toFixed(1)}</small>
+          </article>
+        `).join("") : '<div class="empty">No decoded detection. Try lower confidence, switch RGB/BGR, or check labels/decoder.</div>'}
+      </div>
+    `;
+  };
+  image.onerror = () => {
+    URL.revokeObjectURL(objectUrl);
+    list.innerHTML = '<div class="empty">Cannot preview selected image.</div>';
+  };
+  image.src = objectUrl;
+}
+
 async function testTritonImageInfer(button = null) {
   const modelName = els.tritonInferModel?.value || "";
   if (!modelName) return print("Chon model Triton truoc khi test image infer.");
   if (!els.tritonInferImage?.files?.length) return print("Chon anh truoc khi test image infer.");
+  const file = els.tritonInferImage.files[0];
   const form = new FormData();
-  form.append("image", els.tritonInferImage.files[0]);
+  form.append("image", file);
   form.append("version", els.tritonInferVersion?.value || "");
   form.append("channelOrder", els.tritonInferChannelOrder?.value || "rgb");
   form.append("scaleMode", els.tritonInferScaleMode?.value || "0-1");
@@ -1119,6 +1204,7 @@ async function testTritonImageInfer(button = null) {
       body: form
     });
   });
+  drawTritonImageResult(file, result);
   setTritonInferOutput(result);
 }
 
