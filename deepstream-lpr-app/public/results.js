@@ -1,4 +1,5 @@
 const els = {
+  app: document.querySelector("#resultAppFilter"),
   date: document.querySelector("#resultDateFilter"),
   source: document.querySelector("#resultSourceFilter"),
   limit: document.querySelector("#resultLimit"),
@@ -46,6 +47,16 @@ function syncSourceOptions(config, results = []) {
   if (sources.some(([id]) => id === current)) els.source.value = current;
 }
 
+function syncAppOptions(config) {
+  if (!els.app) return;
+  const current = els.app.value;
+  const apps = Array.isArray(config.deployApps) ? config.deployApps : [];
+  els.app.innerHTML = `<option value="">Active / legacy app</option>${apps.map((app) => `
+    <option value="${escapeHtml(app.id)}">${escapeHtml(app.name || app.id)}</option>
+  `).join("")}`;
+  if (apps.some((app) => app.id === current)) els.app.value = current;
+}
+
 function renderResults(results = []) {
   if (!results.length) {
     els.results.innerHTML = '<div class="empty">No captures found for these filters.</div>';
@@ -70,6 +81,7 @@ function renderResults(results = []) {
 
 function applyQuery() {
   const params = new URLSearchParams(window.location.search);
+  if (params.get("appId") && els.app) els.app.value = params.get("appId");
   if (params.get("date")) els.date.value = params.get("date");
   if (params.get("source")) els.source.value = params.get("source");
   if (params.get("limit")) els.limit.value = params.get("limit");
@@ -77,6 +89,7 @@ function applyQuery() {
 
 function updateQuery() {
   const params = new URLSearchParams();
+  if (els.app?.value) params.set("appId", els.app.value);
   if (els.date.value) params.set("date", els.date.value);
   if (els.source.value) params.set("source", els.source.value);
   if (els.limit.value) params.set("limit", els.limit.value);
@@ -89,10 +102,12 @@ async function loadResults() {
   updateQuery();
   const params = new URLSearchParams();
   if (els.date.value) params.set("date", els.date.value);
+  if (els.app?.value) params.set("appId", els.app.value);
   if (els.source.value) params.set("source", els.source.value);
   params.set("limit", els.limit.value || "100");
   const result = await api(`/api/deploy/results?${params}`);
   const config = await api("/api/config");
+  syncAppOptions(config);
   syncSourceOptions(config, result.results || []);
   renderResults(result.results || []);
   setSummary("success", `Loaded ${(result.results || []).length} result(s).`);
@@ -100,6 +115,7 @@ async function loadResults() {
 
 async function init() {
   const config = await api("/api/config");
+  syncAppOptions(config);
   syncSourceOptions(config, []);
   applyQuery();
   await loadResults().catch((error) => {
@@ -108,6 +124,7 @@ async function init() {
 }
 
 els.load.addEventListener("click", () => loadResults().catch((error) => setSummary("failed", error.message)));
+els.app?.addEventListener("change", () => loadResults().catch((error) => setSummary("failed", error.message)));
 els.date.addEventListener("change", () => loadResults().catch((error) => setSummary("failed", error.message)));
 els.source.addEventListener("change", () => loadResults().catch((error) => setSummary("failed", error.message)));
 els.limit.addEventListener("change", () => loadResults().catch((error) => setSummary("failed", error.message)));

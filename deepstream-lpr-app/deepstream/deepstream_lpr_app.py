@@ -43,11 +43,13 @@ class LprRuntime:
     def __init__(self, config):
         self.config = config
         self.app_root = Path(config["appRoot"])
-        self.runtime_dir = self.app_root / "runtime"
+        runtime_dir = config.get("runtimeDir")
+        self.runtime_dir = Path(runtime_dir) if runtime_dir else self.app_root / "runtime"
         self.capture_dir = self.runtime_dir / "captures"
         self.events_file = self.runtime_dir / "events.jsonl"
         self.status_file = self.runtime_dir / "status.json"
-        self.connections_file = self.runtime_dir / "connections.json"
+        connections_file = config.get("connectionsFile")
+        self.connections_file = Path(connections_file) if connections_file else self.app_root / "runtime" / "connections.json"
         self.capture_dir.mkdir(parents=True, exist_ok=True)
         self.last_capture_error = ""
         self.streams = self.normalize_streams(config)

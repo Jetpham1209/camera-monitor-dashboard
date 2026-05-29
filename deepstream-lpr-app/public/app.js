@@ -1875,33 +1875,37 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function formConfig() {
+function formConfig(targetDeployAppId = activeDeployAppId) {
   const cameras = readCameraCards();
   const deployProfiles = readDeployApps(cameras);
-  const activeDeployApp = deployProfiles.find((app) => app.active)
-    || deployProfiles.find((app) => app.id === activeDeployAppId)
+  const activeDeployApp = deployProfiles.find((app) => app.id === targetDeployAppId)
+    || deployProfiles.find((app) => app.active)
     || deployProfiles[0]
     || defaultDeployApp(0, cameras);
+  const selectedDeployAppId = targetDeployAppId && deployProfiles.some((app) => app.id === targetDeployAppId)
+    ? targetDeployAppId
+    : activeDeployApp.id;
+  const targetDeployApp = deployProfiles.find((app) => app.id === selectedDeployAppId) || activeDeployApp;
   activeDeployAppId = activeDeployApp.id;
   const normalizedDeployProfiles = deployProfiles.map((app) => ({
     ...app,
     active: app.id === activeDeployApp.id
   }));
-  const selectedCameraIds = new Set(activeDeployApp.cameraIds || []);
+  const selectedCameraIds = new Set(targetDeployApp.cameraIds || []);
   return {
     streams: cameras.map((camera) => ({
-      ...applyDeployCameraSettings(camera, activeDeployApp),
+      ...applyDeployCameraSettings(camera, targetDeployApp),
       enabled: selectedCameraIds.has(camera.id)
     })),
     streamWidth: Number(els.streamWidth.value),
     streamHeight: Number(els.streamHeight.value),
     deepstreamImage: els.deepstreamImage.value.trim(),
-    processor: { type: normalizeProcessorType(activeDeployApp.processorType) },
+    processor: { type: normalizeProcessorType(targetDeployApp.processorType) },
     testProcessorType: normalizeProcessorType(els.testProcessorType?.value || confirmedTestProcessorType),
-    pipelineStages: normalizePipelineStages(activeDeployApp.pipelineStages),
-    selectedModels: selectedModelsFromStages(activeDeployApp.pipelineStages),
+    pipelineStages: normalizePipelineStages(targetDeployApp.pipelineStages),
+    selectedModels: selectedModelsFromStages(targetDeployApp.pipelineStages),
     deployApps: normalizedDeployProfiles,
-    activeDeployAppId,
+    activeDeployAppId: targetDeployApp.id,
     ocrPostprocess: readOcrPostprocess()
   };
 }
@@ -2610,6 +2614,8 @@ function renderDeployAppCard(app, index, cameras) {
           </select>
         </label>
         <div class="actions inline-actions">
+          <button type="button" class="primary" data-deploy-single-app="${escapeHtml(app.id)}">Deploy / Update</button>
+          <button type="button" class="danger" data-stop-single-app="${escapeHtml(app.id)}">Stop</button>
           <button type="button" data-remove-deploy-app="${index}" ${deployApps.length <= 1 ? "disabled" : ""}>Remove app</button>
         </div>
       </div>
@@ -3248,6 +3254,15 @@ function attachDeployAppHandlers() {
       renderDeployApps(current.length ? current : [defaultDeployApp(0, readCameraCards())]);
       persistConfigAfterDeployAppChange("DeepStream app removed and saved.", button).catch((error) => print(error.message));
     });
+  });
+  document.querySelectorAll("[data-deploy-single-app]").forEach((button) => {
+    button.addEventListener("click", () => deploySingleApp(button.dataset.deploySingleApp, button).catch((error) => {
+      renderCheckpoints(error.checkpoints || []);
+      print(error.message || error);
+    }));
+  });
+  document.querySelectorAll("[data-stop-single-app]").forEach((button) => {
+    button.addEventListener("click", () => stopSingleApp(button.dataset.stopSingleApp, button).catch((error) => print(error.message || error)));
   });
   document.querySelectorAll("[data-capture-deploy-sample]").forEach((button) => {
     button.addEventListener("click", () => captureDeploySample(button.dataset.captureDeploySample, button).catch((error) => print(error.message)));
@@ -4859,9 +4874,35 @@ async function deploy() {
   print(result);
 }
 
+async function deploySingleApp(appId, button = null) {
+  const app = readDeployApps().find((item) => item.id === appId);
+  if (!app) throw new Error("Deploy app not found.");
+  renderCheckpoints([
+    { order: 1, label: `Deploy ${app.name || app.id}`, status: "running", message: "Starting deploy...", durationMs: null }
+  ]);
+  const result = await withTask("deploy", button, `Deploying ${app.name || app.id}...`, async () => {
+    return await api(`/api/deploy/apps/${encodeURIComponent(app.id)}/deploy`, {
+      method: "POST",
+      body: JSON.stringify(formConfig(app.id))
+    });
+  });
+  renderCheckpoints(result.checkpoints || []);
+  await refreshDeployStatus().catch(() => {});
+  print(result);
+}
+
 async function stop(button = null) {
-  const result = await withTask("stop", button, "Stopping...", async () => {
-    return await api("/api/stop", { method: "POST" });
+  const activeApp = readDeployApps().find((app) => app.active) || readDeployApps()[0];
+  if (activeApp?.id) return await stopSingleApp(activeApp.id, button);
+  const result = await withTask("stop", button, "Stopping...", async () => api("/api/stop", { method: "POST" }));
+  await refreshDeployStatus().catch(() => {});
+  print(result);
+}
+
+async function stopSingleApp(appId, button = null) {
+  const app = readDeployApps().find((item) => item.id === appId);
+  const result = await withTask("stop", button, `Stopping ${app?.name || appId}...`, async () => {
+    return await api(`/api/deploy/apps/${encodeURIComponent(appId)}/stop`, { method: "POST" });
   });
   await refreshDeployStatus().catch(() => {});
   print(result);
@@ -4880,6 +4921,7 @@ function renderDeployStatus(status = {}) {
   const container = status.container || {};
   const deepstream = status.deepstream || {};
   const sources = deepstream.sources || [];
+  const appStatuses = Array.isArray(status.apps) ? status.apps : [];
   const activeApp = deployApps.find((app) => app.active) || deployApps[0] || null;
   if (els.stopRunningDeployBtn) {
     els.stopRunningDeployBtn.disabled = !container.running;
@@ -4916,6 +4958,13 @@ function renderDeployStatus(status = {}) {
         <small>No source status yet.</small>
       </article>
     `}
+    ${appStatuses.length > 1 ? appStatuses.map((item) => `
+      <article class="deploy-status-card ${item.container?.running ? "success" : item.container?.exists ? "" : "failed"}">
+        <span>${escapeHtml(item.appName || item.appId)}</span>
+        <strong>${item.container?.running ? "Running" : item.container?.exists ? "Stopped" : "Missing"}</strong>
+        <small>${escapeHtml(item.containerName || item.appId)} - ${escapeHtml(item.deepstream?.state || "unknown")}</small>
+      </article>
+    `).join("") : ""}
   `;
   renderMainDashboard();
 }

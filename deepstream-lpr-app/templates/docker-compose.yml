@@ -1,7 +1,7 @@
 services:
   deepstream-lpr:
     image: ${DEEPSTREAM_IMAGE}
-    container_name: deepstream-lpr
+    container_name: ${CONTAINER_NAME}
     network_mode: host
     ipc: host
     privileged: true
@@ -14,5 +14,5 @@ services:
     volumes:
       - ${APP_ROOT}:/workspace/deepstream-lpr-app
     working_dir: /workspace/deepstream-lpr-app
-    command: python3 deepstream/deepstream_lpr_app.py --config runtime/config.json
+    command: python3 deepstream/deepstream_lpr_app.py --config ${RUNTIME_CONFIG}
     restart: unless-stopped

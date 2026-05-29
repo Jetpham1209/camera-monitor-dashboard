@@ -14,6 +14,7 @@ const APP_ROOT = path.resolve(__dirname, "..");
 const REPO_ROOT = path.resolve(APP_ROOT, "..");
 const PUBLIC_DIR = path.join(APP_ROOT, "public");
 const RUNTIME_DIR = path.join(APP_ROOT, "runtime");
+const RUNTIME_APPS_DIR = path.join(RUNTIME_DIR, "apps");
 const GENERATED_DIR = path.join(RUNTIME_DIR, "generated");
 const THIRD_PARTY_DIR = path.join(RUNTIME_DIR, "third_party");
 const TEST_MEDIA_DIR = path.join(RUNTIME_DIR, "test-media");
@@ -146,7 +147,7 @@ const MODEL_PROFILE_SPECS = {
 };
 
 function ensureDirs() {
-  for (const dir of [RUNTIME_DIR, GENERATED_DIR, THIRD_PARTY_DIR, TEST_MEDIA_DIR, MODEL_PENDING_DIR, TRITON_UPLOAD_DIR, MODELS_DIR, MODEL_ARCHIVE_DIR, TRITON_MODELS_DIR, ROI_CAPTURE_DIR]) {
+  for (const dir of [RUNTIME_DIR, RUNTIME_APPS_DIR, GENERATED_DIR, THIRD_PARTY_DIR, TEST_MEDIA_DIR, MODEL_PENDING_DIR, TRITON_UPLOAD_DIR, MODELS_DIR, MODEL_ARCHIVE_DIR, TRITON_MODELS_DIR, ROI_CAPTURE_DIR]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }
@@ -205,8 +206,8 @@ async function listMonitorCaptures(limit = 200) {
     .slice(0, limit);
 }
 
-async function readRuntimeEvents(limit = 1000) {
-  const file = path.join(RUNTIME_DIR, "events.jsonl");
+async function readRuntimeEvents(limit = 1000, runtimeDir = RUNTIME_DIR) {
+  const file = path.join(runtimeDir, "events.jsonl");
   try {
     const lines = (await fsp.readFile(file, "utf8")).trim().split(/\r?\n/).filter(Boolean);
     return lines.slice(-limit).map((line) => JSON.parse(line));
@@ -215,21 +216,45 @@ async function readRuntimeEvents(limit = 1000) {
   }
 }
 
-async function readRuntimeStatus() {
-  return await readJson(path.join(RUNTIME_DIR, "status.json"), {
+async function readRuntimeStatus(runtimeDir = RUNTIME_DIR) {
+  return await readJson(path.join(runtimeDir, "status.json"), {
     state: "unknown",
     message: "No runtime status file yet.",
     sources: []
   });
 }
 
-async function writeRuntimeStatus(status) {
-  await fsp.mkdir(RUNTIME_DIR, { recursive: true });
-  await writeJson(path.join(RUNTIME_DIR, "status.json"), {
+async function writeRuntimeStatus(status, runtimeDir = RUNTIME_DIR) {
+  await fsp.mkdir(runtimeDir, { recursive: true });
+  await writeJson(path.join(runtimeDir, "status.json"), {
     updatedAt: new Date().toISOString(),
     sources: [],
     ...status
   });
+}
+
+function appRuntimeId(value = "default") {
+  return sanitizeStageId(value || "default", "default").toLowerCase();
+}
+
+function appContainerName(appId = "default") {
+  return `deepstream-lpr-${appRuntimeId(appId)}`;
+}
+
+function appRuntimePaths(appId = "default") {
+  const id = appRuntimeId(appId);
+  const runtimeDir = path.join(RUNTIME_APPS_DIR, id);
+  return {
+    id,
+    runtimeDir,
+    generatedDir: path.join(runtimeDir, "generated"),
+    configFile: path.join(runtimeDir, "config.json"),
+    composeFile: path.join(runtimeDir, "docker-compose.yml"),
+    containerName: appContainerName(id),
+    runtimeWorkspaceDir: workspacePath(runtimeDir),
+    configWorkspacePath: workspacePath(path.join(runtimeDir, "config.json")),
+    connectionsWorkspacePath: workspacePath(CONNECTIONS_FILE)
+  };
 }
 
 function automationId(prefix = "item") {
@@ -946,9 +971,9 @@ async function inspectContainer(name) {
   }
 }
 
-async function listRuntimeResults({ date = "", source = "", limit = 200 } = {}) {
-  const capturesRoot = path.join(RUNTIME_DIR, "captures");
-  const events = await readRuntimeEvents(5000);
+async function listRuntimeResults({ date = "", source = "", limit = 200, runtimeDir = RUNTIME_DIR, urlBase = "/runtime" } = {}) {
+  const capturesRoot = path.join(runtimeDir, "captures");
+  const events = await readRuntimeEvents(5000, runtimeDir);
   const eventByRelative = new Map();
   const detectionsByFrame = new Map();
   const lprFrameKeys = new Set();
@@ -966,7 +991,7 @@ async function listRuntimeResults({ date = "", source = "", limit = 200 } = {}) 
   function relativeFromEventImage(event = {}) {
     if (event.imageRelativePath) return String(event.imageRelativePath).replace(/\\/g, "/");
     if (event.imagePath) {
-      const relative = path.relative(RUNTIME_DIR, hostPathFromWorkspace(event.imagePath)).replace(/\\/g, "/");
+      const relative = path.relative(runtimeDir, hostPathFromWorkspace(event.imagePath)).replace(/\\/g, "/");
       if (relative && !relative.startsWith("..")) return relative;
     }
     return "";
@@ -1005,7 +1030,7 @@ async function listRuntimeResults({ date = "", source = "", limit = 200 } = {}) 
     const imageInfo = resultFromEventImage(preferredImage || {}, event);
     if (date && imageInfo.captureDate !== date) continue;
     if (source && imageInfo.cameraId !== source) continue;
-    const fullPath = imageInfo.relative ? path.join(RUNTIME_DIR, imageInfo.relative) : "";
+    const fullPath = imageInfo.relative ? path.join(runtimeDir, imageInfo.relative) : "";
     const stat = fullPath ? await fsp.stat(fullPath).catch(() => null) : null;
     const plate = (event.plates || []).find((item) => item.plateText) || (event.plates || [])[0] || {};
     results.push({
@@ -1015,7 +1040,7 @@ async function listRuntimeResults({ date = "", source = "", limit = 200 } = {}) 
       cameraName: event.cameraName || event.vehicle?.cameraName || imageInfo.cameraId,
       fileName: fullPath ? path.basename(fullPath) : "",
       relativePath: imageInfo.relative,
-      url: imageInfo.relative ? `/runtime/${imageInfo.relative}` : "",
+      url: imageInfo.relative ? `${urlBase}/${imageInfo.relative}` : "",
       size: stat?.size || 0,
       createdAt: event.ts || stat?.mtime?.toISOString() || new Date().toISOString(),
       eventType: event.eventType,
@@ -1056,7 +1081,7 @@ async function listRuntimeResults({ date = "", source = "", limit = 200 } = {}) 
         continue;
       }
       if (!entry.isFile() || !/\.(jpe?g|png|webp|bmp)$/i.test(entry.name)) continue;
-      const relative = path.relative(RUNTIME_DIR, fullPath).replace(/\\/g, "/");
+      const relative = path.relative(runtimeDir, fullPath).replace(/\\/g, "/");
       const parts = relative.split("/");
       const captureDate = parts[1] || "";
       const cameraId = parts[2] || "unknown";
@@ -1073,7 +1098,7 @@ async function listRuntimeResults({ date = "", source = "", limit = 200 } = {}) 
         cameraName: event.cameraName || cameraId,
         fileName: entry.name,
         relativePath: relative,
-        url: `/runtime/${relative}`,
+        url: `${urlBase}/${relative}`,
         size: stat.size,
         createdAt: stat.mtime.toISOString(),
         eventType: event.eventType || "",
@@ -4595,8 +4620,14 @@ async function buildYoloModel(group, options = {}, onProgress = null) {
   return { group, model, checkpoints, output: output.slice(-8000) };
 }
 
-async function generateRuntime(config) {
-  await fsp.mkdir(GENERATED_DIR, { recursive: true });
+async function generateRuntime(config, runtimeOptions = {}) {
+  const runtimeDir = runtimeOptions.runtimeDir || RUNTIME_DIR;
+  const generatedDir = runtimeOptions.generatedDir || GENERATED_DIR;
+  const composeFile = runtimeOptions.composeFile || COMPOSE_FILE;
+  const configFile = runtimeOptions.configFile || CONFIG_FILE;
+  const containerName = runtimeOptions.containerName || "deepstream-lpr";
+  const runtimeConfigPath = runtimeOptions.configWorkspacePath || workspacePath(configFile);
+  await fsp.mkdir(generatedDir, { recursive: true });
   const runtimeProcessorType = processorType(config);
   const sourceBatchSize = Math.max(1, enabledRtspStreams(config).length || (config.streams || []).length || 1);
   const imageTestVehicleIds = normalizeClassIds(config.imageTest?.vehicleClassIds);
@@ -4632,11 +4663,11 @@ async function generateRuntime(config) {
         if (parentClassIds.length) operateClassIds = parentClassIds;
       }
     }
-    const configFile = path.join(GENERATED_DIR, `config_infer_${stage.id}.txt`);
+    const stageConfigFile = path.join(generatedDir, `config_infer_${stage.id}.txt`);
     return {
       ...stage,
       networkType,
-      configFile: workspacePath(configFile),
+      configFile: workspacePath(stageConfigFile),
       ready: Boolean(model.engine || model.onnx),
       operateOnClassIds: operateClassIds
     };
@@ -4662,15 +4693,19 @@ async function generateRuntime(config) {
       )
     );
   }
-  await writeJson(CONFIG_FILE, config);
-  await fsp.writeFile(path.join(GENERATED_DIR, "tracker_config.yml"), "BaseConfig:\n  minDetectorConfidence: 0.3\nTargetManagement:\n  enableBboxUnClipping: 1\n");
+  config.runtimeDir = runtimeOptions.runtimeWorkspaceDir || workspacePath(runtimeDir);
+  config.connectionsFile = runtimeOptions.connectionsWorkspacePath || workspacePath(CONNECTIONS_FILE);
+  await writeJson(configFile, config);
+  await fsp.writeFile(path.join(generatedDir, "tracker_config.yml"), "BaseConfig:\n  minDetectorConfidence: 0.3\nTargetManagement:\n  enableBboxUnClipping: 1\n");
   const template = await fsp.readFile(path.join(APP_ROOT, "templates", "docker-compose.yml"), "utf8");
   const compose = template
     .replaceAll("${DEEPSTREAM_IMAGE}", config.deepstreamImage)
+    .replaceAll("${CONTAINER_NAME}", containerName)
     .replaceAll("${APP_ROOT}", dockerPath(APP_ROOT))
+    .replaceAll("${RUNTIME_CONFIG}", runtimeConfigPath)
     .replaceAll("${CUDA_VER}", process.env.CUDA_VER || "")
     .replaceAll("${DEEPSTREAM_VERSION}", process.env.DEEPSTREAM_VERSION || "");
-  await fsp.writeFile(COMPOSE_FILE, compose);
+  await fsp.writeFile(composeFile, compose);
 }
 
 function runCommand(command, args, options = {}) {
@@ -4781,7 +4816,10 @@ function currentCheckpointMessage(checkpoints = []) {
   return completed ? `${completed.label} completed.` : "Build started.";
 }
 
-async function deploy(config) {
+async function deploy(config, deployOptions = {}) {
+  const appId = deployOptions.appId || config.activeDeployAppId || "default";
+  const paths = deployOptions.paths || appRuntimePaths(appId);
+  const containerName = deployOptions.containerName || paths.containerName;
   const checkpoints = createCheckpoints([
     { id: "validate_config", label: "Validate deploy config" },
     { id: "generate_runtime", label: "Generate DeepStream runtime files" },
@@ -4806,12 +4844,13 @@ async function deploy(config) {
     }, "Deploy config looks valid.");
 
     await runCheckpoint(checkpoints, "generate_runtime", async () => {
-      await generateRuntime(config);
-      return { output: `Compose: ${COMPOSE_FILE}` };
+      await fsp.mkdir(paths.runtimeDir, { recursive: true });
+      await generateRuntime(config, paths);
+      return { output: `App runtime: ${paths.runtimeDir}\nCompose: ${paths.composeFile}\nContainer: ${containerName}` };
     }, "Runtime files generated.");
 
     const composeResult = await runCheckpoint(checkpoints, "docker_compose_up", async () => {
-      const result = await runCommand("docker", ["compose", "-f", COMPOSE_FILE, "up", "-d", "--force-recreate"], { cwd: APP_ROOT });
+      const result = await runCommand("docker", ["compose", "-f", paths.composeFile, "up", "-d", "--force-recreate"], { cwd: APP_ROOT });
       if (result.code !== 0) {
         const error = new Error(`Docker Compose failed:\n${result.output}`);
         error.output = result.output;
@@ -4822,7 +4861,7 @@ async function deploy(config) {
     composeOutput = composeResult.output || "";
 
     await runCheckpoint(checkpoints, "verify_container", async () => {
-      const result = await runCommand("docker", ["inspect", "-f", "{{.State.Running}}", "deepstream-lpr"], { cwd: APP_ROOT });
+      const result = await runCommand("docker", ["inspect", "-f", "{{.State.Running}}", containerName], { cwd: APP_ROOT });
       if (result.code !== 0 || !result.output.trim().includes("true")) {
         const error = new Error(`DeepStream container is not running:\n${result.output}`);
         error.output = result.output;
@@ -4833,13 +4872,15 @@ async function deploy(config) {
 
     config.deploy = {
       lastStatus: "deployed",
+      appId: paths.id,
+      containerName,
       lastOutput: composeOutput.slice(-5000),
       updatedAt: new Date().toISOString(),
       checkpoints
     };
     await runCheckpoint(checkpoints, "save_deploy_state", async () => {
       await writeJson(CONFIG_FILE, config);
-      return { output: `Saved: ${CONFIG_FILE}` };
+      return { output: `Saved: ${CONFIG_FILE}\nRuntime config: ${paths.configFile}` };
     }, "Deploy state saved.");
     await writeJson(CONFIG_FILE, config);
     return { ...config.deploy, checkpoints };
@@ -4854,6 +4895,62 @@ async function deploy(config) {
     error.checkpoints = checkpoints;
     throw error;
   }
+}
+
+async function stopDeployApp(appId = "default") {
+  const paths = appRuntimePaths(appId);
+  const composeResult = await runCommand("docker", ["compose", "-f", paths.composeFile, "down", "--remove-orphans"], { cwd: APP_ROOT });
+  const removeResult = await runCommand("docker", ["rm", "-f", paths.containerName], { cwd: APP_ROOT });
+  const code = composeResult.code === 0 || removeResult.code === 0 ? 0 : composeResult.code;
+  const output = `${composeResult.output || ""}${removeResult.output || ""}`;
+  await writeRuntimeStatus({
+    state: "stopped",
+    message: code === 0 ? "DeepStream container stopped." : "Failed to stop DeepStream container.",
+    containerRunning: false,
+    output: tailOutput(output || "", 5000)
+  }, paths.runtimeDir).catch(() => {});
+  return { code, output, appId: paths.id, containerName: paths.containerName };
+}
+
+async function deployAppStatus(app = {}) {
+  const paths = appRuntimePaths(app.id || "default");
+  const [container, rawRuntimeStatus, logs] = await Promise.all([
+    inspectContainer(paths.containerName),
+    readRuntimeStatus(paths.runtimeDir),
+    runCommand("docker", ["logs", "--tail", "120", paths.containerName], { cwd: APP_ROOT }).catch((error) => ({ code: 1, output: error.message }))
+  ]);
+  const runtimeStatus = container.running
+    ? rawRuntimeStatus
+    : {
+      ...rawRuntimeStatus,
+      state: container.exists ? "stopped" : "missing",
+      message: container.exists
+        ? "DeepStream container is not running."
+        : "DeepStream container is missing. Deploy this app to start runtime.",
+      sources: [],
+      staleStatus: rawRuntimeStatus.state === "playing"
+    };
+  return {
+    appId: paths.id,
+    appName: app.name || paths.id,
+    containerName: paths.containerName,
+    container,
+    deepstream: {
+      started: container.running && runtimeStatus.state === "playing",
+      ...runtimeStatus
+    },
+    logs: tailOutput(logs.output || "", 12000),
+    runtimeDir: path.relative(RUNTIME_DIR, paths.runtimeDir).replace(/\\/g, "/"),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function allDeployAppStatuses(config = null) {
+  const current = config || await getConfig().catch(() => ({}));
+  const apps = Array.isArray(current.deployApps) && current.deployApps.length
+    ? current.deployApps
+    : [{ id: current.activeDeployAppId || "default", name: "DeepStream App" }];
+  return await Promise.all(apps.map((app) => deployAppStatus(app)));
 }
 
 async function runTestMedia(kind, config) {
@@ -5697,19 +5794,44 @@ app.post("/api/deploy", async (req, res) => {
   }
 });
 
+app.post("/api/deploy/apps/:appId/deploy", async (req, res) => {
+  try {
+    const appId = appRuntimeId(req.params.appId);
+    const config = applySelectedModels(
+      normalizeMultiCameraConfig({
+        ...(req.body || {}),
+        activeDeployAppId: appId,
+        deployApps: Array.isArray(req.body?.deployApps)
+          ? req.body.deployApps.map((app) => ({ ...app, active: appRuntimeId(app.id) === appId }))
+          : req.body?.deployApps
+      }, await getConfig(), true),
+      req.body?.selectedModels || {}
+    );
+    const result = await deploy(config, { appId });
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message, checkpoints: error.checkpoints || [] });
+  }
+});
+
 app.post("/api/stop", async (_req, res) => {
-  const composeResult = await runCommand("docker", ["compose", "-f", COMPOSE_FILE, "down", "--remove-orphans"], { cwd: APP_ROOT });
-  const removeResult = await runCommand("docker", ["rm", "-f", "deepstream-lpr"], { cwd: APP_ROOT });
-  const result = {
-    code: composeResult.code === 0 || removeResult.code === 0 ? 0 : composeResult.code,
-    output: `${composeResult.output || ""}${removeResult.output || ""}`
-  };
-  await writeRuntimeStatus({
-    state: "stopped",
-    message: result.code === 0 ? "DeepStream container stopped." : "Failed to stop DeepStream container.",
-    containerRunning: false,
-    output: tailOutput(result.output || "", 5000)
-  }).catch(() => {});
+  const current = await getConfig().catch(() => ({}));
+  const activeId = current.activeDeployAppId || current.deployApps?.find((app) => app.active)?.id;
+  const result = activeId
+    ? await stopDeployApp(activeId)
+    : await (async () => {
+      const composeResult = await runCommand("docker", ["compose", "-f", COMPOSE_FILE, "down", "--remove-orphans"], { cwd: APP_ROOT });
+      const removeResult = await runCommand("docker", ["rm", "-f", "deepstream-lpr"], { cwd: APP_ROOT });
+      const code = composeResult.code === 0 || removeResult.code === 0 ? 0 : composeResult.code;
+      const output = `${composeResult.output || ""}${removeResult.output || ""}`;
+      await writeRuntimeStatus({
+        state: "stopped",
+        message: code === 0 ? "DeepStream container stopped." : "Failed to stop DeepStream container.",
+        containerRunning: false,
+        output: tailOutput(output || "", 5000)
+      }).catch(() => {});
+      return { code, output };
+    })();
   if (result.code === 0) {
     const config = await getConfig().catch(() => null);
     if (config) {
@@ -5725,40 +5847,60 @@ app.post("/api/stop", async (_req, res) => {
   res.status(result.code === 0 ? 200 : 500).json(result);
 });
 
+app.post("/api/deploy/apps/:appId/stop", async (req, res) => {
+  const result = await stopDeployApp(req.params.appId || "default");
+  if (result.code === 0) {
+    const config = await getConfig().catch(() => null);
+    if (config) {
+      const id = appRuntimeId(req.params.appId || "default");
+      config.deployApps = (config.deployApps || []).map((app) => appRuntimeId(app.id) === id
+        ? {
+          ...app,
+          deploy: {
+            ...(app.deploy || {}),
+            lastStatus: "stopped",
+            lastOutput: tailOutput(result.output || "", 5000),
+            updatedAt: new Date().toISOString()
+          }
+        }
+        : app);
+      await writeJson(CONFIG_FILE, config).catch(() => {});
+    }
+  }
+  res.status(result.code === 0 ? 200 : 500).json(result);
+});
+
 app.get("/api/deploy/status", async (_req, res) => {
-  const [container, rawRuntimeStatus, logs] = await Promise.all([
-    inspectContainer("deepstream-lpr"),
-    readRuntimeStatus(),
-    runCommand("docker", ["logs", "--tail", "120", "deepstream-lpr"], { cwd: APP_ROOT }).catch((error) => ({ code: 1, output: error.message }))
-  ]);
-  const runtimeStatus = container.running
-    ? rawRuntimeStatus
-    : {
-      ...rawRuntimeStatus,
-      state: container.exists ? "stopped" : "missing",
-      message: container.exists
-        ? "DeepStream container is not running."
-        : "DeepStream container is missing. Deploy an app to start runtime.",
-      sources: [],
-      staleStatus: rawRuntimeStatus.state === "playing"
-    };
+  const config = await getConfig().catch(() => ({}));
+  const apps = await allDeployAppStatuses(config);
+  const activeId = appRuntimeId(config.activeDeployAppId || apps[0]?.appId || "default");
+  const active = apps.find((item) => item.appId === activeId) || apps[0] || await deployAppStatus({ id: activeId });
   res.json({
-    container,
-    deepstream: {
-      started: container.running && runtimeStatus.state === "playing",
-      ...runtimeStatus
-    },
-    logs: tailOutput(logs.output || "", 12000),
+    ...active,
+    apps,
+    container: active.container,
+    deepstream: active.deepstream,
+    logs: active.logs,
     updatedAt: new Date().toISOString()
   });
 });
 
+app.get("/api/deploy/apps/:appId/status", async (req, res) => {
+  const config = await getConfig().catch(() => ({}));
+  const app = (config.deployApps || []).find((item) => appRuntimeId(item.id) === appRuntimeId(req.params.appId)) || { id: req.params.appId };
+  res.json(await deployAppStatus(app));
+});
+
 app.get("/api/deploy/results", async (req, res) => {
+  const appId = req.query.appId ? appRuntimeId(req.query.appId) : "";
+  const paths = appId ? appRuntimePaths(appId) : null;
   res.json({
     results: await listRuntimeResults({
       date: String(req.query.date || ""),
       source: String(req.query.source || ""),
-      limit: Number(req.query.limit || 200)
+      limit: Number(req.query.limit || 200),
+      runtimeDir: paths?.runtimeDir || RUNTIME_DIR,
+      urlBase: paths ? `/runtime/apps/${paths.id}` : "/runtime"
     })
   });
 });
