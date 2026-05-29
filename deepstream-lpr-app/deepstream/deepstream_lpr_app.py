@@ -121,6 +121,7 @@ class LprRuntime:
                 "eventType": str(item.get("eventType") or "*").strip() or "*",
                 "channelId": channel_id,
                 "payload": str(item.get("payload") or "full").strip() or "full",
+                "schema": item.get("schema") if isinstance(item.get("schema"), list) else [],
                 "template": item.get("template") if isinstance(item.get("template"), (dict, list, str)) else "",
                 "transformLanguage": str(item.get("transformLanguage") or "python").strip() or "python",
                 "transformScript": str(item.get("transformScript") or "").strip(),
@@ -221,6 +222,18 @@ class LprRuntime:
             parsed = json.loads(template)
         return self.render_template_value(parsed, event)
 
+    def schema_event_payload(self, event, schema):
+        payload = {}
+        for item in schema or []:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("key") or "").strip()
+            path = str(item.get("value") or item.get("path") or "").strip()
+            if not key or not path:
+                continue
+            payload[key] = self.event_path_value(event, path, None)
+        return payload or self.compact_event_payload(event, "minimal")
+
     def transform_event_payload(self, event, script):
         if not script:
             return self.compact_event_payload(event, "minimal")
@@ -254,6 +267,8 @@ class LprRuntime:
 
     def output_event_payload(self, event, output):
         mode = output.get("payload") or "full"
+        if mode == "schema":
+            return self.schema_event_payload(event, output.get("schema"))
         if mode == "template":
             return self.template_event_payload(event, output.get("template"))
         if mode == "transform":

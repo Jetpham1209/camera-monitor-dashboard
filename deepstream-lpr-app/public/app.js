@@ -41,6 +41,47 @@ const processorTypes = [
   }
 ];
 
+const deepstreamPayloadFields = [
+  { path: "eventType", label: "Event type" },
+  { path: "eventId", label: "Event ID" },
+  { path: "ts", label: "Timestamp" },
+  { path: "processorType", label: "Processor type" },
+  { path: "cameraId", label: "Camera ID" },
+  { path: "cameraName", label: "Camera name" },
+  { path: "sourceId", label: "Source index" },
+  { path: "stream", label: "RTSP stream" },
+  { path: "zoneId", label: "Zone ID" },
+  { path: "zoneName", label: "Zone name" },
+  { path: "zoneMode", label: "Zone mode" },
+  { path: "ruleId", label: "Rule ID" },
+  { path: "ruleName", label: "Rule name" },
+  { path: "ruleDirection", label: "Rule direction" },
+  { path: "objectId", label: "Object ID" },
+  { path: "classId", label: "Class ID" },
+  { path: "frameNum", label: "Frame number" },
+  { path: "frameWidth", label: "Frame width" },
+  { path: "frameHeight", label: "Frame height" },
+  { path: "plateText", label: "Plate text" },
+  { path: "plateStatus", label: "Plate status" },
+  { path: "imageUrl", label: "Image URL" },
+  { path: "imageRelativePath", label: "Image relative path" },
+  { path: "failedStage", label: "Failed stage" },
+  { path: "failedModel", label: "Failed model" },
+  { path: "failureReason", label: "Failure reason" },
+  { path: "bbox.left", label: "BBox left" },
+  { path: "bbox.top", label: "BBox top" },
+  { path: "bbox.width", label: "BBox width" },
+  { path: "bbox.height", label: "BBox height" },
+  { path: "center.x", label: "Center X" },
+  { path: "center.y", label: "Center Y" },
+  { path: "footCenter.x", label: "Foot center X" },
+  { path: "footCenter.y", label: "Foot center Y" },
+  { path: "plates.0.label", label: "First plate label" },
+  { path: "plates.0.confidence", label: "First plate confidence" },
+  { path: "plates.0.rawPlateText", label: "First plate raw text" },
+  { path: "plates.0.ocrStatus", label: "First plate OCR status" }
+];
+
 const els = {
   workspaceTitle: document.querySelector("#workspaceTitle"),
   dashboardOverview: document.querySelector("#dashboardOverview"),
@@ -2477,6 +2518,7 @@ function readDeployApps(cameras = readCameraCards()) {
         eventType: row.querySelector("[data-deploy-event-field='eventType']")?.value.trim() || "",
         channelId: row.querySelector("[data-deploy-event-field='channelId']")?.value || "",
         payload: row.querySelector("[data-deploy-event-field='payload']")?.value || "full",
+        schema: readPayloadSchema(row),
         template: row.querySelector("[data-deploy-event-field='template']")?.value.trim() || "",
         transformLanguage: row.querySelector("[data-deploy-event-field='transformLanguage']")?.value || "python",
         transformScript: row.querySelector("[data-deploy-event-field='transformScript']")?.value.trim() || "",
@@ -2603,21 +2645,78 @@ function eventOutputRowsMarkup(outputs = []) {
   return rows.map((output) => eventOutputRowMarkup(output)).join("") || '<div class="empty">No event output configured.</div>';
 }
 
+function defaultPayloadSchema() {
+  return [
+    { key: "event_type", value: "eventType" },
+    { key: "event_id", value: "eventId" },
+    { key: "camera", value: "cameraName" },
+    { key: "plate", value: "plateText" },
+    { key: "zone", value: "zoneName" },
+    { key: "image", value: "imageUrl" },
+    { key: "time", value: "ts" }
+  ];
+}
+
+function normalizePayloadSchema(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => ({
+        key: String(item?.key || "").trim(),
+        value: String(item?.value || item?.path || "").trim()
+      }))
+      .filter((item) => item.key && item.value);
+  }
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return normalizePayloadSchema(parsed);
+      if (parsed && typeof parsed === "object") {
+        return Object.entries(parsed).map(([key, path]) => ({
+          key,
+          value: String(path || "").replace(/^\{\{\s*|\s*\}\}$/g, "")
+        })).filter((item) => item.key && item.value);
+      }
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function payloadFieldOptions(selected = "") {
+  return deepstreamPayloadFields.map((field) => `
+    <option value="${escapeHtml(field.path)}" ${field.path === selected ? "selected" : ""}>${escapeHtml(field.label)}</option>
+  `).join("");
+}
+
+function payloadSchemaRowsMarkup(schema = []) {
+  const rows = normalizePayloadSchema(schema).length ? normalizePayloadSchema(schema) : defaultPayloadSchema();
+  return rows.map((item) => `
+    <div class="payload-schema-row" data-payload-schema-row>
+      <input data-payload-schema-key value="${escapeHtml(item.key)}" placeholder="vd: plate" />
+      <select data-payload-schema-value>${payloadFieldOptions(item.value)}</select>
+      <button type="button" class="danger small-button" data-remove-payload-field>Remove</button>
+    </div>
+  `).join("");
+}
+
+function readPayloadSchema(row) {
+  return [...row.querySelectorAll("[data-payload-schema-row]")].map((schemaRow) => ({
+    key: schemaRow.querySelector("[data-payload-schema-key]")?.value.trim() || "",
+    value: schemaRow.querySelector("[data-payload-schema-value]")?.value || ""
+  })).filter((item) => item.key && item.value);
+}
+
 function eventOutputRowMarkup(output = {}) {
   const channels = connectionsConfig.channels || [];
-  const channelOptions = `<option value="">Select channel</option>${channels.map((channel) => (
+  const hasSelectedChannel = channels.some((channel) => channel.id === output.channelId);
+  const missingSelectedChannel = output.channelId && !hasSelectedChannel
+    ? `<option value="${escapeHtml(output.channelId)}" selected>Saved channel (${escapeHtml(output.channelId)})</option>`
+    : "";
+  const channelOptions = `<option value="">Select channel</option>${missingSelectedChannel}${channels.map((channel) => (
     `<option value="${escapeHtml(channel.id)}" ${channel.id === output.channelId ? "selected" : ""}>${escapeHtml(channel.name)} (${escapeHtml(channel.provider)})</option>`
   )).join("")}`;
   const payload = output.payload || "full";
-  const templateValue = output.template || `{
-  "event_type": "{{eventType}}",
-  "event_id": "{{eventId}}",
-  "camera": "{{cameraName}}",
-  "plate": "{{plateText}}",
-  "zone": "{{zoneName}}",
-  "image": "{{imageUrl}}",
-  "time": "{{ts}}"
-}`;
   const transformValue = output.transformScript || `return {
   "event_type": event.get("eventType"),
   "camera": event.get("cameraName"),
@@ -2637,18 +2736,24 @@ function eventOutputRowMarkup(output = {}) {
         <select data-deploy-event-field="payload">
           <option value="full" ${payload === "full" ? "selected" : ""}>Full event</option>
           <option value="minimal" ${payload === "minimal" || payload === "compact" ? "selected" : ""}>Minimal</option>
-          <option value="template" ${payload === "template" ? "selected" : ""}>Template JSON</option>
+          <option value="schema" ${payload === "schema" || payload === "template" ? "selected" : ""}>Custom schema</option>
           <option value="transform" ${payload === "transform" ? "selected" : ""}>Python transform</option>
         </select>
       </label>
       <button type="button" class="danger small-button" data-remove-deploy-event-output>Remove</button>
-      <details class="deploy-payload-editor" ${payload === "template" || payload === "transform" ? "open" : ""}>
+      <details class="deploy-payload-editor" ${payload === "schema" || payload === "template" || payload === "transform" ? "open" : ""}>
         <summary>Custom payload</summary>
-        <p class="muted">Template supports fields like {{plateText}}, {{cameraName}}, {{bbox.left}}. Transform receives <code>event</code> and returns a JSON-serializable object.</p>
+        <p class="muted">Custom schema maps your output keys to friendly DeepStream event fields. Transform receives <code>event</code> and returns a JSON-serializable object.</p>
         <div class="deploy-payload-fields">
-          <label>Template JSON
-            <textarea data-deploy-event-field="template" rows="8">${escapeHtml(templateValue)}</textarea>
-          </label>
+          <div class="payload-schema-builder">
+            <div class="payload-schema-head">
+              <strong>Schema fields</strong>
+              <button type="button" class="secondary small-button" data-add-payload-field>Add field</button>
+            </div>
+            <div class="payload-schema-list" data-payload-schema-list>
+              ${payloadSchemaRowsMarkup(output.schema || output.template)}
+            </div>
+          </div>
           <label>Transform language
             <select data-deploy-event-field="transformLanguage">
               <option value="python" ${(output.transformLanguage || "python") === "python" ? "selected" : ""}>Python</option>
@@ -3147,11 +3252,34 @@ function attachDeployAppHandlers() {
       const list = button.closest("[data-deploy-app-card]")?.querySelector(".deploy-event-output-list");
       if (!list) return;
       if (list.querySelector(".empty")) list.innerHTML = "";
-      list.insertAdjacentHTML("beforeend", eventOutputRowMarkup({ eventType: "vehicle_capture", payload: "full", enabled: true }));
+      list.insertAdjacentHTML("beforeend", eventOutputRowMarkup({ eventType: "vehicle_capture", payload: "schema", schema: defaultPayloadSchema(), enabled: true }));
+      renderDeployApps(readDeployApps(), readCameraCards());
     });
   });
   document.querySelectorAll("[data-remove-deploy-event-output]").forEach((button) => {
-    button.addEventListener("click", () => button.closest("[data-deploy-event-output]")?.remove());
+    button.addEventListener("click", () => {
+      button.closest("[data-deploy-event-output]")?.remove();
+      deployApps = readDeployApps();
+    });
+  });
+  document.querySelectorAll("[data-add-payload-field]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const list = button.closest("[data-deploy-event-output]")?.querySelector("[data-payload-schema-list]");
+      if (!list) return;
+      const next = deepstreamPayloadFields[Math.min(list.querySelectorAll("[data-payload-schema-row]").length, deepstreamPayloadFields.length - 1)];
+      list.insertAdjacentHTML("beforeend", payloadSchemaRowsMarkup([{ key: next.path.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, ""), value: next.path }]));
+      renderDeployApps(readDeployApps(), readCameraCards());
+    });
+  });
+  document.querySelectorAll("[data-remove-payload-field]").forEach((button) => {
+    button.addEventListener("click", () => {
+      button.closest("[data-payload-schema-row]")?.remove();
+      deployApps = readDeployApps();
+    });
+  });
+  document.querySelectorAll("[data-deploy-event-output] input, [data-deploy-event-output] select, [data-deploy-event-output] textarea").forEach((field) => {
+    field.addEventListener("change", () => { deployApps = readDeployApps(); });
+    field.addEventListener("input", () => { deployApps = readDeployApps(); });
   });
   document.querySelectorAll("[data-zone-class-option]").forEach((checkbox) => {
     checkbox.addEventListener("change", () => syncDeployZoneClassOptions(checkbox.closest("[data-deploy-zone-row]")));
@@ -4787,12 +4915,12 @@ async function init() {
   updateRoiOutput();
   const config = await api("/api/config");
   await loadAllModelFiles().catch((error) => setTaskStatus("model-factory", "failed", error.message));
+  await refreshConnections().catch((error) => setTaskStatus("connections", "failed", error.message));
   renderConfig(config);
   await loadDeployCaptures().catch((error) => setTaskStatus("deploy-previews", "failed", error.message));
   await refreshDeployStatus().catch(() => {});
   await refreshAgent().catch((error) => setTaskStatus("agent", "failed", error.message));
   await refreshAutomation().catch((error) => setTaskStatus("automation", "failed", error.message));
-  await refreshConnections().catch((error) => setTaskStatus("connections", "failed", error.message));
   await refreshTriton().catch((error) => setTaskStatus("triton", "failed", error.message));
   startDeployStatusPolling();
 }

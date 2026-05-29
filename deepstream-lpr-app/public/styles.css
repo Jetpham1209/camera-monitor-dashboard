@@ -2115,6 +2115,24 @@ pre {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   min-height: 170px;
 }
+.payload-schema-builder {
+  display: grid;
+  gap: 8px;
+}
+.payload-schema-head,
+.payload-schema-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(170px, 1.2fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.payload-schema-head {
+  grid-template-columns: 1fr auto;
+}
+.payload-schema-list {
+  display: grid;
+  gap: 8px;
+}
 .triton-upload-card,
 .triton-model-card {
   display: grid;
