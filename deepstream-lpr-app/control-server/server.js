@@ -2625,8 +2625,13 @@ function modelConfig(slot, model, gieId, networkType, operateOnGieId = null, bat
   }
   if (operateOnGieId) {
     lines.push(`operate-on-gie-id=${operateOnGieId}`);
-    lines.push("input-object-min-width=1");
-    lines.push("input-object-min-height=1");
+    if (isLprCharacterDetector) {
+      lines.push("input-object-min-width=12");
+      lines.push("input-object-min-height=8");
+    } else {
+      lines.push("input-object-min-width=1");
+      lines.push("input-object-min-height=1");
+    }
     if (!profile.outputInstanceMask) {
       lines.push("scaling-compute-hw=1");
       if (!lines.includes("scaling-filter=2")) lines.push("scaling-filter=2");

@@ -815,6 +815,67 @@ class LprRuntime:
             print(f"Failed to save frame: {exc}")
             return None
 
+    def frame_dimensions(self, frame_meta):
+        width = int(getattr(frame_meta, "source_frame_width", 0) or 0)
+        height = int(getattr(frame_meta, "source_frame_height", 0) or 0)
+        if width <= 0:
+            width = int(self.config.get("streamWidth", 0) or 0)
+        if height <= 0:
+            height = int(self.config.get("streamHeight", 0) or 0)
+        return width, height
+
+    def sanitize_object_rects(self, frame_meta):
+        frame_width, frame_height = self.frame_dimensions(frame_meta)
+        if frame_width <= 1 or frame_height <= 1:
+            return 0
+        changed = 0
+        obj_list = frame_meta.obj_meta_list
+        while obj_list is not None:
+            obj_meta = pyds.NvDsObjectMeta.cast(obj_list.data)
+            rect = obj_meta.rect_params
+            left = float(rect.left)
+            top = float(rect.top)
+            width = float(rect.width)
+            height = float(rect.height)
+            right = left + width
+            bottom = top + height
+
+            min_size = 2.0
+            clamped_left = min(max(left, 0.0), max(0.0, frame_width - min_size))
+            clamped_top = min(max(top, 0.0), max(0.0, frame_height - min_size))
+            clamped_right = min(max(right, clamped_left + min_size), float(frame_width))
+            clamped_bottom = min(max(bottom, clamped_top + min_size), float(frame_height))
+            clamped_width = max(min_size, clamped_right - clamped_left)
+            clamped_height = max(min_size, clamped_bottom - clamped_top)
+
+            if (
+                abs(clamped_left - left) > 0.01
+                or abs(clamped_top - top) > 0.01
+                or abs(clamped_width - width) > 0.01
+                or abs(clamped_height - height) > 0.01
+            ):
+                rect.left = clamped_left
+                rect.top = clamped_top
+                rect.width = clamped_width
+                rect.height = clamped_height
+                changed += 1
+            obj_list = obj_list.next
+        if changed:
+            print(f"Sanitized {changed} object bbox(es) before secondary inference on source {int(frame_meta.source_id)} frame {int(frame_meta.frame_num)}")
+        return changed
+
+    def sanitize_probe(self, pad, info, stage="sanitize"):
+        gst_buffer = info.get_buffer()
+        if not gst_buffer:
+            return Gst.PadProbeReturn.OK
+        batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(gst_buffer))
+        frame_list = batch_meta.frame_meta_list
+        while frame_list is not None:
+            frame_meta = pyds.NvDsFrameMeta.cast(frame_list.data)
+            self.sanitize_object_rects(frame_meta)
+            frame_list = frame_list.next
+        return Gst.PadProbeReturn.OK
+
     def probe(self, pad, info, stage="final"):
         gst_buffer = info.get_buffer()
         if not gst_buffer:
@@ -1526,6 +1587,10 @@ def build_pipeline(runtime):
     for left, right in zip(chain, chain[1:]):
         if not left.link(right):
             raise RuntimeError(f"Could not link {left.name} -> {right.name}")
+    for element in infer_elements[:-1]:
+        src_pad = element.get_static_pad("src")
+        if src_pad:
+            src_pad.add_probe(Gst.PadProbeType.BUFFER, runtime.sanitize_probe, element.name)
     if runtime.test_mode == "image-debug" and infer_elements:
         infer_elements[0].get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, runtime.probe, "primary-detect")
     osd.get_static_pad("sink").add_probe(Gst.PadProbeType.BUFFER, runtime.probe)
