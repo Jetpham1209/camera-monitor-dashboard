@@ -1075,6 +1075,90 @@ button.small-button {
   align-items: end;
   margin-bottom: 12px;
 }
+.deploy-app-head.compact {
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.deploy-app-title {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.deploy-app-title strong {
+  overflow: hidden;
+  font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.deploy-app-title small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.deploy-app-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.deploy-config-accordion {
+  display: grid;
+  gap: 8px;
+}
+.deploy-config-section {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+}
+.deploy-config-section summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-height: 42px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-weight: 800;
+}
+.deploy-config-section summary::marker {
+  color: var(--brand);
+}
+.deploy-config-section summary small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.deploy-config-section[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+.deploy-app-setup-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.55fr) minmax(220px, 1fr) minmax(220px, 0.9fr);
+  gap: 10px;
+  align-items: end;
+  padding: 12px;
+}
+.deploy-config-section .stage-section-head,
+.deploy-config-section .pipeline-stage-list,
+.deploy-config-section .deploy-event-output-list,
+.deploy-config-section > p,
+.deploy-config-section > button,
+.deploy-config-section .deploy-camera-picker,
+.deploy-config-section .deploy-preview-grid {
+  margin-left: 12px;
+  margin-right: 12px;
+}
+.deploy-config-section .pipeline-stage-list,
+.deploy-config-section .deploy-event-output-list,
+.deploy-config-section .deploy-preview-grid {
+  margin-bottom: 12px;
+}
+.deploy-config-section > p {
+  margin-top: 10px;
+}
+.deploy-config-section > button {
+  margin-bottom: 12px;
+}
 .deploy-camera-picker {
   display: flex;
   flex-wrap: wrap;
@@ -1818,6 +1902,170 @@ pre {
   border-color: #fecaca;
   background: #fef2f2;
 }
+.deploy-monitor-board {
+  display: grid;
+  gap: 14px;
+  grid-column: 1 / -1;
+  margin: 12px 0;
+}
+.deploy-monitor-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.deploy-monitor-summary article {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcff;
+}
+.deploy-monitor-summary span,
+.deploy-monitor-summary small,
+.deploy-runtime-row small,
+.deploy-source-row small,
+.deploy-empty-state small,
+.section-mini-head small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+.deploy-monitor-summary strong {
+  display: block;
+  margin: 4px 0;
+  overflow: hidden;
+  font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.deploy-monitor-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.8fr);
+  gap: 12px;
+  align-items: start;
+}
+.deploy-monitor-section {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: white;
+}
+.section-mini-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.section-mini-head h4 {
+  margin: 0;
+}
+.deploy-runtime-list,
+.deploy-source-table {
+  display: grid;
+  gap: 8px;
+}
+.deploy-runtime-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: #fbfcff;
+}
+.deploy-runtime-row.active {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+.deploy-runtime-main {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.deploy-runtime-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.deploy-runtime-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.deploy-runtime-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.runtime-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #eef2ff;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+.runtime-badge.success {
+  background: #dcfce7;
+  color: #166534;
+}
+.runtime-badge.warning {
+  background: #fef3c7;
+  color: #92400e;
+}
+.runtime-badge.failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+.runtime-badge.info {
+  background: #dbeafe;
+  color: #1e40af;
+}
+.deploy-runtime-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.deploy-runtime-actions button,
+.deploy-runtime-actions .button-link {
+  min-height: 34px;
+  padding: 8px 10px;
+}
+.deploy-source-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: #fbfcff;
+}
+.deploy-source-row strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.deploy-source-row span {
+  font-weight: 800;
+}
+.deploy-empty-state {
+  display: grid;
+  gap: 4px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fbfcff;
+}
 .deploy-results-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -1919,6 +2167,90 @@ pre {
   max-height: 120px;
   margin: 8px 0 0;
   font-size: 11px;
+}
+.services-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 420px) minmax(0, 1fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+.service-card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fbfcff;
+}
+.service-card h3,
+.service-card p {
+  margin: 0;
+}
+.service-card p,
+.service-card small {
+  color: var(--muted);
+  font-size: 13px;
+}
+.service-wide {
+  grid-column: 1 / -1;
+}
+.service-catalog-list,
+.service-instance-list,
+.service-dynamic-config {
+  display: grid;
+  gap: 10px;
+}
+.service-package-row,
+.service-instance-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: white;
+}
+.service-package-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.service-package-row strong,
+.service-package-row span,
+.service-package-row small,
+.service-instance-row strong,
+.service-instance-row span,
+.service-instance-row small {
+  display: block;
+}
+.service-package-row span,
+.service-instance-row span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.service-instance-row {
+  display: grid;
+  gap: 8px;
+}
+.service-instance-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.service-instance-row pre {
+  min-height: 0;
+  max-height: 140px;
+  margin: 0;
+  font-size: 11px;
+}
+.service-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.service-config-wide {
+  grid-column: 1 / -1;
 }
 .triton-layout {
   display: grid;
@@ -2401,7 +2733,18 @@ pre {
   .connection-provider-head,
   .connection-provider-foot,
   .connection-channel-row,
+  .services-layout,
+  .service-config-grid,
+  .service-package-row,
+  .service-instance-head,
   .deploy-event-output-row,
+  .deploy-app-head.compact,
+  .deploy-app-setup-grid,
+  .deploy-config-section summary,
+  .deploy-monitor-summary,
+  .deploy-monitor-columns,
+  .deploy-runtime-row,
+  .deploy-source-row,
   .triton-layout,
   .triton-repo-card,
   .triton-repo-top,
@@ -2415,10 +2758,16 @@ pre {
   }
   .connection-provider-head,
   .connection-provider-foot,
-  .connection-channel-row {
+  .connection-channel-row,
+  .service-package-row,
+  .service-instance-head {
     display: grid;
   }
   .connection-wide {
+    grid-column: auto;
+  }
+  .service-wide,
+  .service-config-wide {
     grid-column: auto;
   }
   .triton-label-editor {

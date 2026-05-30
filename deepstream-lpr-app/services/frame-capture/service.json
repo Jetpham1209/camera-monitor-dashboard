@@ -1,0 +1,76 @@
+{
+  "id": "frame-capture",
+  "name": "Frame Capture",
+  "version": "0.1.0",
+  "description": "Capture a single frame or periodic frames from an RTSP camera. This package is a reference service for the Services tab.",
+  "runtime": "local",
+  "entrypoint": "worker.py",
+  "messageBus": {
+    "optional": true,
+    "description": "Can be triggered by automation later; no message bus binding is required for standalone install/test."
+  },
+  "scripts": {
+    "install": "install.sh",
+    "test": "test.sh",
+    "start": "start.sh",
+    "stop": "stop.sh"
+  },
+  "configSchema": [
+    {
+      "key": "cameraUrl",
+      "label": "Camera URL",
+      "type": "rtsp",
+      "required": true,
+      "placeholder": "rtsp://user:password@camera-ip:554/stream",
+      "help": "RTSP URL or a local video/image path for testing."
+    },
+    {
+      "key": "cameraId",
+      "label": "Camera ID",
+      "type": "text",
+      "default": "camera-1",
+      "help": "Used in output file names."
+    },
+    {
+      "key": "captureIntervalSec",
+      "label": "Capture interval seconds",
+      "type": "number",
+      "default": 5,
+      "min": 1,
+      "step": 1,
+      "help": "Used by start.sh loop mode."
+    },
+    {
+      "key": "timeoutSec",
+      "label": "Capture timeout seconds",
+      "type": "number",
+      "default": 15,
+      "min": 3,
+      "step": 1
+    },
+    {
+      "key": "rtspTransport",
+      "label": "RTSP transport",
+      "type": "select",
+      "default": "tcp",
+      "options": [
+        { "value": "tcp", "label": "TCP" },
+        { "value": "udp", "label": "UDP" }
+      ]
+    },
+    {
+      "key": "outputDir",
+      "label": "Output folder optional",
+      "type": "text",
+      "placeholder": "Leave blank to use runtime/services/outputs/<instance-id>"
+    },
+    {
+      "key": "zonePolygon",
+      "label": "Zone polygon optional",
+      "type": "json",
+      "default": [],
+      "rows": 5,
+      "help": "Optional polygon coordinates for services that need a camera zone."
+    }
+  ]
+}

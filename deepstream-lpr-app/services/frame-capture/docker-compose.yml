@@ -1,0 +1,9 @@
+services:
+  frame-capture:
+    build: .
+    network_mode: host
+    environment:
+      SERVICE_CONFIG_PATH: /runtime/config.json
+      SERVICE_OUTPUT_DIR: /runtime/outputs
+    volumes:
+      - ./runtime:/runtime

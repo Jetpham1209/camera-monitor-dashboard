@@ -21,6 +21,7 @@
           <button type="button" class="sidebar-link" data-nav-view="models">Model Factory</button>
           <button type="button" class="sidebar-link" data-nav-view="triton">Triton</button>
           <button type="button" class="sidebar-link" data-nav-view="connections">Connections</button>
+          <button type="button" class="sidebar-link" data-nav-view="services">Services</button>
           <button type="button" class="sidebar-link" data-nav-view="tests">Test Lab</button>
           <button type="button" class="sidebar-link" data-nav-view="agent">Agent</button>
           <button type="button" class="sidebar-link" data-nav-view="automation">Automation</button>
@@ -286,7 +287,6 @@
             </div>
             <div class="actions inline-actions">
               <button id="refreshDeployStatusBtn" type="button" class="secondary">Refresh status</button>
-              <button id="stopRunningDeployBtn" type="button" class="danger">Stop running app</button>
               <a class="button-link secondary" href="/results">View results</a>
             </div>
           </div>
@@ -507,6 +507,50 @@
                 <div id="connectionMessageViewer" class="connection-message-viewer">
                   <div class="empty">Choose a channel to inspect retained messages.</div>
                 </div>
+              </article>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" data-view-section="services">
+          <section class="panel">
+            <div class="panel-toolbar">
+              <div>
+                <h2>Services</h2>
+                <p>Quan ly service package doc lap: cai dat moi truong, luu config instance va test logic truoc khi noi vao Automation.</p>
+              </div>
+              <div class="actions inline-actions">
+                <button id="refreshServicesBtn" type="button" class="secondary">Refresh</button>
+              </div>
+            </div>
+            <div class="services-layout">
+              <article class="service-card">
+                <h3>Service packages</h3>
+                <p>Backend scan thu muc services va doc service.json cua tung package.</p>
+                <div id="serviceCatalogList" class="service-catalog-list"></div>
+              </article>
+              <article class="service-card">
+                <h3>Service instance</h3>
+                <p>Tao mot instance tu package, dien config theo schema cua service do.</p>
+                <div class="grid">
+                  <label>Package <select id="servicePackageSelect"></select></label>
+                  <label>Instance name <input id="serviceInstanceName" placeholder="Lobby frame capture" /></label>
+                </div>
+                <label class="inline-check"><input id="serviceInstanceEnabled" type="checkbox" checked /> Enabled</label>
+                <div id="serviceDynamicConfig" class="service-dynamic-config"></div>
+                <div class="actions inline-actions">
+                  <button id="saveServiceInstanceBtn" type="button">Save instance</button>
+                  <button id="resetServiceEditorBtn" type="button" class="secondary">New instance</button>
+                </div>
+              </article>
+              <article class="service-card service-wide">
+                <div class="panel-toolbar compact-toolbar">
+                  <div>
+                    <h3>Installed instances</h3>
+                    <p>Moi instance co config rieng va co the install/test/start/stop doc lap.</p>
+                  </div>
+                </div>
+                <div id="serviceInstanceList" class="service-instance-list"></div>
               </article>
             </div>
           </section>

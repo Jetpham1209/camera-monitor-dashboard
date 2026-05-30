@@ -253,6 +253,15 @@ const els = {
   connectionInspectLimit: document.querySelector("#connectionInspectLimit"),
   inspectConnectionChannelBtn: document.querySelector("#inspectConnectionChannelBtn"),
   connectionMessageViewer: document.querySelector("#connectionMessageViewer"),
+  refreshServicesBtn: document.querySelector("#refreshServicesBtn"),
+  serviceCatalogList: document.querySelector("#serviceCatalogList"),
+  servicePackageSelect: document.querySelector("#servicePackageSelect"),
+  serviceInstanceName: document.querySelector("#serviceInstanceName"),
+  serviceInstanceEnabled: document.querySelector("#serviceInstanceEnabled"),
+  serviceDynamicConfig: document.querySelector("#serviceDynamicConfig"),
+  saveServiceInstanceBtn: document.querySelector("#saveServiceInstanceBtn"),
+  resetServiceEditorBtn: document.querySelector("#resetServiceEditorBtn"),
+  serviceInstanceList: document.querySelector("#serviceInstanceList"),
   automationServiceInputChannel: document.querySelector("#automationServiceInputChannel"),
   automationServiceOutputChannel: document.querySelector("#automationServiceOutputChannel"),
   automationServiceInputMode: document.querySelector("#automationServiceInputMode"),
@@ -322,6 +331,9 @@ let automationConfig = { services: [], environments: [], workflows: [] };
 let automationRuns = [];
 let connectionsConfig = { providers: {}, channels: [] };
 let connectionsStatus = { providers: {}, channels: [] };
+let serviceCatalog = [];
+let serviceInstances = [];
+let editingServiceInstanceId = "";
 let latestTriton = { status: {}, models: [] };
 let latestTritonMetadata = null;
 let latestTritonMetadataKey = "";
@@ -433,6 +445,7 @@ const dashboardViewTitles = {
   models: "Model Factory",
   triton: "Triton Server",
   connections: "Connections",
+  services: "Services",
   tests: "Test Lab",
   agent: "Operator Agent",
   automation: "Automation",
@@ -453,6 +466,7 @@ function selectDashboardView(view = "dashboard") {
   if (next === "automation") refreshAutomation().catch((error) => setTaskStatus("automation", "failed", error.message));
   if (next === "triton") refreshTriton().catch((error) => setTaskStatus("triton", "failed", error.message));
   if (next === "connections") refreshConnections().catch((error) => setTaskStatus("connections", "failed", error.message));
+  if (next === "services") refreshServices().catch((error) => setTaskStatus("services", "failed", error.message));
 }
 
 function dashboardTag(label, tone = "") {
@@ -477,11 +491,41 @@ function modelLibraryStats() {
 }
 
 function dashboardDeploySummary() {
-  const container = latestDeployStatus.container || {};
-  const deepstream = latestDeployStatus.deepstream || {};
-  const sources = deepstream.sources || [];
-  const app = deployApps.find((item) => item.active) || deployApps[0] || null;
-  return { container, deepstream, sources, app };
+  const statusApps = Array.isArray(latestDeployStatus.apps) && latestDeployStatus.apps.length
+    ? latestDeployStatus.apps
+    : (latestDeployStatus.appId ? [latestDeployStatus] : []);
+  const configuredApps = deployApps.length ? deployApps : [];
+  const statusById = new Map(statusApps.map((item) => [item.appId || item.id || "default", item]));
+  const apps = (configuredApps.length ? configuredApps : statusApps).map((app, index) => {
+    const appId = app.id || app.appId || `deepstream-app-${index + 1}`;
+    const status = statusById.get(appId) || {};
+    const container = status.container || {};
+    const deepstream = status.deepstream || {};
+    const sources = deepstream.sources || [];
+    return {
+      ...app,
+      id: appId,
+      name: app.name || status.appName || appId,
+      status,
+      container,
+      deepstream,
+      sources,
+      running: Boolean(container.running),
+      started: Boolean(deepstream.started || deepstream.state === "playing"),
+      fps: sources.reduce((sum, source) => sum + Number(source.fps || 0), 0)
+    };
+  });
+  const activeId = latestDeployStatus.appId || activeDeployAppId || configuredApps.find((item) => item.active)?.id || apps[0]?.id || "";
+  const activeApp = apps.find((item) => item.id === activeId) || apps.find((item) => item.active) || apps[0] || null;
+  const sources = apps.flatMap((app) => app.sources.map((source) => ({ ...source, appId: app.id, appName: app.name })));
+  return {
+    apps,
+    activeApp,
+    sources,
+    runningApps: apps.filter((app) => app.running).length,
+    startedApps: apps.filter((app) => app.started).length,
+    totalFps: apps.reduce((sum, app) => sum + app.fps, 0)
+  };
 }
 
 function renderMainDashboard() {
@@ -493,12 +537,8 @@ function renderMainDashboard() {
   const deploy = dashboardDeploySummary();
   const automation = automationConfig || {};
   const testStages = confirmedTestPipelineStages.length ? normalizePipelineStages(confirmedTestPipelineStages) : [];
-  const selectedDeployCameras = new Set(deploy.app?.cameraIds || []);
-  const deployStageCount = deploy.app?.pipelineStages?.length
-    ? normalizePipelineStages(deploy.app.pipelineStages).filter((stage) => stage.enabled).length
-    : 0;
-  const running = Boolean(deploy.container.running);
-  const started = Boolean(deploy.deepstream.started);
+  const running = deploy.runningApps > 0;
+  const started = deploy.startedApps > 0;
   const sourceText = deploy.sources.length
     ? `${deploy.sources.length} source${deploy.sources.length === 1 ? "" : "s"} reporting FPS`
     : "Waiting for source telemetry";
@@ -512,8 +552,8 @@ function renderMainDashboard() {
       </article>
       <article class="dashboard-kpi ${running && started ? "success" : "warning"}">
         <span>DeepStream runtime</span>
-        <strong>${running ? "Container up" : "Not running"}</strong>
-        <small>${started ? "Pipeline started" : escapeHtml(deploy.deepstream.message || "Deploy an app to start the pipeline.")}</small>
+        <strong>${deploy.runningApps}/${deploy.apps.length || 0} running</strong>
+        <small>${started ? `${deploy.startedApps} pipeline(s) started - ${deploy.totalFps.toFixed(2)} FPS` : "Deploy an app to start the pipeline."}</small>
       </article>
       <article class="dashboard-kpi ${modelStats.built ? "success" : "warning"}">
         <span>Model library</span>
@@ -529,6 +569,11 @@ function renderMainDashboard() {
         <span>Automation</span>
         <strong>${(automation.workflows || []).length}</strong>
         <small>${(automation.services || []).length} service(s), ${(automation.workflows || []).filter((item) => item.enabled !== false).length} enabled workflow(s)</small>
+      </article>
+      <article class="dashboard-kpi ${serviceInstances.length ? "success" : "warning"}">
+        <span>Services</span>
+        <strong>${serviceInstances.length}</strong>
+        <small>${serviceCatalog.length} package(s), ${serviceInstances.filter((item) => item.enabled !== false).length} enabled instance(s)</small>
       </article>
     </div>
     <div class="dashboard-grid">
@@ -559,8 +604,8 @@ function renderMainDashboard() {
       <section class="dashboard-section">
         <div class="panel-toolbar">
           <div>
-            <h3>Active deploy app</h3>
-            <p>${escapeHtml(deploy.app?.name || "No deploy app selected.")}</p>
+            <h3>Deploy apps</h3>
+            <p>${escapeHtml(sourceText)}</p>
           </div>
           <div class="dashboard-actions">
             <button type="button" class="secondary" data-open-view="deploy">Configure</button>
@@ -568,21 +613,29 @@ function renderMainDashboard() {
           </div>
         </div>
         <div class="dashboard-list">
-          <article class="dashboard-stage-row">
-            <strong>${started ? "Pipeline running" : "Pipeline waiting"}</strong>
-            <span class="dashboard-list-meta">${escapeHtml(sourceText)}</span>
-            <div class="dashboard-tags">
-              ${dashboardTag(running ? "container running" : "container stopped", running ? "success" : "warning")}
-              ${dashboardTag(started ? "DeepStream started" : "DeepStream not started", started ? "success" : "warning")}
-              ${dashboardTag(processorLabel(deploy.app?.processorType))}
-              ${dashboardTag(`${selectedDeployCameras.size} camera(s)`)}
-              ${dashboardTag(`${deployStageCount} stage(s)`)}
-            </div>
-          </article>
+          ${deploy.apps.length ? deploy.apps.map((app) => {
+            const selectedDeployCameras = new Set(app.cameraIds || []);
+            const deployStageCount = app.pipelineStages?.length
+              ? normalizePipelineStages(app.pipelineStages).filter((stage) => stage.enabled).length
+              : 0;
+            return `
+              <article class="dashboard-stage-row">
+                <strong>${escapeHtml(app.name || app.id)}</strong>
+                <span class="dashboard-list-meta">${escapeHtml(app.id)} - ${app.fps.toFixed(2)} FPS - ${app.sources.length} source(s)</span>
+                <div class="dashboard-tags">
+                  ${dashboardTag(app.running ? "container running" : app.container.exists ? "container stopped" : "container missing", app.running ? "success" : "warning")}
+                  ${dashboardTag(app.started ? "DeepStream started" : "DeepStream not started", app.started ? "success" : "warning")}
+                  ${dashboardTag(processorLabel(app.processorType))}
+                  ${dashboardTag(`${selectedDeployCameras.size} camera(s)`)}
+                  ${dashboardTag(`${deployStageCount} stage(s)`)}
+                </div>
+              </article>
+            `;
+          }).join("") : '<div class="empty">No deploy app configured yet.</div>'}
           ${deploy.sources.map((source) => `
             <article class="dashboard-stage-row">
               <strong>${escapeHtml(source.cameraName || source.cameraId || `Source ${source.sourceId}`)}</strong>
-              <span class="dashboard-list-meta">${Number(source.fps || 0).toFixed(2)} FPS - ${Number(source.frameCount || 0)} frames</span>
+              <span class="dashboard-list-meta">${escapeHtml(source.appName || source.appId || "")} - ${Number(source.fps || 0).toFixed(2)} FPS - ${Number(source.frameCount || 0)} frames</span>
             </article>
           `).join("")}
         </div>
@@ -670,6 +723,233 @@ function parseJsonField(input, fallback = {}) {
   } catch (error) {
     throw new Error(`JSON khong hop le: ${error.message}`);
   }
+}
+
+function serviceManifestById(serviceId) {
+  return serviceCatalog.find((item) => item.id === serviceId) || null;
+}
+
+function serviceFieldDefault(field) {
+  if (field.default !== undefined && field.default !== null) return field.default;
+  if (field.type === "json") return [];
+  if (field.type === "number") return "";
+  if (field.type === "checkbox") return false;
+  return "";
+}
+
+function serviceFieldValue(config, field) {
+  return config && Object.prototype.hasOwnProperty.call(config, field.key)
+    ? config[field.key]
+    : serviceFieldDefault(field);
+}
+
+function serviceFieldInput(field, value) {
+  const key = escapeHtml(field.key);
+  const label = `${escapeHtml(field.label || field.key)}${field.required ? " *" : ""}`;
+  const help = field.help ? `<small>${escapeHtml(field.help)}</small>` : "";
+  if (field.type === "select") {
+    return `
+      <label>${label}
+        <select data-service-config-key="${key}" data-service-config-type="select">
+          ${(field.options || []).map((option) => `
+            <option value="${escapeHtml(option.value)}" ${String(value) === String(option.value) ? "selected" : ""}>${escapeHtml(option.label || option.value)}</option>
+          `).join("")}
+        </select>
+        ${help}
+      </label>
+    `;
+  }
+  if (field.type === "json" || field.type === "polygon") {
+    const text = typeof value === "string" ? value : JSON.stringify(value ?? serviceFieldDefault(field), null, 2);
+    return `
+      <label class="service-config-wide">${label}
+        <textarea data-service-config-key="${key}" data-service-config-type="json" rows="${Number(field.rows || 4)}">${escapeHtml(text)}</textarea>
+        ${help}
+      </label>
+    `;
+  }
+  if (field.type === "checkbox") {
+    return `
+      <label class="inline-check">
+        <input data-service-config-key="${key}" data-service-config-type="checkbox" type="checkbox" ${value ? "checked" : ""} />
+        ${label}
+        ${help}
+      </label>
+    `;
+  }
+  const inputType = field.type === "number" ? "number" : "text";
+  const attrs = [
+    field.placeholder ? `placeholder="${escapeHtml(field.placeholder)}"` : "",
+    field.min !== undefined ? `min="${escapeHtml(field.min)}"` : "",
+    field.max !== undefined ? `max="${escapeHtml(field.max)}"` : "",
+    field.step !== undefined ? `step="${escapeHtml(field.step)}"` : ""
+  ].filter(Boolean).join(" ");
+  return `
+    <label>${label}
+      <input data-service-config-key="${key}" data-service-config-type="${escapeHtml(field.type || inputType)}" type="${inputType}" value="${escapeHtml(value ?? "")}" ${attrs} />
+      ${help}
+    </label>
+  `;
+}
+
+function renderServiceConfigForm(config = {}) {
+  if (!els.serviceDynamicConfig || !els.servicePackageSelect) return;
+  const manifest = serviceManifestById(els.servicePackageSelect.value);
+  if (!manifest) {
+    els.serviceDynamicConfig.innerHTML = '<div class="empty">No service package selected.</div>';
+    return;
+  }
+  const fields = manifest.configSchema || [];
+  els.serviceDynamicConfig.innerHTML = fields.length ? `
+    <div class="service-config-grid">
+      ${fields.map((field) => serviceFieldInput(field, serviceFieldValue(config, field))).join("")}
+    </div>
+  ` : '<div class="empty">This service does not expose configurable fields.</div>';
+}
+
+function readServiceConfigForm() {
+  const manifest = serviceManifestById(els.servicePackageSelect?.value);
+  const config = {};
+  if (!manifest || !els.serviceDynamicConfig) return config;
+  for (const field of manifest.configSchema || []) {
+    const input = els.serviceDynamicConfig.querySelector(`[data-service-config-key="${CSS.escape(field.key)}"]`);
+    if (!input) continue;
+    if (field.type === "json" || field.type === "polygon") {
+      config[field.key] = parseJsonField(input, serviceFieldDefault(field));
+    } else if (field.type === "number") {
+      config[field.key] = input.value === "" ? "" : Number(input.value);
+    } else if (field.type === "checkbox") {
+      config[field.key] = input.checked;
+    } else {
+      config[field.key] = input.value;
+    }
+  }
+  return config;
+}
+
+function serviceStatusTag(instance) {
+  const state = instance?.status?.state || "saved";
+  const tone = ["success", "started"].includes(state) ? "success" : state === "failed" ? "warning" : "";
+  return `<span class="dashboard-tag ${tone}">${escapeHtml(state)}</span>`;
+}
+
+function renderServices() {
+  if (!els.serviceCatalogList) return;
+  const selectedPackage = els.servicePackageSelect?.value || serviceCatalog[0]?.id || "";
+  if (els.servicePackageSelect) {
+    els.servicePackageSelect.innerHTML = serviceCatalog.length
+      ? serviceCatalog.map((manifest) => `<option value="${escapeHtml(manifest.id)}" ${manifest.id === selectedPackage ? "selected" : ""}>${escapeHtml(manifest.name)}</option>`).join("")
+      : '<option value="">No service package</option>';
+  }
+  els.serviceCatalogList.innerHTML = serviceCatalog.length ? serviceCatalog.map((manifest) => `
+    <article class="service-package-row">
+      <div>
+        <strong>${escapeHtml(manifest.name)}</strong>
+        <span>${escapeHtml(manifest.id)} · v${escapeHtml(manifest.version)} · ${escapeHtml(manifest.runtime)}</span>
+        <small>${escapeHtml(manifest.description || "No description.")}</small>
+      </div>
+      <button type="button" class="secondary" data-use-service-package="${escapeHtml(manifest.id)}">Use</button>
+    </article>
+  `).join("") : '<div class="empty">No service package found in deepstream-lpr-app/services.</div>';
+
+  els.serviceInstanceList.innerHTML = serviceInstances.length ? serviceInstances.map((instance) => {
+    const manifest = serviceManifestById(instance.serviceId);
+    return `
+      <article class="service-instance-row">
+        <div class="service-instance-head">
+          <div>
+            <strong>${escapeHtml(instance.name)}</strong>
+            <span>${escapeHtml(manifest?.name || instance.serviceId)} · ${escapeHtml(instance.id)}</span>
+          </div>
+          <div class="dashboard-tags">
+            ${serviceStatusTag(instance)}
+            ${instance.enabled ? dashboardTag("enabled", "success") : dashboardTag("disabled", "warning")}
+          </div>
+        </div>
+        <small>${escapeHtml(instance.status?.message || "Saved.")}</small>
+        ${instance.status?.output ? `<pre>${escapeHtml(instance.status.output)}</pre>` : ""}
+        <div class="actions inline-actions">
+          <button type="button" class="secondary" data-edit-service-instance="${escapeHtml(instance.id)}">Edit</button>
+          <button type="button" data-service-action="install" data-service-instance="${escapeHtml(instance.id)}">Install</button>
+          <button type="button" data-service-action="test" data-service-instance="${escapeHtml(instance.id)}">Test</button>
+          <button type="button" data-service-action="start" data-service-instance="${escapeHtml(instance.id)}">Start</button>
+          <button type="button" class="secondary" data-service-action="stop" data-service-instance="${escapeHtml(instance.id)}">Stop</button>
+          <button type="button" class="danger" data-delete-service-instance="${escapeHtml(instance.id)}">Delete</button>
+        </div>
+      </article>
+    `;
+  }).join("") : '<div class="empty">No service instance yet. Choose a package, fill config and save an instance.</div>';
+}
+
+function resetServiceEditor(serviceId = "") {
+  editingServiceInstanceId = "";
+  if (els.servicePackageSelect && serviceId) els.servicePackageSelect.value = serviceId;
+  if (els.serviceInstanceName) els.serviceInstanceName.value = "";
+  if (els.serviceInstanceEnabled) els.serviceInstanceEnabled.checked = true;
+  renderServiceConfigForm({});
+}
+
+function editServiceInstance(instanceId) {
+  const instance = serviceInstances.find((item) => item.id === instanceId);
+  if (!instance) return;
+  editingServiceInstanceId = instance.id;
+  els.servicePackageSelect.value = instance.serviceId;
+  els.serviceInstanceName.value = instance.name || "";
+  els.serviceInstanceEnabled.checked = instance.enabled !== false;
+  renderServiceConfigForm(instance.config || {});
+  setTaskStatus("services", "running", `Editing ${instance.name}.`);
+}
+
+async function refreshServices(button = null) {
+  const result = await withTask("services", button, "Loading services...", async () => api("/api/services"));
+  serviceCatalog = result.catalog || [];
+  serviceInstances = result.instances || [];
+  renderServices();
+  renderServiceConfigForm(editingServiceInstanceId ? serviceInstances.find((item) => item.id === editingServiceInstanceId)?.config || {} : {});
+  return result;
+}
+
+async function saveServiceInstance(button = null) {
+  const manifest = serviceManifestById(els.servicePackageSelect?.value);
+  if (!manifest) throw new Error("Choose a service package first.");
+  const payload = {
+    serviceId: manifest.id,
+    name: els.serviceInstanceName.value.trim() || manifest.name,
+    enabled: els.serviceInstanceEnabled.checked,
+    config: readServiceConfigForm()
+  };
+  const result = await withTask("services", button, "Saving service instance...", async () => {
+    if (editingServiceInstanceId) {
+      return api(`/api/services/instances/${encodeURIComponent(editingServiceInstanceId)}`, {
+        method: "PUT",
+        body: JSON.stringify(payload)
+      });
+    }
+    return api("/api/services/instances", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  });
+  serviceInstances = result.instances || serviceInstances;
+  editingServiceInstanceId = result.instance?.id || "";
+  renderServices();
+  setTaskStatus("services", "success", "Service instance saved.");
+}
+
+async function runServiceInstanceAction(instanceId, action, button = null) {
+  const result = await withTask("services", button, `${action} service...`, async () => api(`/api/services/instances/${encodeURIComponent(instanceId)}/${encodeURIComponent(action)}`, {
+    method: "POST",
+    body: JSON.stringify({})
+  }));
+  await refreshServices();
+  print(result);
+}
+
+async function deleteServiceInstance(instanceId) {
+  const result = await withTask("services", null, "Deleting service instance...", async () => api(`/api/services/instances/${encodeURIComponent(instanceId)}`, { method: "DELETE" }));
+  serviceInstances = result.instances || [];
+  if (editingServiceInstanceId === instanceId) resetServiceEditor();
+  renderServices();
 }
 
 function renderAutomation() {
@@ -2599,51 +2879,89 @@ function renderDeployApps(apps = [], cameras = readCameraCards()) {
 function renderDeployAppCard(app, index, cameras) {
   const selectedCameraIds = new Set(app.cameraIds || []);
   const selectedCameras = cameras.filter((camera) => selectedCameraIds.has(camera.id));
+  const stages = normalizePipelineStages(app.pipelineStages || []);
+  const eventOutputs = Array.isArray(app.eventOutputs) ? app.eventOutputs : [];
+  const processorLabel = (normalizeProcessorType(app.processorType) || "generic_detection").replaceAll("_", " ");
   return `
     <article class="deploy-app-card" data-deploy-app-card data-deploy-app-id="${escapeHtml(app.id)}">
-      <div class="deploy-app-head">
-        <label class="inline-check">
-          <input data-deploy-active type="radio" name="activeDeployApp" ${app.active ? "checked" : ""} />
-          Active
-        </label>
-        <label>App name <input data-deploy-field="name" value="${escapeHtml(app.name || `DeepStream App ${index + 1}`)}" /></label>
-        <label>
-          Processor
-          <select data-deploy-field="processorType">
-            ${processorOptionMarkup(app.processorType)}
-          </select>
-        </label>
+      <div class="deploy-app-head compact">
+        <div class="deploy-app-title">
+          <strong>${escapeHtml(app.name || `DeepStream App ${index + 1}`)}</strong>
+          <small>${escapeHtml(app.id)} - ${escapeHtml(processorLabel)}</small>
+        </div>
+        <div class="deploy-app-badges">
+          ${app.active ? renderRuntimeBadge("active", "info") : ""}
+          ${renderRuntimeBadge(`${selectedCameras.length} camera${selectedCameras.length === 1 ? "" : "s"}`, selectedCameras.length ? "success" : "warning")}
+          ${renderRuntimeBadge(`${stages.length} stage${stages.length === 1 ? "" : "s"}`, stages.length ? "info" : "warning")}
+          ${renderRuntimeBadge(`${eventOutputs.length} output${eventOutputs.length === 1 ? "" : "s"}`, eventOutputs.length ? "info" : "")}
+        </div>
         <div class="actions inline-actions">
           <button type="button" class="primary" data-deploy-single-app="${escapeHtml(app.id)}">Deploy / Update</button>
           <button type="button" class="danger" data-stop-single-app="${escapeHtml(app.id)}">Stop</button>
           <button type="button" data-remove-deploy-app="${index}" ${deployApps.length <= 1 ? "disabled" : ""}>Remove app</button>
         </div>
       </div>
-      <div class="stage-section-head">
-        <strong>Inference stages</strong>
-        <button type="button" class="secondary" data-add-deploy-stage="${index}">Add stage</button>
-      </div>
-      <div class="pipeline-stage-list" data-deploy-stage-list data-deploy-stage-owner="${index}">
-        ${stageRowsMarkup(app.pipelineStages)}
-      </div>
-      <details class="deploy-event-output-panel" open>
-        <summary>Event outputs</summary>
-        <p class="muted">Publish DeepStream events to message channels. Channels are created in the Connections tab.</p>
-        <div class="deploy-event-output-list">
-          ${eventOutputRowsMarkup(app.eventOutputs)}
-        </div>
-        <button type="button" class="secondary" data-add-deploy-event-output="${index}">Add event output</button>
-      </details>
-      <div class="deploy-camera-picker">
-        ${cameras.map((camera) => `
-          <label class="inline-check deploy-camera-option">
-            <input data-deploy-camera type="checkbox" value="${escapeHtml(camera.id)}" ${selectedCameraIds.has(camera.id) ? "checked" : ""} />
-            ${escapeHtml(camera.name || camera.id)}
-          </label>
-        `).join("")}
-      </div>
-      <div class="deploy-preview-grid">
-        ${selectedCameras.length ? selectedCameras.map((camera) => renderDeployCameraPreview(camera, app, index)).join("") : '<div class="empty">Chon it nhat mot camera cho app nay.</div>'}
+      <div class="deploy-config-accordion">
+        <details class="deploy-config-section" open>
+          <summary>
+            <span>App setup</span>
+            <small>Name, active target and processor mode</small>
+          </summary>
+          <div class="deploy-app-setup-grid">
+            <label class="inline-check">
+              <input data-deploy-active type="radio" name="activeDeployApp" ${app.active ? "checked" : ""} />
+              Active deploy target
+            </label>
+            <label>App name <input data-deploy-field="name" value="${escapeHtml(app.name || `DeepStream App ${index + 1}`)}" /></label>
+            <label>
+              Processor
+              <select data-deploy-field="processorType">
+                ${processorOptionMarkup(app.processorType)}
+              </select>
+            </label>
+          </div>
+        </details>
+        <details class="deploy-config-section">
+          <summary>
+            <span>Inference stages</span>
+            <small>${stages.length} configured stage${stages.length === 1 ? "" : "s"}</small>
+          </summary>
+          <div class="stage-section-head">
+            <strong>GIE flow</strong>
+            <button type="button" class="secondary" data-add-deploy-stage="${index}">Add stage</button>
+          </div>
+          <div class="pipeline-stage-list" data-deploy-stage-list data-deploy-stage-owner="${index}">
+            ${stageRowsMarkup(stages)}
+          </div>
+        </details>
+        <details class="deploy-config-section">
+          <summary>
+            <span>Event outputs</span>
+            <small>${eventOutputs.length || "No"} message channel${eventOutputs.length === 1 ? "" : "s"}</small>
+          </summary>
+          <p class="muted">Publish DeepStream events to message channels. Channels are created in the Connections tab.</p>
+          <div class="deploy-event-output-list">
+            ${eventOutputRowsMarkup(eventOutputs)}
+          </div>
+          <button type="button" class="secondary" data-add-deploy-event-output="${index}">Add event output</button>
+        </details>
+        <details class="deploy-config-section">
+          <summary>
+            <span>Cameras & ROI</span>
+            <small>${selectedCameras.length || "No"} selected camera${selectedCameras.length === 1 ? "" : "s"}</small>
+          </summary>
+          <div class="deploy-camera-picker">
+            ${cameras.map((camera) => `
+              <label class="inline-check deploy-camera-option">
+                <input data-deploy-camera type="checkbox" value="${escapeHtml(camera.id)}" ${selectedCameraIds.has(camera.id) ? "checked" : ""} />
+                ${escapeHtml(camera.name || camera.id)}
+              </label>
+            `).join("")}
+          </div>
+          <div class="deploy-preview-grid">
+            ${selectedCameras.length ? selectedCameras.map((camera) => renderDeployCameraPreview(camera, app, index)).join("") : '<div class="empty">Chon it nhat mot camera cho app nay.</div>'}
+          </div>
+        </details>
       </div>
     </article>
   `;
@@ -4915,14 +5233,116 @@ async function loadEvents() {
   print(result);
 }
 
+function deployStatusTone({ running = false, exists = false, started = false, state = "" } = {}) {
+  if (running && (started || state === "playing")) return "success";
+  if (running) return "warning";
+  if (exists || state === "starting") return "warning";
+  return "failed";
+}
+
+function deployStatusLabel(appStatus = {}) {
+  const container = appStatus.container || {};
+  const deepstream = appStatus.deepstream || {};
+  if (container.running && (deepstream.state === "playing" || deepstream.started)) return "Running";
+  if (container.running) return "Starting";
+  if (container.exists) return "Stopped";
+  return "Missing";
+}
+
+function appConfigById(appId) {
+  return deployApps.find((app) => app.id === appId) || null;
+}
+
+function renderRuntimeBadge(label, tone = "") {
+  return `<span class="runtime-badge ${tone}">${escapeHtml(label)}</span>`;
+}
+
+function renderDeployAppMonitorRow(appStatus = {}, activeId = "") {
+  const appId = appStatus.appId || appStatus.id || "default";
+  const appConfig = appConfigById(appId);
+  const container = appStatus.container || {};
+  const deepstream = appStatus.deepstream || {};
+  const sources = Array.isArray(deepstream.sources) ? deepstream.sources : [];
+  const isActive = appId === activeId;
+  const running = Boolean(container.running);
+  const stateLabel = deployStatusLabel(appStatus);
+  const stateTone = deployStatusTone({
+    running,
+    exists: container.exists,
+    started: deepstream.started,
+    state: deepstream.state
+  });
+  const fps = sources.reduce((sum, source) => sum + Number(source.fps || 0), 0);
+  return `
+    <article class="deploy-runtime-row ${isActive ? "active" : ""}" data-monitor-app-id="${escapeHtml(appId)}">
+      <div class="deploy-runtime-main">
+        <div>
+          <div class="deploy-runtime-title">
+            <strong>${escapeHtml(appStatus.appName || appConfig?.name || appId)}</strong>
+            ${isActive ? renderRuntimeBadge("active", "info") : ""}
+          </div>
+          <small>${escapeHtml(appId)} - ${escapeHtml(appStatus.containerName || container.name || "container not created")}</small>
+        </div>
+        <div class="deploy-runtime-badges">
+          ${renderRuntimeBadge(stateLabel, stateTone)}
+          ${renderRuntimeBadge(deepstream.state || "unknown", deepstream.state === "playing" ? "success" : "warning")}
+          ${renderRuntimeBadge(`${sources.length} source${sources.length === 1 ? "" : "s"}`, "info")}
+          ${renderRuntimeBadge(`${fps.toFixed(2)} FPS`, fps > 0 ? "success" : "warning")}
+        </div>
+      </div>
+      <div class="deploy-runtime-actions">
+        <button type="button" class="secondary" data-monitor-deploy-app="${escapeHtml(appId)}">Deploy</button>
+        <button type="button" class="danger" data-monitor-stop-app="${escapeHtml(appId)}" ${running ? "" : "disabled"}>Stop</button>
+        <a class="button-link secondary" href="/results?appId=${encodeURIComponent(appId)}">Results</a>
+      </div>
+    </article>
+  `;
+}
+
+function renderDeploySourceMonitorRows(appStatuses = []) {
+  const rows = appStatuses.flatMap((appStatus) => {
+    const appId = appStatus.appId || appStatus.id || "default";
+    const appName = appStatus.appName || appConfigById(appId)?.name || appId;
+    const sources = appStatus.deepstream?.sources || [];
+    return sources.map((source) => ({ ...source, appId, appName }));
+  });
+  if (!rows.length) {
+    return `
+      <div class="deploy-empty-state">
+        <strong>No source status yet</strong>
+        <small>Deploy an app and wait for DeepStream to report FPS.</small>
+      </div>
+    `;
+  }
+  return `
+    <div class="deploy-source-table">
+      ${rows.map((source) => `
+        <div class="deploy-source-row">
+          <div>
+            <strong>${escapeHtml(source.cameraName || source.cameraId || `Source ${source.sourceId}`)}</strong>
+            <small>${escapeHtml(source.appName)} - ${escapeHtml(source.cameraId || `source-${source.sourceId}`)}</small>
+          </div>
+          <span>${Number(source.fps || 0).toFixed(2)} FPS</span>
+          <small>${Number(source.frameCount || 0)} frames</small>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
 function renderDeployStatus(status = {}) {
   if (!els.deployStatusCards) return;
   latestDeployStatus = status;
   const container = status.container || {};
   const deepstream = status.deepstream || {};
-  const sources = deepstream.sources || [];
-  const appStatuses = Array.isArray(status.apps) ? status.apps : [];
+  const appStatuses = Array.isArray(status.apps) && status.apps.length ? status.apps : [status];
   const activeApp = deployApps.find((app) => app.active) || deployApps[0] || null;
+  const activeId = status.appId || activeApp?.id || appStatuses[0]?.appId || "";
+  const runningApps = appStatuses.filter((item) => item.container?.running).length;
+  const totalSources = appStatuses.reduce((sum, item) => sum + Number(item.deepstream?.sources?.length || 0), 0);
+  const totalFps = appStatuses.reduce((sum, item) => (
+    sum + (item.deepstream?.sources || []).reduce((inner, source) => inner + Number(source.fps || 0), 0)
+  ), 0);
   if (els.stopRunningDeployBtn) {
     els.stopRunningDeployBtn.disabled = !container.running;
     els.stopRunningDeployBtn.textContent = container.running
@@ -4930,41 +5350,43 @@ function renderDeployStatus(status = {}) {
       : "Stop running app";
   }
   els.deployStatusCards.innerHTML = `
-    <article class="deploy-status-card ${container.running ? "success" : ""}">
-      <span>Active app</span>
-      <strong>${escapeHtml(activeApp?.name || "No app selected")}</strong>
-      <small>${escapeHtml(activeApp?.id || "Deploy an app to start runtime.")}</small>
-    </article>
-    <article class="deploy-status-card ${container.running ? "success" : "failed"}">
-      <span>Container</span>
-      <strong>${container.running ? "Running" : container.exists ? "Stopped" : "Missing"}</strong>
-      <small>${escapeHtml(container.name || "deepstream-lpr")} ${escapeHtml(container.status || "")}</small>
-    </article>
-    <article class="deploy-status-card ${deepstream.started ? "success" : "failed"}">
-      <span>DeepStream</span>
-      <strong>${deepstream.started ? "Started" : escapeHtml(deepstream.state || "Unknown")}</strong>
-      <small>${escapeHtml(deepstream.message || "No status file yet.")}</small>
-    </article>
-    ${sources.length ? sources.map((source) => `
-      <article class="deploy-status-card">
-        <span>${escapeHtml(source.cameraName || source.cameraId || `Source ${source.sourceId}`)}</span>
-        <strong>${Number(source.fps || 0).toFixed(2)} FPS</strong>
-        <small>${escapeHtml(source.cameraId || "")} - ${Number(source.frameCount || 0)} frames</small>
-      </article>
-    `).join("") : `
-      <article class="deploy-status-card">
-        <span>Sources</span>
-        <strong>0.00 FPS</strong>
-        <small>No source status yet.</small>
-      </article>
-    `}
-    ${appStatuses.length > 1 ? appStatuses.map((item) => `
-      <article class="deploy-status-card ${item.container?.running ? "success" : item.container?.exists ? "" : "failed"}">
-        <span>${escapeHtml(item.appName || item.appId)}</span>
-        <strong>${item.container?.running ? "Running" : item.container?.exists ? "Stopped" : "Missing"}</strong>
-        <small>${escapeHtml(item.containerName || item.appId)} - ${escapeHtml(item.deepstream?.state || "unknown")}</small>
-      </article>
-    `).join("") : ""}
+    <div class="deploy-monitor-board">
+      <div class="deploy-monitor-summary">
+        <article>
+          <span>Active app</span>
+          <strong>${escapeHtml(activeApp?.name || status.appName || "No app selected")}</strong>
+          <small>${escapeHtml(activeId || "Deploy an app to start runtime.")}</small>
+        </article>
+        <article>
+          <span>Running apps</span>
+          <strong>${runningApps}/${appStatuses.length}</strong>
+          <small>${escapeHtml(deepstream.message || "Runtime status by app")}</small>
+        </article>
+        <article>
+          <span>Sources</span>
+          <strong>${totalSources}</strong>
+          <small>${totalFps.toFixed(2)} total FPS</small>
+        </article>
+      </div>
+      <div class="deploy-monitor-columns">
+        <section class="deploy-monitor-section">
+          <div class="section-mini-head">
+            <h4>DeepStream apps</h4>
+            <small>Deploy, stop and inspect each app independently.</small>
+          </div>
+          <div class="deploy-runtime-list">
+            ${appStatuses.map((item) => renderDeployAppMonitorRow(item, activeId)).join("")}
+          </div>
+        </section>
+        <section class="deploy-monitor-section">
+          <div class="section-mini-head">
+            <h4>Source FPS</h4>
+            <small>Realtime source health reported by running containers.</small>
+          </div>
+          ${renderDeploySourceMonitorRows(appStatuses)}
+        </section>
+      </div>
+    </div>
   `;
   renderMainDashboard();
 }
@@ -5010,6 +5432,7 @@ async function init() {
   await refreshAgent().catch((error) => setTaskStatus("agent", "failed", error.message));
   await refreshAutomation().catch((error) => setTaskStatus("automation", "failed", error.message));
   await refreshTriton().catch((error) => setTaskStatus("triton", "failed", error.message));
+  await refreshServices().catch((error) => setTaskStatus("services", "failed", error.message));
   startDeployStatusPolling();
 }
 
@@ -5027,6 +5450,20 @@ els.deployBtn.addEventListener("click", () => deploy().catch((error) => {
 els.eventsBtn.addEventListener("click", () => loadEvents().catch((error) => print(error.message)));
 els.refreshDeployStatusBtn?.addEventListener("click", () => refreshDeployStatus(els.refreshDeployStatusBtn).catch((error) => print(error.message)));
 els.stopRunningDeployBtn?.addEventListener("click", () => stop(els.stopRunningDeployBtn).catch((error) => print(error.message)));
+els.deployStatusCards?.addEventListener("click", (event) => {
+  const deployButton = event.target.closest("[data-monitor-deploy-app]");
+  if (deployButton) {
+    deploySingleApp(deployButton.dataset.monitorDeployApp, deployButton).catch((error) => {
+      renderCheckpoints(error.checkpoints || error.body?.checkpoints || []);
+      print(error.message || error);
+    });
+    return;
+  }
+  const stopButton = event.target.closest("[data-monitor-stop-app]");
+  if (stopButton) {
+    stopSingleApp(stopButton.dataset.monitorStopApp, stopButton).catch((error) => print(error.message || error));
+  }
+});
 els.addCameraBtn.addEventListener("click", () => {
   try {
     addCamera();
@@ -5150,6 +5587,34 @@ els.agentModel?.addEventListener("change", () => {
 els.agentCustomModel?.addEventListener("input", updateAgentParamVisibility);
 els.agentApiKey?.addEventListener("input", () => {
   els.agentApiKey.type = "password";
+});
+els.refreshServicesBtn?.addEventListener("click", () => refreshServices(els.refreshServicesBtn).catch((error) => print(error.message)));
+els.servicePackageSelect?.addEventListener("change", () => {
+  editingServiceInstanceId = "";
+  renderServiceConfigForm({});
+});
+els.resetServiceEditorBtn?.addEventListener("click", () => resetServiceEditor());
+els.saveServiceInstanceBtn?.addEventListener("click", () => saveServiceInstance(els.saveServiceInstanceBtn).catch((error) => print(error.message)));
+els.serviceCatalogList?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-use-service-package]");
+  if (!button) return;
+  resetServiceEditor(button.dataset.useServicePackage);
+});
+els.serviceInstanceList?.addEventListener("click", (event) => {
+  const editButton = event.target.closest("[data-edit-service-instance]");
+  if (editButton) {
+    editServiceInstance(editButton.dataset.editServiceInstance);
+    return;
+  }
+  const actionButton = event.target.closest("[data-service-action]");
+  if (actionButton) {
+    runServiceInstanceAction(actionButton.dataset.serviceInstance, actionButton.dataset.serviceAction, actionButton).catch((error) => print(error.message));
+    return;
+  }
+  const deleteButton = event.target.closest("[data-delete-service-instance]");
+  if (deleteButton) {
+    deleteServiceInstance(deleteButton.dataset.deleteServiceInstance).catch((error) => print(error.message));
+  }
 });
 els.refreshAutomationBtn?.addEventListener("click", () => refreshAutomation(els.refreshAutomationBtn).catch((error) => print(error.message)));
 els.saveAutomationBtn?.addEventListener("click", () => saveAutomation(els.saveAutomationBtn).catch((error) => print(error.message)));

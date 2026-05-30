@@ -20,6 +20,9 @@ const THIRD_PARTY_DIR = path.join(RUNTIME_DIR, "third_party");
 const TEST_MEDIA_DIR = path.join(RUNTIME_DIR, "test-media");
 const MODEL_PENDING_DIR = path.join(RUNTIME_DIR, "model-factory-pending");
 const TRITON_UPLOAD_DIR = path.join(RUNTIME_DIR, "triton-uploads");
+const SERVICES_DIR = path.join(APP_ROOT, "services");
+const SERVICE_RUNTIME_DIR = path.join(RUNTIME_DIR, "services");
+const SERVICE_OUTPUT_DIR = path.join(SERVICE_RUNTIME_DIR, "outputs");
 const MODELS_DIR = path.join(APP_ROOT, "models");
 const MODEL_ARCHIVE_DIR = path.join(APP_ROOT, "model-archive");
 const TRITON_MODELS_DIR = path.join(APP_ROOT, "triton-models");
@@ -30,6 +33,7 @@ const CONFIG_FILE = path.join(RUNTIME_DIR, "config.json");
 const AUTOMATION_FILE = path.join(RUNTIME_DIR, "automation.json");
 const AUTOMATION_RUNS_FILE = path.join(RUNTIME_DIR, "automation-runs.json");
 const CONNECTIONS_FILE = path.join(RUNTIME_DIR, "connections.json");
+const SERVICE_INSTANCES_FILE = path.join(RUNTIME_DIR, "service-instances.json");
 const COMPOSE_FILE = path.join(RUNTIME_DIR, "docker-compose.generated.yml");
 const PORT = Number(process.env.LPR_CONTROL_PORT || 5190);
 const DEEPSTREAM_YOLO_REPO = process.env.DEEPSTREAM_YOLO_REPO || "https://github.com/marcoslucianops/DeepStream-Yolo.git";
@@ -147,7 +151,7 @@ const MODEL_PROFILE_SPECS = {
 };
 
 function ensureDirs() {
-  for (const dir of [RUNTIME_DIR, RUNTIME_APPS_DIR, GENERATED_DIR, THIRD_PARTY_DIR, TEST_MEDIA_DIR, MODEL_PENDING_DIR, TRITON_UPLOAD_DIR, MODELS_DIR, MODEL_ARCHIVE_DIR, TRITON_MODELS_DIR, ROI_CAPTURE_DIR]) {
+  for (const dir of [RUNTIME_DIR, RUNTIME_APPS_DIR, GENERATED_DIR, THIRD_PARTY_DIR, TEST_MEDIA_DIR, MODEL_PENDING_DIR, TRITON_UPLOAD_DIR, SERVICES_DIR, SERVICE_RUNTIME_DIR, SERVICE_OUTPUT_DIR, MODELS_DIR, MODEL_ARCHIVE_DIR, TRITON_MODELS_DIR, ROI_CAPTURE_DIR]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }
@@ -162,6 +166,188 @@ async function readJson(file, fallback) {
 
 async function writeJson(file, value) {
   await fsp.writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function sanitizeServiceId(value) {
+  return String(value || "service")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "service";
+}
+
+function normalizeServiceField(field = {}) {
+  const type = String(field.type || "text").trim();
+  return {
+    key: String(field.key || "").trim(),
+    label: String(field.label || field.key || "").trim(),
+    type,
+    required: field.required === true,
+    default: field.default ?? "",
+    placeholder: String(field.placeholder || "").trim(),
+    help: String(field.help || "").trim(),
+    options: Array.isArray(field.options) ? field.options.map((option) => ({
+      value: String(typeof option === "object" ? option.value : option),
+      label: String(typeof option === "object" ? option.label : option)
+    })) : [],
+    rows: Math.max(2, Number(field.rows || 4)),
+    min: field.min,
+    max: field.max,
+    step: field.step
+  };
+}
+
+function normalizeServiceManifest(value = {}, serviceDir = "") {
+  const id = sanitizeServiceId(value.id || path.basename(serviceDir));
+  const scripts = typeof value.scripts === "object" && value.scripts ? value.scripts : {};
+  return {
+    id,
+    name: String(value.name || id).trim(),
+    version: String(value.version || "0.1.0").trim(),
+    description: String(value.description || "").trim(),
+    runtime: String(value.runtime || "local").trim(),
+    packageDir: serviceDir,
+    entrypoint: String(value.entrypoint || "").trim(),
+    configSchema: Array.isArray(value.configSchema) ? value.configSchema.map(normalizeServiceField).filter((field) => field.key) : [],
+    messageBus: typeof value.messageBus === "object" && value.messageBus ? value.messageBus : { optional: true },
+    scripts: {
+      install: String(scripts.install || "install.sh").trim(),
+      start: String(scripts.start || "start.sh").trim(),
+      stop: String(scripts.stop || "stop.sh").trim(),
+      test: String(scripts.test || "test.sh").trim()
+    }
+  };
+}
+
+async function listServiceCatalog() {
+  let entries = [];
+  try {
+    entries = await fsp.readdir(SERVICES_DIR, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const manifests = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const serviceDir = path.join(SERVICES_DIR, entry.name);
+    const manifestPath = path.join(serviceDir, "service.json");
+    const raw = await readJson(manifestPath, null);
+    if (!raw) continue;
+    manifests.push(normalizeServiceManifest(raw, serviceDir));
+  }
+  return manifests.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function readServiceInstances() {
+  const raw = await readJson(SERVICE_INSTANCES_FILE, []);
+  return (Array.isArray(raw) ? raw : []).map((item, index) => ({
+    id: sanitizeServiceId(item.id || `svc-instance-${index + 1}`),
+    serviceId: sanitizeServiceId(item.serviceId || ""),
+    name: String(item.name || `Service Instance ${index + 1}`).trim(),
+    enabled: item.enabled !== false,
+    config: typeof item.config === "object" && item.config && !Array.isArray(item.config) ? item.config : {},
+    status: typeof item.status === "object" && item.status && !Array.isArray(item.status) ? item.status : {},
+    createdAt: String(item.createdAt || new Date().toISOString()),
+    updatedAt: String(item.updatedAt || item.createdAt || new Date().toISOString())
+  })).filter((item) => item.serviceId);
+}
+
+async function writeServiceInstances(instances) {
+  const normalized = (Array.isArray(instances) ? instances : []).map((item) => ({
+    ...item,
+    id: sanitizeServiceId(item.id),
+    serviceId: sanitizeServiceId(item.serviceId),
+    updatedAt: new Date().toISOString()
+  }));
+  await writeJson(SERVICE_INSTANCES_FILE, normalized);
+  return normalized;
+}
+
+function serviceInstancePaths(instanceId) {
+  const id = sanitizeServiceId(instanceId);
+  const instanceDir = path.join(SERVICE_RUNTIME_DIR, "instances", id);
+  return {
+    id,
+    instanceDir,
+    configFile: path.join(instanceDir, "config.json"),
+    pidFile: path.join(instanceDir, "service.pid"),
+    outputDir: path.join(SERVICE_OUTPUT_DIR, id)
+  };
+}
+
+function serviceScriptPath(manifest, scriptName) {
+  const script = manifest?.scripts?.[scriptName];
+  if (!script) return "";
+  const target = path.resolve(manifest.packageDir, script);
+  if (!target.startsWith(path.resolve(manifest.packageDir))) return "";
+  return target;
+}
+
+async function writeServiceRuntimeConfig(manifest, instance, extra = {}) {
+  const paths = serviceInstancePaths(instance.id);
+  await fsp.mkdir(paths.instanceDir, { recursive: true });
+  await fsp.mkdir(paths.outputDir, { recursive: true });
+  const payload = {
+    instanceId: instance.id,
+    serviceId: manifest.id,
+    serviceName: manifest.name,
+    instanceName: instance.name,
+    packageDir: manifest.packageDir,
+    outputDir: paths.outputDir,
+    config: instance.config || {},
+    ...extra
+  };
+  await writeJson(paths.configFile, payload);
+  return { paths, payload };
+}
+
+async function runServiceScript(manifest, instance, scriptName, extra = {}) {
+  const scriptPath = serviceScriptPath(manifest, scriptName);
+  if (!scriptPath || !fs.existsSync(scriptPath)) {
+    throw new Error(`Service script not found: ${scriptName}`);
+  }
+  const { paths } = await writeServiceRuntimeConfig(manifest, instance, extra);
+  const env = {
+    ...process.env,
+    SERVICE_CONFIG_PATH: paths.configFile,
+    SERVICE_INSTANCE_DIR: paths.instanceDir,
+    SERVICE_OUTPUT_DIR: paths.outputDir,
+    SERVICE_PACKAGE_DIR: manifest.packageDir
+  };
+  const command = process.platform === "win32" ? "bash" : "bash";
+  const result = await runCommand(command, [scriptPath], {
+    cwd: manifest.packageDir,
+    env,
+    timeoutMs: Number(extra.timeoutMs || 60000),
+    windowsHide: true
+  });
+  return {
+    ok: result.code === 0,
+    code: result.code,
+    output: tailOutput(result.output, 12000),
+    paths: {
+      instanceDir: paths.instanceDir,
+      outputDir: paths.outputDir
+    }
+  };
+}
+
+async function updateServiceInstanceStatus(instanceId, statusPatch) {
+  const instances = await readServiceInstances();
+  const index = instances.findIndex((item) => item.id === sanitizeServiceId(instanceId));
+  if (index < 0) return null;
+  instances[index] = {
+    ...instances[index],
+    status: {
+      ...(instances[index].status || {}),
+      ...statusPatch,
+      updatedAt: new Date().toISOString()
+    },
+    updatedAt: new Date().toISOString()
+  };
+  await writeServiceInstances(instances);
+  return instances[index];
 }
 
 async function listMonitorCaptures(limit = 200) {
@@ -5189,6 +5375,116 @@ app.get("/api/connections/channels/:id/messages", async (req, res) => {
       limit: req.query.limit
     }));
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/services", async (_req, res) => {
+  const [catalog, instances] = await Promise.all([listServiceCatalog(), readServiceInstances()]);
+  res.json({ catalog, instances });
+});
+
+app.get("/api/services/catalog", async (_req, res) => {
+  res.json({ catalog: await listServiceCatalog() });
+});
+
+app.get("/api/services/instances", async (_req, res) => {
+  res.json({ instances: await readServiceInstances() });
+});
+
+app.post("/api/services/instances", async (req, res) => {
+  try {
+    const catalog = await listServiceCatalog();
+    const serviceId = sanitizeServiceId(req.body?.serviceId);
+    const manifest = catalog.find((item) => item.id === serviceId);
+    if (!manifest) return res.status(404).json({ error: "Service package not found." });
+    const instances = await readServiceInstances();
+    const id = sanitizeServiceId(req.body?.id || `${serviceId}-${Date.now().toString(36)}`);
+    if (instances.some((item) => item.id === id)) return res.status(409).json({ error: "Service instance already exists." });
+    const now = new Date().toISOString();
+    const instance = {
+      id,
+      serviceId,
+      name: String(req.body?.name || manifest.name).trim(),
+      enabled: req.body?.enabled !== false,
+      config: typeof req.body?.config === "object" && req.body.config && !Array.isArray(req.body.config) ? req.body.config : {},
+      status: { state: "saved", message: "Instance saved.", updatedAt: now },
+      createdAt: now,
+      updatedAt: now
+    };
+    instances.push(instance);
+    await writeServiceInstances(instances);
+    res.json({ instance, instances, catalog });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.put("/api/services/instances/:id", async (req, res) => {
+  try {
+    const id = sanitizeServiceId(req.params.id);
+    const instances = await readServiceInstances();
+    const index = instances.findIndex((item) => item.id === id);
+    if (index < 0) return res.status(404).json({ error: "Service instance not found." });
+    instances[index] = {
+      ...instances[index],
+      name: String(req.body?.name || instances[index].name).trim(),
+      enabled: req.body?.enabled !== false,
+      config: typeof req.body?.config === "object" && req.body.config && !Array.isArray(req.body.config) ? req.body.config : instances[index].config,
+      updatedAt: new Date().toISOString()
+    };
+    await writeServiceInstances(instances);
+    res.json({ instance: instances[index], instances });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.delete("/api/services/instances/:id", async (req, res) => {
+  const id = sanitizeServiceId(req.params.id);
+  const instances = await readServiceInstances();
+  const next = instances.filter((item) => item.id !== id);
+  await writeServiceInstances(next);
+  res.json({ instances: next });
+});
+
+app.post("/api/services/instances/:id/:action", async (req, res) => {
+  try {
+    const id = sanitizeServiceId(req.params.id);
+    const action = String(req.params.action || "").trim();
+    if (!["install", "test", "start", "stop"].includes(action)) {
+      return res.status(400).json({ error: "Unsupported service action." });
+    }
+    const [catalog, instances] = await Promise.all([listServiceCatalog(), readServiceInstances()]);
+    const instance = instances.find((item) => item.id === id);
+    if (!instance) return res.status(404).json({ error: "Service instance not found." });
+    const manifest = catalog.find((item) => item.id === instance.serviceId);
+    if (!manifest) return res.status(404).json({ error: "Service package not found." });
+    await updateServiceInstanceStatus(id, { state: "running", action, message: `${action} running...` });
+    const result = await runServiceScript(manifest, instance, action, {
+      action,
+      request: req.body || {},
+      timeoutMs: Number(req.body?.timeoutMs || (action === "start" ? 10000 : 60000))
+    });
+    const state = result.ok
+      ? (action === "start" ? "started" : action === "stop" ? "stopped" : "success")
+      : "failed";
+    const updated = await updateServiceInstanceStatus(id, {
+      state,
+      action,
+      ok: result.ok,
+      code: result.code,
+      message: result.ok ? `${action} finished.` : `${action} failed.`,
+      output: result.output
+    });
+    res.json({ result, instance: updated });
+  } catch (error) {
+    await updateServiceInstanceStatus(req.params.id, {
+      state: "failed",
+      action: req.params.action,
+      ok: false,
+      message: error.message
+    }).catch(() => {});
     res.status(500).json({ error: error.message });
   }
 });

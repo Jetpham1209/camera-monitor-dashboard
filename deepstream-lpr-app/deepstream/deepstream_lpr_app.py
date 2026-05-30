@@ -1144,6 +1144,11 @@ class LprRuntime:
             return "square"
         return "auto"
 
+    def plate_bbox_aspect(self, plate):
+        bbox = (plate or {}).get("bbox") or {}
+        height = max(1.0, float(bbox.get("height") or 1.0))
+        return max(0.0, float(bbox.get("width") or 0.0)) / height
+
     def group_character_lines(self, characters):
         sorted_chars = sorted(characters, key=lambda item: item["center"]["y"])
         lines = []
@@ -1166,13 +1171,37 @@ class LprRuntime:
     def sorted_character_text(self, characters, plate=None):
         if not characters:
             return "", []
-        layout = self.plate_layout(plate)
+        layout_hint = self.plate_layout(plate)
+        lines = self.group_character_lines(characters)
+        bbox_aspect = self.plate_bbox_aspect(plate)
+        y_values = [float(item["center"]["y"]) for item in characters]
+        avg_height = sum(max(1.0, float(item["bbox"].get("height", 1.0))) for item in characters) / len(characters)
+        y_span = max(y_values) - min(y_values) if y_values else 0.0
+
+        # SGIE plate labels are helpful but not always reliable across camera angles
+        # and model families. Prefer geometry so horizontal plates are sorted as one
+        # line, while compact/tall plates with two visible rows are sorted top-to-bottom.
+        if bbox_aspect >= 1.85:
+            layout = "long"
+        elif len(lines) >= 2 and y_span >= avg_height * 0.9:
+            layout = "square"
+        elif bbox_aspect <= 1.55:
+            layout = "square"
+        else:
+            layout = layout_hint if layout_hint != "auto" else ("square" if len(lines) >= 2 else "long")
+
         if layout == "long":
             chars = sorted(characters, key=lambda item: item["center"]["x"])
             text = "".join(item["label"] for item in chars)
-            return text, [{"text": text, "avgY": sum(item["center"]["y"] for item in chars) / len(chars), "layout": "long", "chars": chars}]
+            return text, [{
+                "text": text,
+                "avgY": sum(item["center"]["y"] for item in chars) / len(chars),
+                "layout": "long",
+                "layoutHint": layout_hint,
+                "bboxAspect": bbox_aspect,
+                "chars": chars,
+            }]
 
-        lines = self.group_character_lines(characters)
         if layout == "square" and len(lines) > 2:
             top_lines = sorted(lines, key=lambda item: len(item["chars"]), reverse=True)[:2]
             lines = sorted(top_lines, key=lambda item: item["avgY"])
@@ -1185,6 +1214,8 @@ class LprRuntime:
                 "text": text,
                 "avgY": sum(item["center"]["y"] for item in chars) / len(chars),
                 "layout": layout,
+                "layoutHint": layout_hint,
+                "bboxAspect": bbox_aspect,
                 "chars": chars,
             })
         return "".join(line["text"] for line in line_outputs), line_outputs
