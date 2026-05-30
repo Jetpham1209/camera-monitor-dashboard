@@ -96,16 +96,28 @@ def capture_once(payload):
     output_path = output_dir / timestamp_name(camera_id)
     timeout_sec = int(config.get("timeoutSec") or 15)
     transport = str(config.get("rtspTransport") or "tcp").lower()
+    preferred_backend = str(config.get("captureBackend") or "ffmpeg").lower()
 
-    try:
-        capture_with_cv2(source, output_path)
-        backend = "opencv"
-    except Exception as cv_error:
+    if preferred_backend == "opencv":
         try:
-          capture_with_ffmpeg(source, output_path, transport, timeout_sec)
-          backend = "ffmpeg"
+            capture_with_cv2(source, output_path)
+            backend = "opencv"
+        except Exception as cv_error:
+            try:
+                capture_with_ffmpeg(source, output_path, transport, timeout_sec)
+                backend = "ffmpeg"
+            except Exception as ffmpeg_error:
+                raise RuntimeError(f"Capture failed. OpenCV: {cv_error}. ffmpeg: {ffmpeg_error}") from ffmpeg_error
+    else:
+        try:
+            capture_with_ffmpeg(source, output_path, transport, timeout_sec)
+            backend = "ffmpeg"
         except Exception as ffmpeg_error:
-          raise RuntimeError(f"Capture failed. OpenCV: {cv_error}. ffmpeg: {ffmpeg_error}") from ffmpeg_error
+            try:
+                capture_with_cv2(source, output_path)
+                backend = "opencv"
+            except Exception as cv_error:
+                raise RuntimeError(f"Capture failed. ffmpeg: {ffmpeg_error}. OpenCV: {cv_error}") from cv_error
 
     stat = output_path.stat()
     return {

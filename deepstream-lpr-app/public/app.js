@@ -5651,10 +5651,9 @@ els.deployAppList.addEventListener("change", (event) => {
   if (event.target?.matches?.("[data-stage-field='selectedModel']")) {
     event.target.dataset.selectedValue = event.target.value;
     hydrateStageLabelPickers(event.target.closest("[data-stage-row]") || els.deployAppList);
-    renderDeployApps(readDeployApps(), readCameraCards());
-    return;
   }
-  renderDeployApps(readDeployApps(), readCameraCards());
+  deployApps = readDeployApps();
+  renderMainDashboard();
 });
 els.roiImageFile.addEventListener("change", loadRoiImage);
 els.roiCameraSelect.addEventListener("change", openRoiTool);

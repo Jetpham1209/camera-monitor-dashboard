@@ -71,6 +71,17 @@
       ]
     },
     {
+      "key": "captureBackend",
+      "label": "Capture backend",
+      "type": "select",
+      "default": "ffmpeg",
+      "options": [
+        { "value": "ffmpeg", "label": "FFmpeg (default, no cv2 required)" },
+        { "value": "opencv", "label": "OpenCV cv2, fallback to FFmpeg" }
+      ],
+      "help": "Use FFmpeg by default because the product control container does not require OpenCV/cv2."
+    },
+    {
       "key": "outputDir",
       "label": "Output folder optional",
       "type": "text",
