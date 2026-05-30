@@ -2252,6 +2252,70 @@ pre {
 .service-config-wide {
   grid-column: 1 / -1;
 }
+.service-camera-summary {
+  grid-column: 1 / -1;
+}
+.service-camera-card,
+.service-output-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: #ffffff;
+}
+.service-camera-card strong,
+.service-camera-card span,
+.service-camera-card small,
+.service-output-head strong,
+.service-output-head span {
+  display: block;
+}
+.service-camera-card span,
+.service-camera-card small,
+.service-output-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.service-output-viewer {
+  display: grid;
+  gap: 12px;
+}
+.service-output-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 12px;
+}
+.service-output-card {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+}
+.service-output-card img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: #e5e7eb;
+}
+.service-output-card div {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+}
+.service-output-card strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.service-output-card span,
+.service-output-card small {
+  color: var(--muted);
+  font-size: 12px;
+}
 .triton-layout {
   display: grid;
   grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
@@ -2737,6 +2801,8 @@ pre {
   .service-config-grid,
   .service-package-row,
   .service-instance-head,
+  .service-camera-card,
+  .service-output-head,
   .deploy-event-output-row,
   .deploy-app-head.compact,
   .deploy-app-setup-grid,
@@ -2760,7 +2826,9 @@ pre {
   .connection-provider-foot,
   .connection-channel-row,
   .service-package-row,
-  .service-instance-head {
+  .service-instance-head,
+  .service-camera-card,
+  .service-output-head {
     display: grid;
   }
   .connection-wide {

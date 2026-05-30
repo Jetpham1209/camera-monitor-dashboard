@@ -269,6 +269,7 @@ const els = {
   saveServiceInstanceBtn: document.querySelector("#saveServiceInstanceBtn"),
   resetServiceEditorBtn: document.querySelector("#resetServiceEditorBtn"),
   serviceInstanceList: document.querySelector("#serviceInstanceList"),
+  serviceOutputViewer: document.querySelector("#serviceOutputViewer"),
   automationServiceInputChannel: document.querySelector("#automationServiceInputChannel"),
   automationServiceOutputChannel: document.querySelector("#automationServiceOutputChannel"),
   automationServiceInputMode: document.querySelector("#automationServiceInputMode"),
@@ -766,6 +767,21 @@ function serviceFieldInput(field, value) {
       </label>
     `;
   }
+  if (field.type === "cameraSelect") {
+    const cameras = readCameraCards();
+    return `
+      <label>${label}
+        <select data-service-config-key="${key}" data-service-config-type="cameraSelect">
+          <option value="">Choose camera</option>
+          ${cameras.map((camera, index) => `
+            <option value="${escapeHtml(camera.id || `camera-${index + 1}`)}" ${String(value) === String(camera.id) ? "selected" : ""}>${escapeHtml(camera.name || camera.id || `Camera ${index + 1}`)}</option>
+          `).join("")}
+        </select>
+        ${help}
+      </label>
+      <div class="service-camera-summary" data-service-camera-summary="${key}"></div>
+    `;
+  }
   if (field.type === "json" || field.type === "polygon") {
     const text = typeof value === "string" ? value : JSON.stringify(value ?? serviceFieldDefault(field), null, 2);
     return `
@@ -812,6 +828,7 @@ function renderServiceConfigForm(config = {}) {
       ${fields.map((field) => serviceFieldInput(field, serviceFieldValue(config, field))).join("")}
     </div>
   ` : '<div class="empty">This service does not expose configurable fields.</div>';
+  renderServiceCameraSummaries();
 }
 
 function readServiceConfigForm() {
@@ -832,6 +849,31 @@ function readServiceConfigForm() {
     }
   }
   return config;
+}
+
+function cameraSummaryHtml(cameraId) {
+  const camera = readCameraCards().find((item) => String(item.id || "") === String(cameraId || ""));
+  if (!camera) return '<div class="empty compact">No camera selected from Cameras & ROI.</div>';
+  const zones = Array.isArray(camera.zones) ? camera.zones : [];
+  const frame = frameSizeSummary(camera.id);
+  return `
+    <article class="service-camera-card">
+      <strong>${escapeHtml(camera.name || camera.id)}</strong>
+      <span>${escapeHtml(camera.id || "")} · ${escapeHtml(frame)}</span>
+      <small>${escapeHtml(camera.rtspUrl || "No RTSP URL")}</small>
+      <div class="dashboard-tags">
+        ${dashboardTag(camera.enabled !== false ? "enabled" : "disabled", camera.enabled !== false ? "success" : "warning")}
+        ${dashboardTag(`${zones.length} zone(s)`, zones.length ? "success" : "warning")}
+      </div>
+    </article>
+  `;
+}
+
+function renderServiceCameraSummaries() {
+  els.serviceDynamicConfig?.querySelectorAll("[data-service-config-type='cameraSelect']").forEach((select) => {
+    const target = els.serviceDynamicConfig.querySelector(`[data-service-camera-summary="${CSS.escape(select.dataset.serviceConfigKey)}"]`);
+    if (target) target.innerHTML = cameraSummaryHtml(select.value);
+  });
 }
 
 function serviceStatusTag(instance) {
@@ -920,6 +962,7 @@ function renderServices() {
           <button type="button" data-service-action="test" data-service-instance="${escapeHtml(instance.id)}">Test</button>
           <button type="button" data-service-action="start" data-service-instance="${escapeHtml(instance.id)}">Start</button>
           <button type="button" class="secondary" data-service-action="stop" data-service-instance="${escapeHtml(instance.id)}">Stop</button>
+          <button type="button" class="secondary" data-view-service-outputs="${escapeHtml(instance.id)}">View outputs</button>
           <button type="button" class="danger" data-delete-service-instance="${escapeHtml(instance.id)}">Delete</button>
         </div>
       </article>
@@ -993,6 +1036,7 @@ async function runServiceInstanceAction(instanceId, action, button = null) {
     body: JSON.stringify({})
   }));
   await refreshServices();
+  if (["test", "start"].includes(action)) await loadServiceOutputs(instanceId).catch(() => {});
   print(result);
 }
 
@@ -1001,6 +1045,45 @@ async function deleteServiceInstance(instanceId) {
   serviceInstances = result.instances || [];
   if (editingServiceInstanceId === instanceId) resetServiceEditor();
   renderServices();
+}
+
+function renderServiceOutputs(result = null) {
+  if (!els.serviceOutputViewer) return;
+  if (!result) {
+    els.serviceOutputViewer.innerHTML = '<div class="empty">Choose View outputs from a service instance.</div>';
+    return;
+  }
+  const instance = serviceInstances.find((item) => item.id === result.instanceId);
+  const files = Array.isArray(result.files) ? result.files : [];
+  els.serviceOutputViewer.innerHTML = `
+    <div class="service-output-head">
+      <div>
+        <strong>${escapeHtml(instance?.name || result.instanceId)}</strong>
+        <span>${escapeHtml(result.outputDir || "")}</span>
+      </div>
+      <b>${files.length} image(s)</b>
+    </div>
+    <div class="service-output-grid">
+      ${files.length ? files.map((file) => `
+        <article class="service-output-card">
+          <a href="${escapeHtml(file.url)}" target="_blank" rel="noreferrer">
+            <img src="${escapeHtml(file.url)}" alt="${escapeHtml(file.fileName)}" loading="lazy" />
+          </a>
+          <div>
+            <strong>${escapeHtml(file.fileName)}</strong>
+            <span>${new Date(file.createdAt).toLocaleString()}</span>
+            <small>${Number(file.size || 0).toLocaleString()} bytes</small>
+          </div>
+        </article>
+      `).join("") : '<div class="empty">No image output yet.</div>'}
+    </div>
+  `;
+}
+
+async function loadServiceOutputs(instanceId, button = null) {
+  const result = await withTask("services", button, "Loading service outputs...", async () => api(`/api/services/instances/${encodeURIComponent(instanceId)}/outputs?limit=80`));
+  renderServiceOutputs(result);
+  return result;
 }
 
 function renderAutomation() {
@@ -5650,6 +5733,9 @@ els.servicePackageSelect?.addEventListener("change", () => {
   editingServiceInstanceId = "";
   renderServiceConfigForm({});
 });
+els.serviceDynamicConfig?.addEventListener("change", (event) => {
+  if (event.target?.matches?.("[data-service-config-type='cameraSelect']")) renderServiceCameraSummaries();
+});
 els.resetServiceEditorBtn?.addEventListener("click", () => resetServiceEditor());
 els.saveServiceInstanceBtn?.addEventListener("click", () => saveServiceInstance(els.saveServiceInstanceBtn).catch((error) => print(error.message)));
 els.serviceCatalogList?.addEventListener("click", (event) => {
@@ -5666,6 +5752,11 @@ els.serviceInstanceList?.addEventListener("click", (event) => {
   const actionButton = event.target.closest("[data-service-action]");
   if (actionButton) {
     runServiceInstanceAction(actionButton.dataset.serviceInstance, actionButton.dataset.serviceAction, actionButton).catch((error) => print(error.message));
+    return;
+  }
+  const outputButton = event.target.closest("[data-view-service-outputs]");
+  if (outputButton) {
+    loadServiceOutputs(outputButton.dataset.viewServiceOutputs, outputButton).catch((error) => print(error.message));
     return;
   }
   const deleteButton = event.target.closest("[data-delete-service-instance]");

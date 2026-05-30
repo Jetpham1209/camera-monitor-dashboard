@@ -60,12 +60,37 @@ def capture_with_ffmpeg(source, output_path, transport, timeout_sec):
         raise RuntimeError((result.stderr or result.stdout or "ffmpeg capture failed.").strip())
 
 
+def configured_camera(payload, camera_id):
+    for camera in (payload.get("appConfig") or {}).get("streams") or []:
+        if str(camera.get("id") or "") == str(camera_id or ""):
+            return camera
+    return None
+
+
+def resolve_source(payload):
+    config = payload.get("config") or {}
+    source_mode = str(config.get("sourceMode") or "manual").strip()
+    selected_camera_id = str(config.get("selectedCameraId") or "").strip()
+    camera = configured_camera(payload, selected_camera_id) if source_mode == "configured" or selected_camera_id else None
+    if camera:
+        source = str(camera.get("rtspUrl") or "").strip()
+        camera_id = config.get("cameraId") or camera.get("id") or payload.get("instanceId") or "camera"
+        return source, camera_id, {
+            "id": camera.get("id"),
+            "name": camera.get("name"),
+            "zones": camera.get("zones") or [],
+            "roi": camera.get("roi") or {}
+        }
+    source = str(config.get("cameraUrl") or "").strip()
+    camera_id = config.get("cameraId") or selected_camera_id or payload.get("instanceId") or "camera"
+    return source, camera_id, None
+
+
 def capture_once(payload):
     config = payload.get("config") or {}
-    source = str(config.get("cameraUrl") or "").strip()
+    source, camera_id, camera_config = resolve_source(payload)
     if not source:
-        raise RuntimeError("cameraUrl is required.")
-    camera_id = config.get("cameraId") or payload.get("instanceId") or "camera"
+        raise RuntimeError("Camera source is required. Choose a Cameras & ROI camera or enter Manual camera URL.")
     output_dir = Path(config.get("outputDir") or payload.get("outputDir") or os.getcwd())
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / timestamp_name(camera_id)
@@ -87,6 +112,7 @@ def capture_once(payload):
         "ok": True,
         "backend": backend,
         "cameraId": camera_id,
+        "cameraConfig": camera_config,
         "event": payload.get("event") or None,
         "path": str(output_path),
         "fileName": output_path.name,
@@ -175,17 +201,12 @@ def main():
     parser.add_argument("--loop", action="store_true", help="Capture frames until stopped.")
     args = parser.parse_args()
     payload = load_payload()
-    config = payload.get("config") or {}
-    interval = max(1, int(config.get("captureIntervalSec") or 5))
-
     if args.loop:
         if run_loop_with_redis(payload):
             return
-        while True:
-            result = capture_once(payload)
-            publish_result(payload, result)
-            print(json.dumps(result, ensure_ascii=False), flush=True)
-            time.sleep(interval)
+        result = capture_once(payload)
+        publish_result(payload, result)
+        print(json.dumps({**result, "mode": "one_shot_start"}, ensure_ascii=False), flush=True)
     else:
         result = capture_once(payload)
         publish_result(payload, result)

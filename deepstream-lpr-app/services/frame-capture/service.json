@@ -20,28 +20,37 @@
   },
   "configSchema": [
     {
+      "key": "sourceMode",
+      "label": "Camera source",
+      "type": "select",
+      "default": "configured",
+      "options": [
+        { "value": "configured", "label": "Use Cameras & ROI setting" },
+        { "value": "manual", "label": "Manual input URL" }
+      ],
+      "help": "Use an existing camera from Cameras & ROI, or manually enter a URL/path."
+    },
+    {
+      "key": "selectedCameraId",
+      "label": "Camera from Cameras & ROI",
+      "type": "cameraSelect",
+      "required": false,
+      "help": "When selected, the service uses the camera RTSP URL and exposes its ROI/zone summary."
+    },
+    {
       "key": "cameraUrl",
-      "label": "Camera URL",
+      "label": "Manual camera URL",
       "type": "rtsp",
       "required": true,
       "placeholder": "rtsp://user:password@camera-ip:554/stream",
-      "help": "RTSP URL or a local video/image path for testing."
+      "help": "Used only when Camera source is Manual input URL. RTSP URL or a local video/image path for testing."
     },
     {
       "key": "cameraId",
-      "label": "Camera ID",
+      "label": "Output camera ID override",
       "type": "text",
-      "default": "camera-1",
-      "help": "Used in output file names."
-    },
-    {
-      "key": "captureIntervalSec",
-      "label": "Capture interval seconds",
-      "type": "number",
-      "default": 5,
-      "min": 1,
-      "step": 1,
-      "help": "Used by start.sh loop mode."
+      "default": "",
+      "help": "Optional. Leave blank to use the selected camera ID."
     },
     {
       "key": "timeoutSec",

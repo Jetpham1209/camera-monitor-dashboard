@@ -301,6 +301,7 @@ function serviceScriptPath(manifest, scriptName) {
 async function writeServiceRuntimeConfig(manifest, instance, extra = {}) {
   const paths = serviceInstancePaths(instance.id);
   const connections = await readConnectionsConfig().catch(() => defaultConnectionsConfig());
+  const appConfig = await getConfig().catch(() => ({}));
   await fsp.mkdir(paths.instanceDir, { recursive: true });
   await fsp.mkdir(paths.outputDir, { recursive: true });
   const payload = {
@@ -313,6 +314,7 @@ async function writeServiceRuntimeConfig(manifest, instance, extra = {}) {
     config: instance.config || {},
     bindings: normalizeServiceBindings(instance.bindings || {}),
     connections,
+    appConfig,
     ...extra
   };
   await writeJson(paths.configFile, payload);
@@ -347,6 +349,40 @@ async function runServiceScript(manifest, instance, scriptName, extra = {}) {
       instanceDir: paths.instanceDir,
       outputDir: paths.outputDir
     }
+  };
+}
+
+async function listServiceOutputs(instanceId, limit = 100) {
+  const paths = serviceInstancePaths(instanceId);
+  const imageExts = new Set([".jpg", ".jpeg", ".png", ".bmp", ".webp"]);
+  let entries = [];
+  try {
+    entries = await fsp.readdir(paths.outputDir, { withFileTypes: true });
+  } catch {
+    return { instanceId: paths.id, outputDir: paths.outputDir, files: [] };
+  }
+  const files = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const ext = path.extname(entry.name).toLowerCase();
+    if (!imageExts.has(ext)) continue;
+    const fullPath = path.join(paths.outputDir, entry.name);
+    const stat = await fsp.stat(fullPath).catch(() => null);
+    if (!stat) continue;
+    const relative = path.relative(RUNTIME_DIR, fullPath).replace(/\\/g, "/");
+    files.push({
+      fileName: entry.name,
+      path: fullPath,
+      url: `/runtime/${relative}`,
+      size: stat.size,
+      createdAt: stat.mtime.toISOString()
+    });
+  }
+  files.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  return {
+    instanceId: paths.id,
+    outputDir: paths.outputDir,
+    files: files.slice(0, Math.max(1, Math.min(Number(limit || 100), 500)))
   };
 }
 
@@ -5467,6 +5503,14 @@ app.delete("/api/services/instances/:id", async (req, res) => {
   res.json({ instances: next });
 });
 
+app.get("/api/services/instances/:id/outputs", async (req, res) => {
+  try {
+    res.json(await listServiceOutputs(req.params.id, req.query.limit));
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 app.post("/api/services/instances/:id/:action", async (req, res) => {
   try {
     const id = sanitizeServiceId(req.params.id);
@@ -5483,7 +5527,7 @@ app.post("/api/services/instances/:id/:action", async (req, res) => {
     const result = await runServiceScript(manifest, instance, action, {
       action,
       request: req.body || {},
-      timeoutMs: Number(req.body?.timeoutMs || (action === "start" ? 10000 : 60000))
+      timeoutMs: Number(req.body?.timeoutMs || 60000)
     });
     const state = result.ok
       ? (action === "start" ? "started" : action === "stop" ? "stopped" : "success")
