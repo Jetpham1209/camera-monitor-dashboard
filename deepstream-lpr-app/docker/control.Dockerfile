@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     git \
     iputils-ping \
+    python3 \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./

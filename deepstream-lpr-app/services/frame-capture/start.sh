@@ -4,7 +4,13 @@ set -euo pipefail
 cd "${SERVICE_PACKAGE_DIR:-$(dirname "$0")}"
 mkdir -p "${SERVICE_INSTANCE_DIR:-./runtime}"
 
-has_input_binding="$(python3 - <<'PY'
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  echo "python3 is required in the service runtime. Rebuild/update the control container." >&2
+  exit 127
+fi
+
+has_input_binding="$("$PYTHON_BIN" - <<'PY'
 import json, os
 path = os.environ.get("SERVICE_CONFIG_PATH")
 try:
@@ -17,7 +23,7 @@ PY
 )"
 
 if [ "$has_input_binding" != "1" ]; then
-  python3 worker.py --once
+  "$PYTHON_BIN" worker.py --once
   exit 0
 fi
 
@@ -29,6 +35,6 @@ if [ -f "${SERVICE_INSTANCE_DIR}/service.pid" ]; then
   fi
 fi
 
-nohup python3 worker.py --loop > "${SERVICE_INSTANCE_DIR}/service.log" 2>&1 &
+nohup "$PYTHON_BIN" worker.py --loop > "${SERVICE_INSTANCE_DIR}/service.log" 2>&1 &
 echo "$!" > "${SERVICE_INSTANCE_DIR}/service.pid"
 echo "Frame Capture listener started with PID $(cat "${SERVICE_INSTANCE_DIR}/service.pid")."
