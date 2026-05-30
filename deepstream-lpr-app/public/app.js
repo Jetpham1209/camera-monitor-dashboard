@@ -2990,8 +2990,39 @@ function readDeployCameraSettings(card, cameras = readCameraCards()) {
   return settings;
 }
 
+function deployDetailsKey(details) {
+  const card = details.closest("[data-deploy-app-card]");
+  if (!card) return "";
+  const appId = card.dataset.deployAppId || "";
+  const section = details.dataset.deploySection || "";
+  if (section) return `${appId}:${section}`;
+  const camera = details.closest("[data-deploy-preview-camera]")?.dataset.deployPreviewCamera || "";
+  const summary = details.querySelector("summary")?.textContent?.trim().replace(/\s+/g, " ") || "";
+  if (camera || summary) return `${appId}:camera:${camera}:${summary}`;
+  const detailsIndex = [...card.querySelectorAll("details")].indexOf(details);
+  return `${appId}:details:${detailsIndex}`;
+}
+
+function captureDeployDetailsState() {
+  const state = new Map();
+  els.deployAppList?.querySelectorAll("details").forEach((details) => {
+    const key = deployDetailsKey(details);
+    if (key) state.set(key, details.open);
+  });
+  return state;
+}
+
+function restoreDeployDetailsState(state) {
+  if (!state?.size) return;
+  els.deployAppList?.querySelectorAll("details").forEach((details) => {
+    const key = deployDetailsKey(details);
+    if (key && state.has(key)) details.open = state.get(key);
+  });
+}
+
 function renderDeployApps(apps = [], cameras = readCameraCards()) {
   if (!els.deployAppList) return;
+  const openState = captureDeployDetailsState();
   const normalizedCameras = cameras;
   const existing = apps.length ? apps : deployApps;
   const requestedActiveId = existing.find((item) => item.active)?.id || activeDeployAppId;
@@ -3011,6 +3042,7 @@ function renderDeployApps(apps = [], cameras = readCameraCards()) {
   deployApps = deployApps.map((app, index) => ({ ...app, active: index === activeIndex }));
 
   els.deployAppList.innerHTML = deployApps.map((app, index) => renderDeployAppCard(app, index, normalizedCameras)).join("");
+  restoreDeployDetailsState(openState);
   hydrateStageControls(els.deployAppList);
   updateModelSelects();
   attachDeployAppHandlers();
@@ -3045,7 +3077,7 @@ function renderDeployAppCard(app, index, cameras) {
         </div>
       </div>
       <div class="deploy-config-accordion">
-        <details class="deploy-config-section" open>
+        <details class="deploy-config-section" data-deploy-section="setup" open>
           <summary>
             <span>App setup</span>
             <small>Name, active target and processor mode</small>
@@ -3064,7 +3096,7 @@ function renderDeployAppCard(app, index, cameras) {
             </label>
           </div>
         </details>
-        <details class="deploy-config-section">
+        <details class="deploy-config-section" data-deploy-section="stages">
           <summary>
             <span>Inference stages</span>
             <small>${stages.length} configured stage${stages.length === 1 ? "" : "s"}</small>
@@ -3077,7 +3109,7 @@ function renderDeployAppCard(app, index, cameras) {
             ${stageRowsMarkup(stages)}
           </div>
         </details>
-        <details class="deploy-config-section">
+        <details class="deploy-config-section" data-deploy-section="events">
           <summary>
             <span>Event outputs</span>
             <small>${eventOutputs.length || "No"} message channel${eventOutputs.length === 1 ? "" : "s"}</small>
@@ -3088,7 +3120,7 @@ function renderDeployAppCard(app, index, cameras) {
           </div>
           <button type="button" class="secondary" data-add-deploy-event-output="${index}">Add event output</button>
         </details>
-        <details class="deploy-config-section">
+        <details class="deploy-config-section" data-deploy-section="cameras">
           <summary>
             <span>Cameras & ROI</span>
             <small>${selectedCameras.length || "No"} selected camera${selectedCameras.length === 1 ? "" : "s"}</small>
