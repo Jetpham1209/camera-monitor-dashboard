@@ -538,6 +538,31 @@
                 </div>
                 <label class="inline-check"><input id="serviceInstanceEnabled" type="checkbox" checked /> Enabled</label>
                 <div id="serviceDynamicConfig" class="service-dynamic-config"></div>
+                <details class="connection-binding-details">
+                  <summary>Message bindings</summary>
+                  <p>Optional. Bat message bus khi service can lang nghe channel hoac publish ket qua sang channel khac.</p>
+                  <label class="inline-check"><input id="serviceMessageEnabled" type="checkbox" /> Enable message bus for this service</label>
+                  <div class="grid">
+                    <label>Input channel <select id="serviceInputChannel"></select></label>
+                    <label>Input mode
+                      <select id="serviceInputMode">
+                        <option value="">None</option>
+                        <option value="subscribe">Subscribe live events</option>
+                        <option value="consume">Consume retained stream</option>
+                      </select>
+                    </label>
+                    <label>Output channel <select id="serviceOutputChannel"></select></label>
+                    <label>Output mode
+                      <select id="serviceOutputMode">
+                        <option value="">None</option>
+                        <option value="publish">Publish live message</option>
+                        <option value="produce">Produce retained message</option>
+                      </select>
+                    </label>
+                    <label>Consumer group optional <input id="serviceConsumerGroup" placeholder="frame-capture-workers" /></label>
+                    <label>Consumer name optional <input id="serviceConsumerName" placeholder="jetson-01" /></label>
+                  </div>
+                </details>
                 <div class="actions inline-actions">
                   <button id="saveServiceInstanceBtn" type="button">Save instance</button>
                   <button id="resetServiceEditorBtn" type="button" class="secondary">New instance</button>

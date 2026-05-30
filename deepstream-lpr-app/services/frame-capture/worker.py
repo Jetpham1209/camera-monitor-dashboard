@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -86,11 +87,86 @@ def capture_once(payload):
         "ok": True,
         "backend": backend,
         "cameraId": camera_id,
+        "event": payload.get("event") or None,
         "path": str(output_path),
         "fileName": output_path.name,
         "size": stat.st_size,
         "capturedAt": datetime.now(timezone.utc).isoformat()
     }
+
+
+def redis_command(host, port, *args, timeout=5):
+    def encode(value):
+        data = str(value).encode("utf-8")
+        return b"$" + str(len(data)).encode("ascii") + b"\r\n" + data + b"\r\n"
+
+    payload = b"*" + str(len(args)).encode("ascii") + b"\r\n" + b"".join(encode(arg) for arg in args)
+    with socket.create_connection((host, int(port)), timeout=timeout) as sock:
+        sock.sendall(payload)
+        return sock.recv(1024 * 1024)
+
+
+def redis_provider(payload):
+    return ((payload.get("connections") or {}).get("providers") or {}).get("redis") or {}
+
+
+def channel_by_id(payload, channel_id):
+    for channel in (payload.get("connections") or {}).get("channels") or []:
+        if channel.get("id") == channel_id:
+            return channel
+    return None
+
+
+def publish_result(payload, result):
+    bindings = payload.get("bindings") or {}
+    if not bindings.get("enabled") or not bindings.get("outputChannelId"):
+        return
+    channel = channel_by_id(payload, bindings.get("outputChannelId"))
+    if not channel or channel.get("provider") != "redis":
+        return
+    provider = redis_provider(payload)
+    host = provider.get("host") or "127.0.0.1"
+    port = provider.get("port") or 6379
+    name = channel.get("name")
+    data = json.dumps(result, ensure_ascii=False)
+    if channel.get("type") == "stream" or bindings.get("outputMode") == "produce":
+        redis_command(host, port, "XADD", name, "*", "payload", data)
+    else:
+        redis_command(host, port, "PUBLISH", name, data)
+
+
+def run_loop_with_redis(payload):
+    bindings = payload.get("bindings") or {}
+    input_channel = channel_by_id(payload, bindings.get("inputChannelId"))
+    if not bindings.get("enabled") or not input_channel or input_channel.get("provider") != "redis":
+        return False
+    provider = redis_provider(payload)
+    host = provider.get("host") or "127.0.0.1"
+    port = provider.get("port") or 6379
+    channel_name = input_channel.get("name")
+    last_id = "$"
+    if input_channel.get("type") == "stream" or bindings.get("inputMode") == "consume":
+        print(json.dumps({"ok": True, "mode": "redis_stream", "channel": channel_name}, ensure_ascii=False), flush=True)
+        while True:
+            raw = redis_command(host, port, "XREAD", "BLOCK", "5000", "COUNT", "1", "STREAMS", channel_name, last_id, timeout=8)
+            text = raw.decode("utf-8", "replace")
+            if text.startswith("*0") or not text.strip():
+                continue
+            # Minimal RESP parsing is intentionally avoided here; the captured frame is triggered by any message.
+            ids = re.findall(r"\$([0-9]+)\r\n([0-9]+-[0-9]+)", text)
+            if ids:
+                last_id = ids[-1][1]
+            result = capture_once({**payload, "event": {"trigger": "redis_stream", "channel": channel_name, "raw": text[-1000:]}})
+            publish_result(payload, result)
+            print(json.dumps(result, ensure_ascii=False), flush=True)
+    print(json.dumps({"ok": True, "mode": "redis_pubsub", "channel": channel_name}, ensure_ascii=False), flush=True)
+    redis_command(host, port, "SUBSCRIBE", channel_name)
+    # For pub/sub, keep the service alive. A production-grade subscriber should parse RESP incrementally.
+    while True:
+        result = capture_once({**payload, "event": {"trigger": "redis_pubsub", "channel": channel_name}})
+        publish_result(payload, result)
+        print(json.dumps(result, ensure_ascii=False), flush=True)
+        time.sleep(max(1, int((payload.get("config") or {}).get("captureIntervalSec") or 5)))
 
 
 def main():
@@ -103,12 +179,17 @@ def main():
     interval = max(1, int(config.get("captureIntervalSec") or 5))
 
     if args.loop:
+        if run_loop_with_redis(payload):
+            return
         while True:
             result = capture_once(payload)
+            publish_result(payload, result)
             print(json.dumps(result, ensure_ascii=False), flush=True)
             time.sleep(interval)
     else:
-        print(json.dumps(capture_once(payload), ensure_ascii=False))
+        result = capture_once(payload)
+        publish_result(payload, result)
+        print(json.dumps(result, ensure_ascii=False))
 
 
 if __name__ == "__main__":

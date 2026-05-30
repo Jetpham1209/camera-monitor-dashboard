@@ -247,10 +247,23 @@ async function readServiceInstances() {
     name: String(item.name || `Service Instance ${index + 1}`).trim(),
     enabled: item.enabled !== false,
     config: typeof item.config === "object" && item.config && !Array.isArray(item.config) ? item.config : {},
+    bindings: normalizeServiceBindings(item.bindings),
     status: typeof item.status === "object" && item.status && !Array.isArray(item.status) ? item.status : {},
     createdAt: String(item.createdAt || new Date().toISOString()),
     updatedAt: String(item.updatedAt || item.createdAt || new Date().toISOString())
   })).filter((item) => item.serviceId);
+}
+
+function normalizeServiceBindings(bindings = {}) {
+  return {
+    enabled: bindings.enabled === true,
+    inputChannelId: String(bindings.inputChannelId || "").trim(),
+    inputMode: ["subscribe", "consume"].includes(bindings.inputMode) ? bindings.inputMode : "",
+    outputChannelId: String(bindings.outputChannelId || "").trim(),
+    outputMode: ["publish", "produce"].includes(bindings.outputMode) ? bindings.outputMode : "",
+    groupName: String(bindings.groupName || "").trim(),
+    consumerName: String(bindings.consumerName || "").trim()
+  };
 }
 
 async function writeServiceInstances(instances) {
@@ -258,6 +271,7 @@ async function writeServiceInstances(instances) {
     ...item,
     id: sanitizeServiceId(item.id),
     serviceId: sanitizeServiceId(item.serviceId),
+    bindings: normalizeServiceBindings(item.bindings),
     updatedAt: new Date().toISOString()
   }));
   await writeJson(SERVICE_INSTANCES_FILE, normalized);
@@ -286,6 +300,7 @@ function serviceScriptPath(manifest, scriptName) {
 
 async function writeServiceRuntimeConfig(manifest, instance, extra = {}) {
   const paths = serviceInstancePaths(instance.id);
+  const connections = await readConnectionsConfig().catch(() => defaultConnectionsConfig());
   await fsp.mkdir(paths.instanceDir, { recursive: true });
   await fsp.mkdir(paths.outputDir, { recursive: true });
   const payload = {
@@ -296,6 +311,8 @@ async function writeServiceRuntimeConfig(manifest, instance, extra = {}) {
     packageDir: manifest.packageDir,
     outputDir: paths.outputDir,
     config: instance.config || {},
+    bindings: normalizeServiceBindings(instance.bindings || {}),
+    connections,
     ...extra
   };
   await writeJson(paths.configFile, payload);
@@ -5408,6 +5425,7 @@ app.post("/api/services/instances", async (req, res) => {
       name: String(req.body?.name || manifest.name).trim(),
       enabled: req.body?.enabled !== false,
       config: typeof req.body?.config === "object" && req.body.config && !Array.isArray(req.body.config) ? req.body.config : {},
+      bindings: normalizeServiceBindings(req.body?.bindings || {}),
       status: { state: "saved", message: "Instance saved.", updatedAt: now },
       createdAt: now,
       updatedAt: now
@@ -5431,6 +5449,7 @@ app.put("/api/services/instances/:id", async (req, res) => {
       name: String(req.body?.name || instances[index].name).trim(),
       enabled: req.body?.enabled !== false,
       config: typeof req.body?.config === "object" && req.body.config && !Array.isArray(req.body.config) ? req.body.config : instances[index].config,
+      bindings: normalizeServiceBindings(req.body?.bindings || instances[index].bindings || {}),
       updatedAt: new Date().toISOString()
     };
     await writeServiceInstances(instances);

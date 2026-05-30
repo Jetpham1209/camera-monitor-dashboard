@@ -259,6 +259,13 @@ const els = {
   serviceInstanceName: document.querySelector("#serviceInstanceName"),
   serviceInstanceEnabled: document.querySelector("#serviceInstanceEnabled"),
   serviceDynamicConfig: document.querySelector("#serviceDynamicConfig"),
+  serviceMessageEnabled: document.querySelector("#serviceMessageEnabled"),
+  serviceInputChannel: document.querySelector("#serviceInputChannel"),
+  serviceInputMode: document.querySelector("#serviceInputMode"),
+  serviceOutputChannel: document.querySelector("#serviceOutputChannel"),
+  serviceOutputMode: document.querySelector("#serviceOutputMode"),
+  serviceConsumerGroup: document.querySelector("#serviceConsumerGroup"),
+  serviceConsumerName: document.querySelector("#serviceConsumerName"),
   saveServiceInstanceBtn: document.querySelector("#saveServiceInstanceBtn"),
   resetServiceEditorBtn: document.querySelector("#resetServiceEditorBtn"),
   serviceInstanceList: document.querySelector("#serviceInstanceList"),
@@ -833,6 +840,45 @@ function serviceStatusTag(instance) {
   return `<span class="dashboard-tag ${tone}">${escapeHtml(state)}</span>`;
 }
 
+function renderServiceChannelOptions(bindings = {}) {
+  const options = `<option value="">No channel</option>${(connectionsConfig.channels || []).map((channel) => `
+    <option value="${escapeHtml(channel.id)}">${escapeHtml(channel.name)} (${escapeHtml(channel.provider)} ${escapeHtml(channel.type)})</option>
+  `).join("")}`;
+  if (els.serviceInputChannel) {
+    els.serviceInputChannel.innerHTML = options;
+    els.serviceInputChannel.value = bindings.inputChannelId || "";
+  }
+  if (els.serviceOutputChannel) {
+    els.serviceOutputChannel.innerHTML = options;
+    els.serviceOutputChannel.value = bindings.outputChannelId || "";
+  }
+  if (els.serviceMessageEnabled) els.serviceMessageEnabled.checked = bindings.enabled === true;
+  if (els.serviceInputMode) els.serviceInputMode.value = bindings.inputMode || "";
+  if (els.serviceOutputMode) els.serviceOutputMode.value = bindings.outputMode || "";
+  if (els.serviceConsumerGroup) els.serviceConsumerGroup.value = bindings.groupName || "";
+  if (els.serviceConsumerName) els.serviceConsumerName.value = bindings.consumerName || "";
+}
+
+function readServiceBindingsForm() {
+  return {
+    enabled: els.serviceMessageEnabled?.checked === true,
+    inputChannelId: els.serviceInputChannel?.value || "",
+    inputMode: els.serviceInputMode?.value || "",
+    outputChannelId: els.serviceOutputChannel?.value || "",
+    outputMode: els.serviceOutputMode?.value || "",
+    groupName: els.serviceConsumerGroup?.value.trim() || "",
+    consumerName: els.serviceConsumerName?.value.trim() || ""
+  };
+}
+
+function serviceBindingSummary(bindings = {}) {
+  if (!bindings.enabled) return "message bus off";
+  const parts = [];
+  if (bindings.inputChannelId) parts.push(`in ${channelName(bindings.inputChannelId)} (${bindings.inputMode || "mode?"})`);
+  if (bindings.outputChannelId) parts.push(`out ${channelName(bindings.outputChannelId)} (${bindings.outputMode || "mode?"})`);
+  return parts.length ? parts.join(" / ") : "message bus enabled, no channel";
+}
+
 function renderServices() {
   if (!els.serviceCatalogList) return;
   const selectedPackage = els.servicePackageSelect?.value || serviceCatalog[0]?.id || "";
@@ -866,7 +912,7 @@ function renderServices() {
             ${instance.enabled ? dashboardTag("enabled", "success") : dashboardTag("disabled", "warning")}
           </div>
         </div>
-        <small>${escapeHtml(instance.status?.message || "Saved.")}</small>
+        <small>${escapeHtml(instance.status?.message || "Saved.")} · ${escapeHtml(serviceBindingSummary(instance.bindings || {}))}</small>
         ${instance.status?.output ? `<pre>${escapeHtml(instance.status.output)}</pre>` : ""}
         <div class="actions inline-actions">
           <button type="button" class="secondary" data-edit-service-instance="${escapeHtml(instance.id)}">Edit</button>
@@ -879,6 +925,7 @@ function renderServices() {
       </article>
     `;
   }).join("") : '<div class="empty">No service instance yet. Choose a package, fill config and save an instance.</div>';
+  renderServiceChannelOptions(editingServiceInstanceId ? serviceInstances.find((item) => item.id === editingServiceInstanceId)?.bindings || {} : {});
 }
 
 function resetServiceEditor(serviceId = "") {
@@ -887,6 +934,7 @@ function resetServiceEditor(serviceId = "") {
   if (els.serviceInstanceName) els.serviceInstanceName.value = "";
   if (els.serviceInstanceEnabled) els.serviceInstanceEnabled.checked = true;
   renderServiceConfigForm({});
+  renderServiceChannelOptions({});
 }
 
 function editServiceInstance(instanceId) {
@@ -897,6 +945,7 @@ function editServiceInstance(instanceId) {
   els.serviceInstanceName.value = instance.name || "";
   els.serviceInstanceEnabled.checked = instance.enabled !== false;
   renderServiceConfigForm(instance.config || {});
+  renderServiceChannelOptions(instance.bindings || {});
   setTaskStatus("services", "running", `Editing ${instance.name}.`);
 }
 
@@ -906,6 +955,7 @@ async function refreshServices(button = null) {
   serviceInstances = result.instances || [];
   renderServices();
   renderServiceConfigForm(editingServiceInstanceId ? serviceInstances.find((item) => item.id === editingServiceInstanceId)?.config || {} : {});
+  renderServiceChannelOptions(editingServiceInstanceId ? serviceInstances.find((item) => item.id === editingServiceInstanceId)?.bindings || {} : {});
   return result;
 }
 
@@ -916,7 +966,8 @@ async function saveServiceInstance(button = null) {
     serviceId: manifest.id,
     name: els.serviceInstanceName.value.trim() || manifest.name,
     enabled: els.serviceInstanceEnabled.checked,
-    config: readServiceConfigForm()
+    config: readServiceConfigForm(),
+    bindings: readServiceBindingsForm()
   };
   const result = await withTask("services", button, "Saving service instance...", async () => {
     if (editingServiceInstanceId) {
@@ -1287,6 +1338,9 @@ async function refreshConnections(button = null) {
   connectionsConfig = result.config || { providers: {}, channels: [] };
   connectionsStatus = result.status || { providers: {}, channels: [] };
   renderConnections();
+  renderServiceChannelOptions(editingServiceInstanceId
+    ? serviceInstances.find((item) => item.id === editingServiceInstanceId)?.bindings || {}
+    : readServiceBindingsForm());
   print(result);
 }
 
@@ -1301,6 +1355,9 @@ async function saveConnections(button = null) {
   connectionsConfig = result.config || connectionsConfig;
   connectionsStatus = result.status || connectionsStatus;
   renderConnections();
+  renderServiceChannelOptions(editingServiceInstanceId
+    ? serviceInstances.find((item) => item.id === editingServiceInstanceId)?.bindings || {}
+    : readServiceBindingsForm());
   print(result);
 }
 
