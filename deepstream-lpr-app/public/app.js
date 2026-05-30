@@ -2295,7 +2295,8 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function formConfig(targetDeployAppId = activeDeployAppId) {
+function formConfig(targetDeployAppId = activeDeployAppId, options = {}) {
+  const forDeploy = Boolean(options.forDeploy);
   const cameras = readCameraCards();
   const deployProfiles = readDeployApps(cameras);
   const activeDeployApp = deployProfiles.find((app) => app.id === targetDeployAppId)
@@ -2315,7 +2316,7 @@ function formConfig(targetDeployAppId = activeDeployAppId) {
   return {
     streams: cameras.map((camera) => ({
       ...applyDeployCameraSettings(camera, targetDeployApp),
-      enabled: selectedCameraIds.has(camera.id)
+      enabled: forDeploy ? selectedCameraIds.has(camera.id) : camera.enabled !== false
     })),
     streamWidth: Number(els.streamWidth.value),
     streamHeight: Number(els.streamHeight.value),
@@ -2905,12 +2906,14 @@ function addCamera() {
   const current = readCameraCards();
   const camera = readCameraSetting();
   const index = camera.editingIndex;
+  const action = index === "" ? "added" : "updated";
   delete camera.editingIndex;
   if (index === "") current.push(camera);
   else current[index] = camera;
   renderCameras(current);
   resetCameraSetting();
   renderDeployApps(deployApps, current);
+  return { camera, action };
 }
 
 async function persistConfigAfterCameraChange(message, button = null) {
@@ -5325,7 +5328,7 @@ async function deploy() {
   ]);
   print("Deploying...");
   const result = await withTask("deploy", els.deployBtn, "Deploying...", async () => {
-    return await api("/api/deploy", { method: "POST", body: JSON.stringify(formConfig()) });
+    return await api("/api/deploy", { method: "POST", body: JSON.stringify(formConfig(activeDeployAppId, { forDeploy: true })) });
   });
   renderCheckpoints(result.checkpoints || []);
   await refreshDeployStatus().catch(() => {});
@@ -5341,7 +5344,7 @@ async function deploySingleApp(appId, button = null) {
   const result = await withTask("deploy", button, `Deploying ${app.name || app.id}...`, async () => {
     return await api(`/api/deploy/apps/${encodeURIComponent(app.id)}/deploy`, {
       method: "POST",
-      body: JSON.stringify(formConfig(app.id))
+      body: JSON.stringify(formConfig(app.id, { forDeploy: true }))
     });
   });
   renderCheckpoints(result.checkpoints || []);
@@ -5606,7 +5609,8 @@ els.deployStatusCards?.addEventListener("click", (event) => {
 });
 els.addCameraBtn.addEventListener("click", () => {
   try {
-    addCamera();
+    const { camera, action } = addCamera();
+    persistConfigAfterCameraChange(`Camera ${camera.name || camera.id} ${action} and saved.`, els.addCameraBtn).catch((error) => print(error.message));
   } catch (error) {
     print(error.message);
   }
