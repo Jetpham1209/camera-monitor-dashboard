@@ -57,6 +57,12 @@ class LprRuntime:
         self.event_outputs = self.normalize_event_outputs(config)
         self.captured = {}
         self.object_zone_history = {}
+        self.sanitize_stats = {
+            "changed": 0,
+            "lastChangedAt": None,
+            "lastSourceId": None,
+            "lastFrameNum": None,
+        }
         self.started_at = time.time()
         self.fps_stats = {}
         self.last_status_write = 0.0
@@ -359,6 +365,7 @@ class LprRuntime:
                 }
                 for index, stream in enumerate(self.streams)
             ],
+            "bboxSanitizer": dict(self.sanitize_stats),
         }
         temp_file = self.status_file.with_suffix(".json.tmp")
         temp_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -861,6 +868,10 @@ class LprRuntime:
                 changed += 1
             obj_list = obj_list.next
         if changed:
+            self.sanitize_stats["changed"] += changed
+            self.sanitize_stats["lastChangedAt"] = self.now_iso()
+            self.sanitize_stats["lastSourceId"] = int(frame_meta.source_id)
+            self.sanitize_stats["lastFrameNum"] = int(frame_meta.frame_num)
             print(f"Sanitized {changed} object bbox(es) before secondary inference on source {int(frame_meta.source_id)} frame {int(frame_meta.frame_num)}")
         return changed
 
