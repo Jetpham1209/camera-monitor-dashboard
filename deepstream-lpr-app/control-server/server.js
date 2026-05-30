@@ -5897,9 +5897,14 @@ app.get("/api/deploy/apps/:appId/status", async (req, res) => {
 });
 
 app.get("/api/deploy/results", async (req, res) => {
-  const appId = req.query.appId ? appRuntimeId(req.query.appId) : "";
+  const config = await getConfig().catch(() => ({}));
+  const apps = normalizeDeployApps(config.deployApps || []);
+  const requestedAppId = req.query.appId ? appRuntimeId(req.query.appId) : "";
+  const activeAppId = appRuntimeId(config.activeDeployAppId || apps.find((app) => app.active)?.id || apps[0]?.id || "");
+  const appId = requestedAppId || activeAppId;
   const paths = appId ? appRuntimePaths(appId) : null;
   res.json({
+    appId: appId || "",
     results: await listRuntimeResults({
       date: String(req.query.date || ""),
       source: String(req.query.source || ""),

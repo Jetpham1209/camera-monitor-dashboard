@@ -36,7 +36,10 @@ function setSummary(status, message) {
 
 function syncSourceOptions(config, results = []) {
   const current = els.source.value;
-  const fromConfig = (config.streams || []).map((item) => [item.id, item.name || item.id]);
+  const fromConfig = [
+    ...(config.streams || []),
+    ...(config.cameras || [])
+  ].map((item) => [item.id, item.name || item.id]);
   const fromResults = results.map((item) => [item.cameraId, item.cameraName || item.cameraId]);
   const sources = [...new Map([...fromConfig, ...fromResults]).entries()]
     .filter(([id]) => id)
@@ -54,7 +57,12 @@ function syncAppOptions(config) {
   els.app.innerHTML = `<option value="">Active / legacy app</option>${apps.map((app) => `
     <option value="${escapeHtml(app.id)}">${escapeHtml(app.name || app.id)}</option>
   `).join("")}`;
-  if (apps.some((app) => app.id === current)) els.app.value = current;
+  if (apps.some((app) => app.id === current)) {
+    els.app.value = current;
+  } else if (!current) {
+    const active = apps.find((app) => app.active) || apps[0];
+    if (active?.id) els.app.value = active.id;
+  }
 }
 
 function renderResults(results = []) {
