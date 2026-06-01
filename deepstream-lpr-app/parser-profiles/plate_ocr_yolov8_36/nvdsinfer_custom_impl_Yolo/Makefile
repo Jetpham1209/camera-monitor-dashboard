@@ -56,7 +56,11 @@ endif
 
 CUFLAGS:= -I/opt/nvidia/deepstream/deepstream/sources/includes -I/usr/local/cuda-$(CUDA_VER)/include
 
-LIBS+= -lnvinfer_plugin -lnvinfer -lnvparsers -lnvonnxparser -L/usr/local/cuda-$(CUDA_VER)/lib64 -lcudart -lcublas -lstdc++fs
+LIBS+= -lnvinfer_plugin -lnvinfer
+ifneq ($(wildcard /usr/lib/aarch64-linux-gnu/libnvparsers.so* /usr/lib/aarch64-linux-gnu/tegra/libnvparsers.so*),)
+	LIBS+= -lnvparsers
+endif
+LIBS+= -lnvonnxparser -L/usr/local/cuda-$(CUDA_VER)/lib64 -lcudart -lcublas -lstdc++fs
 LFLAGS:= -shared -Wl,--start-group $(LIBS) -Wl,--end-group
 
 INCS:= $(wildcard *.h)
