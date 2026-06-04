@@ -42,6 +42,7 @@ services:
       AGENT_SETTINGS_FILE: ${AGENT_SETTINGS_FILE:-runtime/agent-settings.json}
       AGENT_SKILLS_DIR: ${AGENT_SKILLS_DIR:-agent-skills}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      FRAME_CAPTURE_IMAGE: ${FRAME_CAPTURE_IMAGE:-camera-monitor-service-frame-capture:local}
     volumes:
       - ${HOST_REPO_ROOT:?Set HOST_REPO_ROOT to the absolute repo path}:${HOST_REPO_ROOT:?Set HOST_REPO_ROOT to the absolute repo path}
       - /var/run/docker.sock:/var/run/docker.sock

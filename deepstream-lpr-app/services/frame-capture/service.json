@@ -2,9 +2,13 @@
   "id": "frame-capture",
   "name": "Frame Capture",
   "version": "0.1.0",
-  "description": "Capture a single frame or periodic frames from an RTSP camera. This package is a reference service for the Services tab.",
-  "runtime": "local",
+  "description": "Capture one frame from an RTSP camera with OpenCV/cv2. Runs as an independent Docker container and can be triggered by Redis messages.",
+  "runtime": "docker",
   "entrypoint": "worker.py",
+  "docker": {
+    "image": "camera-monitor-service-frame-capture:local",
+    "containerPrefix": "camera-monitor-service-frame-capture"
+  },
   "messageBus": {
     "optional": true,
     "description": "Supports Redis stream/pubsub input and output when service instance message bindings are enabled.",
@@ -74,12 +78,12 @@
       "key": "captureBackend",
       "label": "Capture backend",
       "type": "select",
-      "default": "ffmpeg",
+      "default": "opencv",
       "options": [
-        { "value": "ffmpeg", "label": "FFmpeg (default, no cv2 required)" },
-        { "value": "opencv", "label": "OpenCV cv2, fallback to FFmpeg" }
+        { "value": "opencv", "label": "OpenCV cv2" },
+        { "value": "ffmpeg", "label": "FFmpeg fallback" }
       ],
-      "help": "Use FFmpeg by default because the product control container does not require OpenCV/cv2."
+      "help": "Default is OpenCV/cv2 inside this service Docker image. FFmpeg remains available as a fallback option."
     },
     {
       "key": "outputDir",

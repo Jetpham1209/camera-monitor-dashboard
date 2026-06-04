@@ -30,10 +30,16 @@ def timestamp_name(camera_id):
     return f"{stamp}_{safe_name(camera_id)}.jpg"
 
 
-def capture_with_cv2(source, output_path):
+def capture_with_cv2(source, output_path, transport="tcp", timeout_sec=15):
     import cv2
 
+    if source.startswith("rtsp://") or source.startswith("rtsps://"):
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = f"rtsp_transport;{transport or 'tcp'}"
     cap = cv2.VideoCapture(source)
+    if hasattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC"):
+        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, max(3, int(timeout_sec or 15)) * 1000)
+    if hasattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC"):
+        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, max(3, int(timeout_sec or 15)) * 1000)
     if not cap.isOpened():
         raise RuntimeError("OpenCV could not open the camera source.")
     ok, frame = cap.read()
@@ -91,7 +97,7 @@ def capture_once(payload):
     source, camera_id, camera_config = resolve_source(payload)
     if not source:
         raise RuntimeError("Camera source is required. Choose a Cameras & ROI camera or enter Manual camera URL.")
-    output_dir = Path(config.get("outputDir") or payload.get("outputDir") or os.getcwd())
+    output_dir = Path(config.get("outputDir") or os.environ.get("SERVICE_OUTPUT_DIR") or payload.get("outputDir") or os.getcwd())
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / timestamp_name(camera_id)
     timeout_sec = int(config.get("timeoutSec") or 15)
@@ -100,7 +106,7 @@ def capture_once(payload):
 
     if preferred_backend == "opencv":
         try:
-            capture_with_cv2(source, output_path)
+            capture_with_cv2(source, output_path, transport, timeout_sec)
             backend = "opencv"
         except Exception as cv_error:
             try:
@@ -114,7 +120,7 @@ def capture_once(payload):
             backend = "ffmpeg"
         except Exception as ffmpeg_error:
             try:
-                capture_with_cv2(source, output_path)
+                capture_with_cv2(source, output_path, transport, timeout_sec)
                 backend = "opencv"
             except Exception as cv_error:
                 raise RuntimeError(f"Capture failed. ffmpeg: {ffmpeg_error}. OpenCV: {cv_error}") from cv_error
@@ -144,6 +150,11 @@ def redis_command(host, port, *args, timeout=5):
         return sock.recv(1024 * 1024)
 
 
+def redis_null_response(text):
+    stripped = (text or "").strip()
+    return stripped in {"*-1", "*0", "$-1"} or not stripped
+
+
 def redis_provider(payload):
     return ((payload.get("connections") or {}).get("providers") or {}).get("redis") or {}
 
@@ -153,6 +164,31 @@ def channel_by_id(payload, channel_id):
         if channel.get("id") == channel_id:
             return channel
     return None
+
+
+def service_instance_dir():
+    return Path(os.environ.get("SERVICE_INSTANCE_DIR") or os.getcwd())
+
+
+def stream_cursor_path(channel_name):
+    return service_instance_dir() / f"redis-stream-{safe_name(channel_name)}.cursor"
+
+
+def read_stream_cursor(channel_name, default="$"):
+    path = stream_cursor_path(channel_name)
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+        return value or default
+    except FileNotFoundError:
+        return default
+
+
+def write_stream_cursor(channel_name, last_id):
+    if not last_id:
+        return
+    path = stream_cursor_path(channel_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(last_id), encoding="utf-8")
 
 
 def publish_result(payload, result):
@@ -182,20 +218,30 @@ def run_loop_with_redis(payload):
     host = provider.get("host") or "127.0.0.1"
     port = provider.get("port") or 6379
     channel_name = input_channel.get("name")
-    last_id = "$"
     if input_channel.get("type") == "stream" or bindings.get("inputMode") == "consume":
-        print(json.dumps({"ok": True, "mode": "redis_stream", "channel": channel_name}, ensure_ascii=False), flush=True)
+        last_id = read_stream_cursor(channel_name, "$")
+        print(json.dumps({"ok": True, "mode": "redis_stream", "channel": channel_name, "lastId": last_id}, ensure_ascii=False), flush=True)
         while True:
             raw = redis_command(host, port, "XREAD", "BLOCK", "5000", "COUNT", "1", "STREAMS", channel_name, last_id, timeout=8)
             text = raw.decode("utf-8", "replace")
-            if text.startswith("*0") or not text.strip():
+            if redis_null_response(text):
                 continue
             # Minimal RESP parsing is intentionally avoided here; the captured frame is triggered by any message.
             ids = re.findall(r"\$([0-9]+)\r\n([0-9]+-[0-9]+)", text)
+            next_id = ids[-1][1] if ids else last_id
             if ids:
-                last_id = ids[-1][1]
-            result = capture_once({**payload, "event": {"trigger": "redis_stream", "channel": channel_name, "raw": text[-1000:]}})
-            publish_result(payload, result)
+                last_id = next_id
+            try:
+                result = capture_once({**payload, "event": {"trigger": "redis_stream", "channel": channel_name, "raw": text[-1000:]}})
+                publish_result(payload, result)
+            except Exception as error:
+                result = {
+                    "ok": False,
+                    "error": str(error),
+                    "event": {"trigger": "redis_stream", "channel": channel_name, "raw": text[-1000:]},
+                    "failedAt": datetime.now(timezone.utc).isoformat()
+                }
+            write_stream_cursor(channel_name, next_id)
             print(json.dumps(result, ensure_ascii=False), flush=True)
     print(json.dumps({"ok": True, "mode": "redis_pubsub", "channel": channel_name}, ensure_ascii=False), flush=True)
     redis_command(host, port, "SUBSCRIBE", channel_name)

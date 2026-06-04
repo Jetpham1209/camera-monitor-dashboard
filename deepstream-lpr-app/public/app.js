@@ -2485,6 +2485,7 @@ function defaultZoneConfig(index = 0, overrides = {}) {
     enabled: true,
     mode: "capture_when_inside",
     polygon: [],
+    referenceSize: null,
     classIds: "",
     cooldownSec: "",
     ...overrides
@@ -2526,6 +2527,20 @@ function cleanZonePolygon(polygon = []) {
     : [];
 }
 
+function normalizeReferenceSize(value = null) {
+  if (!value || typeof value !== "object") return null;
+  const width = Number(value.width || value.w || 0);
+  const height = Number(value.height || value.h || 0);
+  return width > 0 && height > 0 ? { width: Math.round(width), height: Math.round(height) } : null;
+}
+
+function currentRoiReferenceSize() {
+  if (!roiTool.image || !els.roiCanvas) return null;
+  const width = Number(els.roiCanvas.width || roiTool.image.naturalWidth || 0);
+  const height = Number(els.roiCanvas.height || roiTool.image.naturalHeight || 0);
+  return width > 0 && height > 0 ? { width: Math.round(width), height: Math.round(height) } : null;
+}
+
 function normalizeZone(zone = {}, index = 0, camera = {}) {
   const fallback = defaultZoneConfig(index);
   const id = String(zone.id || fallback.id).trim() || fallback.id;
@@ -2543,6 +2558,7 @@ function normalizeZone(zone = {}, index = 0, camera = {}) {
     enabled: zone.enabled !== false,
     mode,
     polygon: cleanZonePolygon(zone.polygon || zone.points || []),
+    referenceSize: normalizeReferenceSize(zone.referenceSize || zone.imageSize),
     gieId,
     classIds: Array.isArray(zone.classIds) ? zone.classIds.join(",") : String(zone.classIds ?? ""),
     cooldownSec: zone.cooldownSec === "" || zone.cooldownSec === null || zone.cooldownSec === undefined
@@ -4835,7 +4851,8 @@ function readZoneEditor() {
     classIds: els.roiZoneClassIds.value,
     cooldownSec: els.roiZoneCooldown.value,
     enabled: els.roiZoneEnabled.checked,
-    polygon: roiTool.points
+    polygon: roiTool.points,
+    referenceSize: currentRoiReferenceSize() || zone.referenceSize || null
   }, roiTool.zoneIndex, readCameraSetting());
 }
 

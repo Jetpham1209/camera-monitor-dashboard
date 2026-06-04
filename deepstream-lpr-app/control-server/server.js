@@ -330,6 +330,7 @@ async function runServiceScript(manifest, instance, scriptName, extra = {}) {
   const env = {
     ...process.env,
     SERVICE_CONFIG_PATH: paths.configFile,
+    SERVICE_INSTANCE_ID: instance.id,
     SERVICE_INSTANCE_DIR: paths.instanceDir,
     SERVICE_OUTPUT_DIR: paths.outputDir,
     SERVICE_PACKAGE_DIR: manifest.packageDir
@@ -2611,6 +2612,13 @@ function normalizePolygon(value) {
     .filter((point) => point && Number.isFinite(point[0]) && Number.isFinite(point[1]));
 }
 
+function normalizeReferenceSize(value) {
+  if (!value || typeof value !== "object") return null;
+  const width = Number(value.width || value.w || 0);
+  const height = Number(value.height || value.h || 0);
+  return width > 0 && height > 0 ? { width: Math.round(width), height: Math.round(height) } : null;
+}
+
 const ZONE_MODES = new Set([
   "capture_when_inside",
   "alert_when_inside",
@@ -2635,6 +2643,7 @@ function normalizeZone(zone, index, streamDefaults = {}) {
     enabled: zone?.enabled !== false,
     mode,
     polygon: normalizePolygon(zone?.polygon || zone?.points || []),
+    referenceSize: normalizeReferenceSize(zone?.referenceSize || zone?.imageSize),
     gieId,
     classIds,
     cooldownSec: cooldown
@@ -5497,7 +5506,15 @@ app.put("/api/services/instances/:id", async (req, res) => {
 
 app.delete("/api/services/instances/:id", async (req, res) => {
   const id = sanitizeServiceId(req.params.id);
-  const instances = await readServiceInstances();
+  const [catalog, instances] = await Promise.all([listServiceCatalog(), readServiceInstances()]);
+  const instance = instances.find((item) => item.id === id);
+  const manifest = instance ? catalog.find((item) => item.id === instance.serviceId) : null;
+  if (manifest && instance) {
+    await runServiceScript(manifest, instance, "stop", {
+      action: "stop",
+      timeoutMs: 30000
+    }).catch(() => {});
+  }
   const next = instances.filter((item) => item.id !== id);
   await writeServiceInstances(next);
   res.json({ instances: next });

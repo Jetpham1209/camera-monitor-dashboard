@@ -3,22 +3,15 @@ set -euo pipefail
 
 echo "==> Checking Frame Capture service dependencies"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required." >&2
+if ! command -v docker >/dev/null 2>&1; then
+  echo "docker is required to build the Frame Capture service image." >&2
   exit 1
 fi
 
-if python3 - <<'PY' >/dev/null 2>&1
-import cv2
-PY
-then
-  echo "OpenCV is available."
-elif command -v ffmpeg >/dev/null 2>&1; then
-  echo "OpenCV is not available; ffmpeg fallback is available."
-else
-  echo "Neither OpenCV nor ffmpeg is available. Install python3-opencv or ffmpeg." >&2
-  exit 1
-fi
+cd "${SERVICE_PACKAGE_DIR:-$(dirname "$0")}"
+IMAGE="${FRAME_CAPTURE_IMAGE:-camera-monitor-service-frame-capture:local}"
+
+docker build -t "$IMAGE" .
 
 mkdir -p "${SERVICE_OUTPUT_DIR:-./outputs}"
-echo "Frame Capture service is ready."
+echo "Frame Capture Docker image is ready: ${IMAGE}"

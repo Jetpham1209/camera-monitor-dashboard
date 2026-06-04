@@ -1,9 +1,17 @@
 services:
   frame-capture:
-    build: .
+    build:
+      context: .
+    image: ${FRAME_CAPTURE_IMAGE:-camera-monitor-service-frame-capture:local}
+    container_name: ${FRAME_CAPTURE_CONTAINER_NAME:-camera-monitor-service-frame-capture}
     network_mode: host
+    restart: unless-stopped
     environment:
       SERVICE_CONFIG_PATH: /runtime/config.json
       SERVICE_OUTPUT_DIR: /runtime/outputs
+      SERVICE_INSTANCE_DIR: /runtime/instance
     volumes:
-      - ./runtime:/runtime
+      - ${SERVICE_CONFIG_PATH:?Set SERVICE_CONFIG_PATH}:/runtime/config.json:ro
+      - ${SERVICE_INSTANCE_DIR:?Set SERVICE_INSTANCE_DIR}:/runtime/instance
+      - ${SERVICE_OUTPUT_DIR:?Set SERVICE_OUTPUT_DIR}:/runtime/outputs
+    command: ["python3", "/service/worker.py", "--loop"]

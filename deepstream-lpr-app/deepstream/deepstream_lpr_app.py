@@ -482,6 +482,45 @@ class LprRuntime:
             j = i
         return inside
 
+    def dimension_pair(self, value):
+        if not isinstance(value, dict):
+            return None
+        width = float(value.get("width") or value.get("w") or 0)
+        height = float(value.get("height") or value.get("h") or 0)
+        if width > 0 and height > 0:
+            return {"width": width, "height": height}
+        return None
+
+    def zone_reference_size(self, zone, stream_config, polygon=None, target_width=0, target_height=0, source_width=0, source_height=0):
+        explicit_size = (
+            self.dimension_pair(zone.get("referenceSize"))
+            or self.dimension_pair(zone.get("imageSize"))
+            or self.dimension_pair(stream_config.get("roiReferenceSize"))
+            or self.dimension_pair(stream_config.get("frameSize"))
+        )
+        if explicit_size:
+            return explicit_size
+        points = polygon or zone.get("polygon") or []
+        if points and target_width > 0 and target_height > 0 and source_width > 0 and source_height > 0:
+            max_x = max(float(point[0]) for point in points)
+            max_y = max(float(point[1]) for point in points)
+            if max_x > target_width or max_y > target_height:
+                return {"width": float(source_width), "height": float(source_height)}
+        return None
+
+    def scale_polygon(self, polygon, reference_size, frame_width, frame_height):
+        if not polygon or not reference_size or frame_width <= 0 or frame_height <= 0:
+            return polygon
+        ref_width = float(reference_size.get("width") or 0)
+        ref_height = float(reference_size.get("height") or 0)
+        if ref_width <= 0 or ref_height <= 0:
+            return polygon
+        scale_x = float(frame_width) / ref_width
+        scale_y = float(frame_height) / ref_height
+        if abs(scale_x - 1.0) < 1e-6 and abs(scale_y - 1.0) < 1e-6:
+            return polygon
+        return [[float(point[0]) * scale_x, float(point[1]) * scale_y] for point in polygon]
+
     def class_id_set(self, value):
         if isinstance(value, list):
             return {int(item) for item in value if str(item).strip() != ""}
@@ -503,6 +542,7 @@ class LprRuntime:
                 "name": zone.get("name") or f"Zone {index + 1}",
                 "mode": mode,
                 "polygon": zone.get("polygon") or zone.get("points") or [],
+                "referenceSize": self.dimension_pair(zone.get("referenceSize") or zone.get("imageSize") or {}),
                 "gieId": int(zone.get("gieId") or 0),
                 "classIds": self.class_id_set(zone.get("classIds")),
                 "cooldownSec": zone.get("cooldownSec", ""),
@@ -516,6 +556,7 @@ class LprRuntime:
                 "name": "Zone 1",
                 "mode": "capture_when_inside",
                 "polygon": polygon,
+                "referenceSize": self.dimension_pair(stream_config.get("roiReferenceSize") or stream_config.get("frameSize") or {}),
                 "gieId": 1,
                 "classIds": self.class_id_set(stream_config.get("frontVehicleClassIds", [])),
                 "cooldownSec": stream_config.get("captureCooldownSec", 30),
@@ -525,6 +566,7 @@ class LprRuntime:
             "name": "Full frame",
             "mode": "capture_when_inside",
             "polygon": [],
+            "referenceSize": None,
             "gieId": 1,
             "classIds": set(),
             "cooldownSec": stream_config.get("captureCooldownSec", 30),
@@ -564,33 +606,39 @@ class LprRuntime:
             })
         return normalized
 
-    def zone_matches(self, zone, component_id, class_id, x, y):
+    def zone_matches(self, zone, stream_config, component_id, class_id, x, y, frame_width=0, frame_height=0, source_width=0, source_height=0):
         gie_id = int(zone.get("gieId") or 0)
         if gie_id and int(component_id) != gie_id:
             return False
         class_ids = zone.get("classIds") or set()
         if class_ids and int(class_id) not in class_ids:
             return False
-        return self.point_in_polygon(zone.get("polygon") or [], x, y)
+        polygon = self.scale_polygon(
+            zone.get("polygon") or [],
+            self.zone_reference_size(zone, stream_config, zone.get("polygon") or [], frame_width, frame_height, source_width, source_height),
+            frame_width,
+            frame_height,
+        )
+        return self.point_in_polygon(polygon, x, y)
 
-    def all_matching_zones(self, stream_config, component_id, class_id, x, y):
+    def all_matching_zones(self, stream_config, component_id, class_id, x, y, frame_width=0, frame_height=0, source_width=0, source_height=0):
         zones = self.stream_zones(stream_config)
         ignored = [
             zone for zone in zones
-            if zone.get("mode") == "ignore_inside" and self.zone_matches(zone, component_id, class_id, x, y)
+            if zone.get("mode") == "ignore_inside" and self.zone_matches(zone, stream_config, component_id, class_id, x, y, frame_width, frame_height, source_width, source_height)
         ]
         if ignored:
             return []
         return [
             zone for zone in zones
-            if zone.get("mode") != "ignore_inside" and self.zone_matches(zone, component_id, class_id, x, y)
+            if zone.get("mode") != "ignore_inside" and self.zone_matches(zone, stream_config, component_id, class_id, x, y, frame_width, frame_height, source_width, source_height)
         ]
 
-    def matching_zones(self, stream_config, component_id, class_id, x, y, processor_type):
+    def matching_zones(self, stream_config, component_id, class_id, x, y, processor_type, frame_width=0, frame_height=0, source_width=0, source_height=0):
         zones = self.stream_zones(stream_config)
         ignored = [
             zone for zone in zones
-            if zone.get("mode") == "ignore_inside" and self.zone_matches(zone, component_id, class_id, x, y)
+            if zone.get("mode") == "ignore_inside" and self.zone_matches(zone, stream_config, component_id, class_id, x, y, frame_width, frame_height, source_width, source_height)
         ]
         if ignored:
             return []
@@ -598,7 +646,7 @@ class LprRuntime:
         allowed_modes.add("lpr_only_inside" if processor_type == "lpr" else "detect_only_inside")
         return [
             zone for zone in zones
-            if zone.get("mode") in allowed_modes and self.zone_matches(zone, component_id, class_id, x, y)
+            if zone.get("mode") in allowed_modes and self.zone_matches(zone, stream_config, component_id, class_id, x, y, frame_width, frame_height, source_width, source_height)
         ]
 
     def should_capture(self, source_id, object_id, cooldown_sec, capture_kind="object"):
@@ -924,9 +972,13 @@ class LprRuntime:
                 roi_point = vehicle.get("footCenter") or vehicle["center"]
                 roi_x = float(roi_point["x"])
                 roi_y = float(roi_point["y"])
+                source_width = int(getattr(frame_meta, "source_frame_width", 0) or 0)
+                source_height = int(getattr(frame_meta, "source_frame_height", 0) or 0)
+                frame_width = int(self.config.get("streamWidth", 0) or source_width or 0)
+                frame_height = int(self.config.get("streamHeight", 0) or source_height or 0)
                 rules = self.stream_rules(stream_config)
                 if rules:
-                    rule_zones = self.all_matching_zones(stream_config, vehicle["componentId"], vehicle["classId"], roi_x, roi_y)
+                    rule_zones = self.all_matching_zones(stream_config, vehicle["componentId"], vehicle["classId"], roi_x, roi_y, frame_width, frame_height, source_width, source_height)
                     if not rule_zones:
                         continue
                     rule_targets = self.rule_capture_targets(stream_config, source_id, object_id, vehicle["componentId"], vehicle["classId"], rule_zones)
@@ -934,7 +986,7 @@ class LprRuntime:
                         continue
                     capture_targets = rule_targets
                 else:
-                    zones = self.matching_zones(stream_config, vehicle["componentId"], vehicle["classId"], roi_x, roi_y, "lpr")
+                    zones = self.matching_zones(stream_config, vehicle["componentId"], vehicle["classId"], roi_x, roi_y, "lpr", frame_width, frame_height, source_width, source_height)
                     if not zones:
                         continue
                     capture_targets = [{"zone": zone, "rule": None, "direction": "", "cooldownSec": float(zone.get("cooldownSec") or stream_config.get("captureCooldownSec", 30))} for zone in zones]
@@ -966,6 +1018,9 @@ class LprRuntime:
                         "zoneName": zone.get("name"),
                         "zoneMode": zone.get("mode"),
                         "zonePolygon": zone.get("polygon") or [],
+                        "zoneReferenceSize": zone.get("referenceSize"),
+                        "roiFrameWidth": frame_width,
+                        "roiFrameHeight": frame_height,
                         "ruleId": rule.get("id") if rule else None,
                         "ruleName": rule.get("name") if rule else None,
                         "ruleType": rule.get("type") if rule else None,
@@ -1013,9 +1068,13 @@ class LprRuntime:
                 roi_x = float(roi_point["x"])
                 roi_y = float(roi_point["y"])
                 object_key = f"{payload['componentId']}:{payload['objectId']}"
+                source_width = int(getattr(frame_meta, "source_frame_width", 0) or 0)
+                source_height = int(getattr(frame_meta, "source_frame_height", 0) or 0)
+                frame_width = int(self.config.get("streamWidth", 0) or source_width or 0)
+                frame_height = int(self.config.get("streamHeight", 0) or source_height or 0)
                 rules = self.stream_rules(stream_config)
                 if rules:
-                    rule_zones = self.all_matching_zones(stream_config, payload["componentId"], payload["classId"], roi_x, roi_y)
+                    rule_zones = self.all_matching_zones(stream_config, payload["componentId"], payload["classId"], roi_x, roi_y, frame_width, frame_height, source_width, source_height)
                     if not rule_zones:
                         obj_list = obj_list.next
                         continue
@@ -1025,7 +1084,7 @@ class LprRuntime:
                         continue
                     capture_targets = rule_targets
                 else:
-                    zones = self.matching_zones(stream_config, payload["componentId"], payload["classId"], roi_x, roi_y, "generic_detection")
+                    zones = self.matching_zones(stream_config, payload["componentId"], payload["classId"], roi_x, roi_y, "generic_detection", frame_width, frame_height, source_width, source_height)
                     if not zones:
                         obj_list = obj_list.next
                         continue
@@ -1055,6 +1114,9 @@ class LprRuntime:
                         "zoneName": zone.get("name"),
                         "zoneMode": zone.get("mode"),
                         "zonePolygon": zone.get("polygon") or [],
+                        "zoneReferenceSize": zone.get("referenceSize"),
+                        "roiFrameWidth": frame_width,
+                        "roiFrameHeight": frame_height,
                         "ruleId": rule.get("id") if rule else None,
                         "ruleName": rule.get("name") if rule else None,
                         "ruleType": rule.get("type") if rule else None,
