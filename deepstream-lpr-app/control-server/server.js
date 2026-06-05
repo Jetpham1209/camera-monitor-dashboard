@@ -192,6 +192,7 @@ function normalizeServiceField(field = {}) {
       label: String(typeof option === "object" ? option.label : option)
     })) : [],
     rows: Math.max(2, Number(field.rows || 4)),
+    cameraField: String(field.cameraField || "").trim(),
     min: field.min,
     max: field.max,
     step: field.step

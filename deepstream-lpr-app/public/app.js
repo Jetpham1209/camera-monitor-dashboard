@@ -751,7 +751,7 @@ function serviceFieldValue(config, field) {
     : serviceFieldDefault(field);
 }
 
-function serviceFieldInput(field, value) {
+function serviceFieldInput(field, value, config = {}) {
   const key = escapeHtml(field.key);
   const label = `${escapeHtml(field.label || field.key)}${field.required ? " *" : ""}`;
   const help = field.help ? `<small>${escapeHtml(field.help)}</small>` : "";
@@ -780,6 +780,22 @@ function serviceFieldInput(field, value) {
         ${help}
       </label>
       <div class="service-camera-summary" data-service-camera-summary="${key}"></div>
+    `;
+  }
+  if (field.type === "zoneSelect") {
+    const cameraId = config[field.cameraField || "selectedCameraId"] || "";
+    const camera = readCameraCards().find((item) => String(item.id || "") === String(cameraId || ""));
+    const zones = Array.isArray(camera?.zones) ? camera.zones : [];
+    return `
+      <label>${label}
+        <select data-service-config-key="${key}" data-service-config-type="zoneSelect" data-zone-camera-field="${escapeHtml(field.cameraField || "selectedCameraId")}">
+          <option value="">Choose zone</option>
+          ${zones.map((zone, index) => `
+            <option value="${escapeHtml(zone.id || `zone-${index + 1}`)}" ${String(value) === String(zone.id || `zone-${index + 1}`) ? "selected" : ""}>${escapeHtml(zone.name || zone.id || `Zone ${index + 1}`)} (${Array.isArray(zone.polygon) ? zone.polygon.length : 0} points)</option>
+          `).join("")}
+        </select>
+        ${help || `<small>${camera ? "Zones are loaded from the selected camera." : "Select a camera first to load zones."}</small>`}
+      </label>
     `;
   }
   if (field.type === "json" || field.type === "polygon") {
@@ -825,7 +841,7 @@ function renderServiceConfigForm(config = {}) {
   const fields = manifest.configSchema || [];
   els.serviceDynamicConfig.innerHTML = fields.length ? `
     <div class="service-config-grid">
-      ${fields.map((field) => serviceFieldInput(field, serviceFieldValue(config, field))).join("")}
+      ${fields.map((field) => serviceFieldInput(field, serviceFieldValue(config, field), config)).join("")}
     </div>
   ` : '<div class="empty">This service does not expose configurable fields.</div>';
   renderServiceCameraSummaries();
@@ -5786,7 +5802,10 @@ els.servicePackageSelect?.addEventListener("change", () => {
   renderServiceConfigForm({});
 });
 els.serviceDynamicConfig?.addEventListener("change", (event) => {
-  if (event.target?.matches?.("[data-service-config-type='cameraSelect']")) renderServiceCameraSummaries();
+  if (event.target?.matches?.("[data-service-config-type='cameraSelect']")) {
+    const config = readServiceConfigForm();
+    renderServiceConfigForm(config);
+  }
 });
 els.resetServiceEditorBtn?.addEventListener("click", () => resetServiceEditor());
 els.saveServiceInstanceBtn?.addEventListener("click", () => saveServiceInstance(els.saveServiceInstanceBtn).catch((error) => print(error.message)));

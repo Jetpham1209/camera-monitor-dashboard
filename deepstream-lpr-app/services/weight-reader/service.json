@@ -1,0 +1,216 @@
+{
+  "id": "weight-reader",
+  "name": "Weight Reader",
+  "version": "0.1.0",
+  "description": "Read a scale/LCD display after a DeepStream event, save a local result and optionally publish a custom schema payload.",
+  "runtime": "docker",
+  "entrypoint": "worker.py",
+  "docker": {
+    "image": "camera-monitor-service-weight-reader:local",
+    "containerPrefix": "camera-monitor-service-weight-reader"
+  },
+  "messageBus": {
+    "optional": false,
+    "description": "Consumes DeepStream trigger events and can publish completed weight analysis events.",
+    "providers": ["redis"],
+    "inputModes": ["consume"],
+    "outputModes": ["produce", "publish"]
+  },
+  "scripts": {
+    "install": "install.sh",
+    "test": "test.sh",
+    "start": "start.sh",
+    "stop": "stop.sh"
+  },
+  "configSchema": [
+    {
+      "key": "sourceMode",
+      "label": "Scale camera source",
+      "type": "select",
+      "default": "configured",
+      "options": [
+        { "value": "configured", "label": "Use Cameras & ROI setting" },
+        { "value": "manual", "label": "Manual RTSP URL" }
+      ]
+    },
+    {
+      "key": "selectedCameraId",
+      "label": "Scale camera",
+      "type": "cameraSelect",
+      "required": false,
+      "help": "Choose the camera that points at the scale display."
+    },
+    {
+      "key": "cameraUrl",
+      "label": "Manual scale camera URL",
+      "type": "rtsp",
+      "placeholder": "rtsp://user:password@camera-ip:554/stream"
+    },
+    {
+      "key": "cropMode",
+      "label": "Display crop source",
+      "type": "select",
+      "default": "zone",
+      "options": [
+        { "value": "zone", "label": "Use selected camera zone" },
+        { "value": "manual", "label": "Manual rectangle" },
+        { "value": "full", "label": "Full frame" }
+      ]
+    },
+    {
+      "key": "cropZoneId",
+      "label": "Display zone",
+      "type": "zoneSelect",
+      "cameraField": "selectedCameraId",
+      "help": "The service uses the zone polygon bounding rectangle as the crop area."
+    },
+    {
+      "key": "manualCrop",
+      "label": "Manual crop [x_min, x_max, y_min, y_max]",
+      "type": "json",
+      "default": [],
+      "rows": 3,
+      "help": "Fallback/debug crop rectangle. Example: [380, 1358, 673, 1139]."
+    },
+    {
+      "key": "inferenceMode",
+      "label": "Inference mode",
+      "type": "select",
+      "default": "triton_yolo",
+      "options": [
+        { "value": "triton_yolo", "label": "Triton YOLO detect" },
+        { "value": "mock", "label": "Mock result for wiring test" }
+      ]
+    },
+    {
+      "key": "tritonInferUrl",
+      "label": "Triton infer URL",
+      "type": "text",
+      "placeholder": "http://127.0.0.1:8010/v2/models/lcd_reader/infer",
+      "help": "Used when Inference mode is Triton YOLO detect."
+    },
+    {
+      "key": "tritonInputName",
+      "label": "Triton input name",
+      "type": "text",
+      "default": "images"
+    },
+    {
+      "key": "imageSize",
+      "label": "Model image size",
+      "type": "number",
+      "default": 640,
+      "min": 32,
+      "step": 32
+    },
+    {
+      "key": "labels",
+      "label": "Digit labels",
+      "type": "json",
+      "default": ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
+      "rows": 4
+    },
+    {
+      "key": "confidenceThreshold",
+      "label": "Confidence threshold",
+      "type": "number",
+      "default": 0.5,
+      "min": 0,
+      "max": 1,
+      "step": 0.01
+    },
+    {
+      "key": "iouThreshold",
+      "label": "IoU threshold",
+      "type": "number",
+      "default": 0.5,
+      "min": 0,
+      "max": 1,
+      "step": 0.01
+    },
+    {
+      "key": "maxReadSeconds",
+      "label": "Max read seconds",
+      "type": "number",
+      "default": 60,
+      "min": 1,
+      "step": 1
+    },
+    {
+      "key": "dropThreshold",
+      "label": "Drop threshold",
+      "type": "number",
+      "default": 3000,
+      "min": 0,
+      "step": 100
+    },
+    {
+      "key": "maxDropCount",
+      "label": "Max consecutive drops",
+      "type": "number",
+      "default": 70,
+      "min": 1,
+      "step": 1
+    },
+    {
+      "key": "divideAbove",
+      "label": "Divide values above",
+      "type": "number",
+      "default": 100000,
+      "min": 0,
+      "step": 1000
+    },
+    {
+      "key": "divideBy",
+      "label": "Divide by",
+      "type": "number",
+      "default": 10,
+      "min": 1,
+      "step": 1
+    },
+    {
+      "key": "selectionStrategy",
+      "label": "Result selection",
+      "type": "select",
+      "default": "hybrid",
+      "options": [
+        { "value": "hybrid", "label": "Hybrid peak/drop + most frequent" },
+        { "value": "most_frequent", "label": "Most frequent value" },
+        { "value": "peak", "label": "Peak value" }
+      ]
+    },
+    {
+      "key": "busyPolicy",
+      "label": "Busy policy",
+      "type": "select",
+      "default": "queue",
+      "options": [
+        { "value": "queue", "label": "Queue events sequentially" },
+        { "value": "ignore", "label": "Ignore events while running" }
+      ],
+      "help": "Current worker is single-process; queue is safest for Redis Stream."
+    },
+    {
+      "key": "saveDebugCrops",
+      "label": "Save debug crops",
+      "type": "checkbox",
+      "default": false
+    },
+    {
+      "key": "outputSchema",
+      "label": "Output schema template",
+      "type": "json",
+      "rows": 10,
+      "default": {
+        "id": "{{uuid}}",
+        "event_id": "{{event.eventId}}",
+        "plate": "{{event.plateText}}",
+        "weight": "{{service.weight}}",
+        "weight_image": "{{service.analysisImage}}",
+        "camera": "{{service.cameraName}}",
+        "processed_at": "{{service.processedAt}}"
+      },
+      "help": "Use placeholders like {{event.cameraName}}, {{event.plateText}}, {{service.weight}}, {{service.analysisImage}}, {{uuid}}, {{blank}}."
+    }
+  ]
+}
