@@ -187,7 +187,7 @@
           </div>
           <div class="actions inline-actions">
             <button id="checkCameraSettingBtn" type="button">Check connection</button>
-            <button id="openCameraSettingRoiBtn" type="button">ROI polygon</button>
+            <button id="openCameraSettingRoiBtn" type="button">ROI zones</button>
             <button id="addCameraBtn" type="button">Add camera</button>
           </div>
           <div class="camera-roi-slot" id="cameraSettingRoiSlot"></div>
@@ -198,7 +198,7 @@
             <div class="panel-toolbar">
               <div>
                 <h3 id="roiToolTitle">ROI setting</h3>
-                <p>Capture mot frame mau cua camera nay, click len anh de tao polygon.</p>
+                <p>Capture mot frame mau cua camera nay, sau do ve polygon hoac rectangle.</p>
               </div>
               <button id="closeRoiToolBtn" type="button" class="secondary">Close</button>
             </div>
@@ -211,12 +211,14 @@
                 </div>
                 <div class="actions inline-actions roi-source-actions">
                   <button id="captureRoiFrameBtn" type="button">Capture frame</button>
+                  <button id="roiPolygonModeBtn" type="button" class="secondary active">Polygon</button>
+                  <button id="roiRectangleModeBtn" type="button" class="secondary">Rectangle</button>
                   <button id="undoRoiPointBtn" type="button">Undo point</button>
                   <button id="clearRoiBtn" type="button">Clear drawing</button>
                 </div>
                 <div class="roi-canvas-wrap">
                   <canvas id="roiCanvas"></canvas>
-                  <div id="roiCanvasEmpty" class="roi-canvas-empty">Capture frame tu camera hoac upload anh mau de ve ROI polygon.</div>
+                  <div id="roiCanvasEmpty" class="roi-canvas-empty">Capture frame tu camera hoac upload anh mau de ve ROI zone.</div>
                 </div>
               </div>
               <div class="roi-output-panel">
@@ -224,7 +226,7 @@
                   <div class="panel-toolbar compact-toolbar">
                     <div>
                       <h3>Zone geometry</h3>
-                      <p>Dat ten va ve polygon. Logic, desired labels va rules se cau hinh trong Deploy.</p>
+                      <p>Dat ten va ve polygon/rectangle. Logic, desired labels va rules se cau hinh trong Deploy.</p>
                     </div>
                     <button id="newZoneBtn" type="button" class="secondary">New zone</button>
                   </div>
@@ -244,7 +246,7 @@
                   <input id="roiZoneCooldown" class="hidden-control" type="number" min="1" value="" />
                   <div id="roiZoneList" class="zone-list"></div>
                 </div>
-                <label>Polygon coordinates JSON <textarea id="roiPolygonOutput" readonly></textarea></label>
+                <label>Zone coordinates JSON <textarea id="roiPolygonOutput" readonly></textarea></label>
                 <div class="actions inline-actions">
                   <button id="applyRoiBtn" type="button">Apply zone</button>
                   <button id="removeRoiBtn" type="button" class="danger">Remove zone</button>

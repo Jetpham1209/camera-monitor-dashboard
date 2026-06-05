@@ -965,6 +965,11 @@ textarea { min-height: 120px; resize: vertical; }
 .roi-source-actions {
   margin: 0 0 12px;
 }
+.roi-source-actions button.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
 #roiCanvas {
   max-width: 100%;
   height: auto;

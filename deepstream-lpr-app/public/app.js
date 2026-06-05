@@ -118,6 +118,8 @@ const els = {
   roiCameraSelect: document.querySelector("#roiCameraSelect"),
   roiImageFile: document.querySelector("#roiImageFile"),
   captureRoiFrameBtn: document.querySelector("#captureRoiFrameBtn"),
+  roiPolygonModeBtn: document.querySelector("#roiPolygonModeBtn"),
+  roiRectangleModeBtn: document.querySelector("#roiRectangleModeBtn"),
   roiImageSize: document.querySelector("#roiImageSize"),
   roiCanvas: document.querySelector("#roiCanvas"),
   roiCanvasEmpty: document.querySelector("#roiCanvasEmpty"),
@@ -323,7 +325,10 @@ const roiTool = {
   image: null,
   source: "",
   points: [],
-  zoneIndex: 0
+  zoneIndex: 0,
+  drawMode: "polygon",
+  rectStart: null,
+  previewPoint: null
 };
 const tasks = new Map();
 const modelFiles = new Map();
@@ -4724,6 +4729,38 @@ function selectedCameraPolygon() {
   return zones[roiTool.zoneIndex]?.polygon || parseRoiValue(els.cameraSettingRoi.value || "[]");
 }
 
+function resetRoiRectangleDraft() {
+  roiTool.rectStart = null;
+  roiTool.previewPoint = null;
+}
+
+function setRoiDrawMode(mode) {
+  roiTool.drawMode = mode === "rectangle" ? "rectangle" : "polygon";
+  resetRoiRectangleDraft();
+  els.roiPolygonModeBtn?.classList.toggle("active", roiTool.drawMode === "polygon");
+  els.roiRectangleModeBtn?.classList.toggle("active", roiTool.drawMode === "rectangle");
+  drawRoiTool();
+}
+
+function rectanglePoints(start, end) {
+  if (!Array.isArray(start) || !Array.isArray(end)) return [];
+  const [x1, y1] = start;
+  const [x2, y2] = end;
+  if (x1 === x2 || y1 === y2) return [];
+  return [
+    [x1, y1],
+    [x2, y1],
+    [x2, y2],
+    [x1, y2]
+  ];
+}
+
+function zoneGeometrySummary(points = []) {
+  const clean = cleanZonePolygon(points);
+  if (clean.length < 3) return "full frame";
+  return clean.length === 4 ? "rectangle / 4 pts" : `${clean.length} pts`;
+}
+
 function selectedCameraZones() {
   return parseZonesValue(els.cameraSettingZones.value).map((zone, index) => normalizeZone(zone, index, readCameraSetting()));
 }
@@ -4779,7 +4816,7 @@ function renderZoneControls() {
   els.roiZoneList.innerHTML = zones.length ? zones.map((item, index) => `
     <button type="button" class="zone-chip ${index === roiTool.zoneIndex ? "active" : ""}" data-zone-index="${index}">
       <strong>${escapeHtml(item.name || item.id)}</strong>
-      <span>${cleanZonePolygon(item.polygon).length >= 3 ? `${item.polygon.length} pts` : "full frame"}</span>
+      <span>${zoneGeometrySummary(item.polygon)}</span>
     </button>
   `).join("") : '<div class="empty">No zone configured.</div>';
   els.roiZoneList.querySelectorAll("[data-zone-index]").forEach((button) => {
@@ -4888,6 +4925,7 @@ function selectZone(index) {
   if (!zones.length) return;
   roiTool.zoneIndex = clamp(index, 0, zones.length - 1);
   roiTool.points = zones[roiTool.zoneIndex].polygon || [];
+  resetRoiRectangleDraft();
   renderZoneControls();
   drawRoiTool();
   updateRoiOutput();
@@ -4902,6 +4940,7 @@ function newZone() {
   roiTool.zoneIndex = zones.length - 1;
   setCameraZones(zones);
   roiTool.points = [];
+  resetRoiRectangleDraft();
   drawRoiTool();
   updateRoiOutput();
 }
@@ -4910,6 +4949,7 @@ function clearRoiReferenceImage(initialPoints = []) {
   roiTool.image = null;
   roiTool.source = "";
   roiTool.points = Array.isArray(initialPoints) ? initialPoints : [];
+  resetRoiRectangleDraft();
   if (els.roiImageFile) els.roiImageFile.value = "";
   els.roiImageSize.value = "No image loaded";
   drawRoiTool();
@@ -4982,6 +5022,7 @@ function loadRoiImageFromUrl(url, label, shouldRevoke = false, initialPoints = [
     roiTool.image = image;
     roiTool.source = label || url;
     roiTool.points = Array.isArray(initialPoints) ? initialPoints : [];
+    resetRoiRectangleDraft();
     els.roiCanvas.width = image.naturalWidth;
     els.roiCanvas.height = image.naturalHeight;
     els.roiImageSize.value = `${image.naturalWidth} x ${image.naturalHeight}`;
@@ -5052,7 +5093,37 @@ function drawRoiTool() {
     });
     context.restore();
   });
+  drawRoiRectanglePreview(context);
   if (!roiTool.points.length) return;
+}
+
+function drawRoiRectanglePreview(context) {
+  if (roiTool.drawMode !== "rectangle" || !roiTool.rectStart) return;
+  const canvas = els.roiCanvas;
+  const preview = roiTool.previewPoint || roiTool.rectStart;
+  const points = rectanglePoints(roiTool.rectStart, preview);
+  context.save();
+  context.strokeStyle = "#f59e0b";
+  context.fillStyle = "rgba(245, 158, 11, .14)";
+  context.lineWidth = Math.max(2, Math.round(canvas.width / 640));
+  context.setLineDash([Math.max(8, Math.round(canvas.width / 160)), Math.max(5, Math.round(canvas.width / 240))]);
+  if (points.length) {
+    context.beginPath();
+    points.forEach(([x, y], pointIndex) => {
+      if (pointIndex === 0) context.moveTo(x, y);
+      else context.lineTo(x, y);
+    });
+    context.closePath();
+    context.stroke();
+    context.fill();
+  }
+  context.setLineDash([]);
+  context.beginPath();
+  context.arc(roiTool.rectStart[0], roiTool.rectStart[1], Math.max(5, Math.round(canvas.width / 300)), 0, Math.PI * 2);
+  context.fillStyle = "#f59e0b";
+  context.fill();
+  drawRoiPointLabel(context, "A", roiTool.rectStart[0], roiTool.rectStart[1]);
+  context.restore();
 }
 
 function drawRoiPointLabel(context, label, x, y) {
@@ -5071,22 +5142,56 @@ function updateRoiOutput() {
 }
 
 function addRoiPoint(event) {
-  if (!roiTool.image) return print("Capture frame hoac upload anh ROI truoc khi ve polygon.");
-  roiTool.points.push(getRoiCanvasPoint(event));
+  if (!roiTool.image) return print("Capture frame hoac upload anh ROI truoc khi ve zone.");
+  const point = getRoiCanvasPoint(event);
+  if (roiTool.drawMode === "rectangle") {
+    if (!roiTool.rectStart) {
+      roiTool.rectStart = point;
+      roiTool.previewPoint = point;
+    } else {
+      const points = rectanglePoints(roiTool.rectStart, point);
+      if (!points.length) return print("Rectangle can co chieu rong va chieu cao lon hon 0.");
+      roiTool.points = points;
+      resetRoiRectangleDraft();
+    }
+    drawRoiTool();
+    updateRoiOutput();
+    return;
+  }
+  roiTool.points.push(point);
   drawRoiTool();
   updateRoiOutput();
 }
 
 function undoRoiPoint() {
-  roiTool.points.pop();
+  if (roiTool.rectStart) {
+    resetRoiRectangleDraft();
+  } else if (roiTool.drawMode === "rectangle" && roiTool.points.length === 4) {
+    roiTool.points = [];
+  } else {
+    roiTool.points.pop();
+  }
   drawRoiTool();
   updateRoiOutput();
 }
 
 function clearRoiPolygon() {
   roiTool.points = [];
+  resetRoiRectangleDraft();
   drawRoiTool();
   updateRoiOutput();
+}
+
+function previewRoiRectangle(event) {
+  if (!roiTool.image || roiTool.drawMode !== "rectangle" || !roiTool.rectStart) return;
+  roiTool.previewPoint = getRoiCanvasPoint(event);
+  drawRoiTool();
+}
+
+function clearRoiPreview() {
+  if (!roiTool.previewPoint) return;
+  roiTool.previewPoint = null;
+  drawRoiTool();
 }
 
 async function saveRoiConfig(message) {
@@ -5096,7 +5201,7 @@ async function saveRoiConfig(message) {
 }
 
 async function applyRoiToCamera() {
-  if (roiTool.points.length < 3) return print("Zone polygon can it nhat 3 diem.");
+  if (roiTool.points.length < 3) return print("Zone can it nhat 3 diem, hoac ve rectangle bang 2 goc.");
   const zone = persistZoneEditor();
   const camera = syncEditedCameraDraft();
   updateCameraSettingStatus();
@@ -5722,6 +5827,8 @@ els.deployAppList.addEventListener("change", (event) => {
 });
 els.roiImageFile.addEventListener("change", loadRoiImage);
 els.roiCameraSelect.addEventListener("change", openRoiTool);
+els.roiPolygonModeBtn?.addEventListener("click", () => setRoiDrawMode("polygon"));
+els.roiRectangleModeBtn?.addEventListener("click", () => setRoiDrawMode("rectangle"));
 els.roiZoneSelect?.addEventListener("change", () => selectZone(Number(els.roiZoneSelect.value || 0)));
 els.newZoneBtn?.addEventListener("click", newZone);
 els.addRoiRuleBtn?.addEventListener("click", addRoiRule);
@@ -5736,6 +5843,8 @@ els.addRoiRuleBtn?.addEventListener("click", addRoiRule);
 els.captureRoiFrameBtn.addEventListener("click", () => captureRoiFrame(els.captureRoiFrameBtn).catch((error) => print(error.message)));
 els.closeRoiToolBtn.addEventListener("click", closeRoiTool);
 els.roiCanvas.addEventListener("click", addRoiPoint);
+els.roiCanvas.addEventListener("mousemove", previewRoiRectangle);
+els.roiCanvas.addEventListener("mouseleave", clearRoiPreview);
 els.undoRoiPointBtn.addEventListener("click", undoRoiPoint);
 els.clearRoiBtn.addEventListener("click", clearRoiPolygon);
 els.applyRoiBtn.addEventListener("click", () => applyRoiToCamera().catch((error) => print(error.message)));
