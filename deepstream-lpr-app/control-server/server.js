@@ -357,11 +357,25 @@ async function runServiceScript(manifest, instance, scriptName, extra = {}) {
 async function listServiceOutputs(instanceId, limit = 100) {
   const paths = serviceInstancePaths(instanceId);
   const imageExts = new Set([".jpg", ".jpeg", ".png", ".bmp", ".webp"]);
+  const maxItems = Math.max(1, Math.min(Number(limit || 100), 500));
+  const eventsPath = path.join(paths.outputDir, "events.jsonl");
+  let events = [];
+  try {
+    const lines = (await fsp.readFile(eventsPath, "utf8")).trim().split(/\r?\n/).filter(Boolean);
+    events = lines.map((line) => JSON.parse(line));
+  } catch {
+    events = [];
+  }
+  const eventByImage = new Map();
+  for (const event of events) {
+    const imageName = path.basename(String(event.analysisImageName || event.analysisImage || ""));
+    if (imageName) eventByImage.set(imageName, event);
+  }
   let entries = [];
   try {
     entries = await fsp.readdir(paths.outputDir, { withFileTypes: true });
   } catch {
-    return { instanceId: paths.id, outputDir: paths.outputDir, files: [] };
+    return { instanceId: paths.id, outputDir: paths.outputDir, files: [], events: [] };
   }
   const files = [];
   for (const entry of entries) {
@@ -377,14 +391,17 @@ async function listServiceOutputs(instanceId, limit = 100) {
       path: fullPath,
       url: `/runtime/${relative}`,
       size: stat.size,
-      createdAt: stat.mtime.toISOString()
+      createdAt: stat.mtime.toISOString(),
+      event: eventByImage.get(entry.name) || null
     });
   }
   files.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  events.sort((a, b) => Date.parse(b.processedAt || 0) - Date.parse(a.processedAt || 0));
   return {
     instanceId: paths.id,
     outputDir: paths.outputDir,
-    files: files.slice(0, Math.max(1, Math.min(Number(limit || 100), 500)))
+    files: files.slice(0, maxItems),
+    events: events.slice(0, maxItems)
   };
 }
 
