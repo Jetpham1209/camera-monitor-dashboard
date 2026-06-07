@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -545,6 +546,95 @@ def write_cursor(channel_name, last_id):
     path.write_text(str(last_id), encoding="utf-8")
 
 
+def processed_events_path(channel_name):
+    return service_instance_dir() / f"processed-events-{safe_name(channel_name)}.json"
+
+
+def event_identity(event):
+    if not isinstance(event, dict):
+        return ""
+    for key in ("eventId", "event_id", "trigger_event_id"):
+        value = event.get(key)
+        if value not in (None, ""):
+            return str(value)
+    parts = {
+        "eventType": event.get("eventType"),
+        "cameraId": event.get("cameraId") or event.get("trigger_cam_id"),
+        "sourceId": event.get("sourceId") or event.get("section_id"),
+        "objectId": event.get("objectId") or event.get("detected_object_id"),
+        "frameNum": event.get("frameNum"),
+        "zoneId": event.get("zoneId"),
+        "ruleId": event.get("ruleId"),
+        "ts": event.get("ts") or event.get("timestamp"),
+    }
+    compact = {key: value for key, value in parts.items() if value not in (None, "")}
+    if not compact:
+        try:
+            compact = event
+        except Exception:
+            return ""
+    encoded = json.dumps(compact, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha1(encoded.encode("utf-8")).hexdigest()
+
+
+def load_processed_events(channel_name):
+    path = processed_events_path(channel_name)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+
+
+def save_processed_events(channel_name, events):
+    path = processed_events_path(channel_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(events, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+
+
+def dedupe_ttl(payload):
+    config = payload.get("config") or {}
+    try:
+        return int(float(config.get("dedupeWindowSec", 600)))
+    except Exception:
+        return 600
+
+
+def prune_processed_events(channel_name, ttl):
+    processed = load_processed_events(channel_name)
+    if ttl <= 0:
+        return {}
+    cutoff = time.time() - ttl
+    processed = {item_key: float(seen_at) for item_key, seen_at in processed.items() if float(seen_at or 0) >= cutoff}
+    save_processed_events(channel_name, processed)
+    return processed
+
+
+def is_duplicate_event(payload, channel_name, event):
+    ttl = dedupe_ttl(payload)
+    if ttl <= 0:
+        return False, ""
+    key = event_identity(event)
+    if not key:
+        return False, ""
+    processed = prune_processed_events(channel_name, ttl)
+    return key in processed, key
+
+
+def remember_event(payload, channel_name, event):
+    ttl = dedupe_ttl(payload)
+    if ttl <= 0:
+        return
+    key = event_identity(event)
+    if not key:
+        return
+    processed = prune_processed_events(channel_name, ttl)
+    processed[key] = time.time()
+    save_processed_events(channel_name, processed)
+
+
 def parse_redis_stream_payload(text):
     ids = re.findall(r"\$([0-9]+)\r\n([0-9]+-[0-9]+)", text)
     last_id = ids[-1][1] if ids else ""
@@ -634,8 +724,23 @@ def run_loop(payload):
         next_id, event = parse_redis_stream_payload(text)
         if not next_id:
             continue
+        is_duplicate, duplicate_key = is_duplicate_event(payload, channel_name, event)
+        if is_duplicate:
+            result = {
+                "ok": True,
+                "skipped": True,
+                "reason": "duplicate_event",
+                "eventKey": duplicate_key,
+                "event": event,
+                "skippedAt": now_iso(),
+            }
+            write_cursor(channel_name, next_id)
+            last_id = next_id
+            print(json.dumps(result, ensure_ascii=False), flush=True)
+            continue
         try:
             result = read_weight(payload, event)
+            remember_event(payload, channel_name, event)
             publish_result(payload, result)
         except Exception as error:
             result = {"ok": False, "error": str(error), "event": event, "failedAt": now_iso()}

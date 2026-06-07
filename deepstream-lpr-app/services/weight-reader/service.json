@@ -202,6 +202,15 @@
       "help": "Current worker is single-process; queue is safest for Redis Stream."
     },
     {
+      "key": "dedupeWindowSec",
+      "label": "Duplicate event window (seconds)",
+      "type": "number",
+      "default": 600,
+      "min": 0,
+      "step": 1,
+      "help": "Skip repeated input events with the same eventId within this window. Set 0 to disable dedupe."
+    },
+    {
       "key": "saveDebugCrops",
       "label": "Save debug crops",
       "type": "checkbox",
