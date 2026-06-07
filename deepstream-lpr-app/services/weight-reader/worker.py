@@ -82,6 +82,20 @@ def crop_rect_from_polygon(polygon, width, height):
     ]
 
 
+def scale_polygon_to_frame(zone, width, height):
+    polygon = (zone or {}).get("polygon") or []
+    reference = (zone or {}).get("referenceSize") or {}
+    ref_width = float(reference.get("width") or 0)
+    ref_height = float(reference.get("height") or 0)
+    if not polygon or ref_width <= 0 or ref_height <= 0:
+        return polygon, False
+    if abs(ref_width - width) < 1 and abs(ref_height - height) < 1:
+        return polygon, False
+    scale_x = width / ref_width
+    scale_y = height / ref_height
+    return [[float(point[0]) * scale_x, float(point[1]) * scale_y] for point in polygon if isinstance(point, list) and len(point) >= 2], True
+
+
 def crop_rect(payload, camera, frame):
     config = payload.get("config") or {}
     height, width = frame.shape[:2]
@@ -90,9 +104,10 @@ def crop_rect(payload, camera, frame):
         return [0, width, 0, height], {"mode": "full"}
     if mode == "zone":
         zone = zone_by_id(camera, config.get("cropZoneId"))
-        rect = crop_rect_from_polygon((zone or {}).get("polygon") or [], width, height)
+        polygon, scaled = scale_polygon_to_frame(zone, width, height)
+        rect = crop_rect_from_polygon(polygon, width, height)
         if rect:
-            return rect, {"mode": "zone", "zoneId": zone.get("id"), "zoneName": zone.get("name")}
+            return rect, {"mode": "zone", "zoneId": zone.get("id"), "zoneName": zone.get("name"), "scaledFromReference": scaled}
     manual = config.get("manualCrop") or []
     if isinstance(manual, list) and len(manual) >= 4:
         rect = [
@@ -127,10 +142,26 @@ def open_capture(source, transport="tcp", timeout_sec=15):
     return cap
 
 
-def preprocess_image(image, image_size):
-    resized = cv2.resize(image, (image_size, image_size), interpolation=cv2.INTER_LINEAR)
+def preprocess_image(image, image_size, mode="letterbox"):
+    height, width = image.shape[:2]
+    if mode == "resize":
+        resized = cv2.resize(image, (image_size, image_size), interpolation=cv2.INTER_LINEAR)
+        meta = {"mode": "resize", "gain": None, "padX": 0.0, "padY": 0.0, "inputSize": image_size}
+    else:
+        gain = min(image_size / max(width, 1), image_size / max(height, 1))
+        new_width = int(round(width * gain))
+        new_height = int(round(height * gain))
+        resized_inner = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+        pad_x = (image_size - new_width) / 2.0
+        pad_y = (image_size - new_height) / 2.0
+        left = int(round(pad_x - 0.1))
+        right = int(round(pad_x + 0.1))
+        top = int(round(pad_y - 0.1))
+        bottom = int(round(pad_y + 0.1))
+        resized = cv2.copyMakeBorder(resized_inner, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114))
+        meta = {"mode": "letterbox", "gain": gain, "padX": float(left), "padY": float(top), "inputSize": image_size}
     rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-    return np.transpose(rgb, (2, 0, 1))[None, ...]
+    return np.transpose(rgb, (2, 0, 1))[None, ...], meta
 
 
 def triton_infer(config, crop):
@@ -139,7 +170,8 @@ def triton_infer(config, crop):
         raise RuntimeError("Triton infer URL is required for triton_yolo mode.")
     image_size = int(config.get("imageSize") or 640)
     input_name = str(config.get("tritonInputName") or "images")
-    tensor = preprocess_image(crop, image_size)
+    preprocess_mode = str(config.get("preprocessMode") or "letterbox").strip()
+    tensor, meta = preprocess_image(crop, image_size, preprocess_mode)
     body = {
         "inputs": [{
             "name": input_name,
@@ -150,7 +182,9 @@ def triton_infer(config, crop):
     }
     response = requests.post(infer_url, json=body, timeout=max(10, int(config.get("inferTimeoutSec") or 30)))
     response.raise_for_status()
-    return response.json()
+    data = response.json()
+    data["_preprocess"] = meta
+    return data
 
 
 def output_array(triton_output):
@@ -169,6 +203,7 @@ def output_array(triton_output):
 
 def decode_yolo_outputs(triton_output, labels, conf_threshold, crop_shape, image_size):
     arrays = output_array(triton_output)
+    preprocess_meta = triton_output.get("_preprocess") or {"mode": "resize"}
     detections = []
     if len(arrays) >= 3 and all(arr[1].ndim >= 2 for arr in arrays[:3]):
         boxes = arrays[0][1][0] if arrays[0][1].ndim == 3 else arrays[0][1]
@@ -178,7 +213,7 @@ def decode_yolo_outputs(triton_output, labels, conf_threshold, crop_shape, image
             if float(score) < conf_threshold:
                 continue
             x1, y1, x2, y2 = box[:4]
-            detections.append(scale_detection([x1, y1, x2, y2], int(cls), float(score), labels, crop_shape, image_size, xyxy=True))
+            detections.append(scale_detection([x1, y1, x2, y2], int(cls), float(score), labels, crop_shape, image_size, xyxy=True, preprocess_meta=preprocess_meta))
         return [item for item in detections if item]
 
     raw = arrays[0][1]
@@ -196,11 +231,11 @@ def decode_yolo_outputs(triton_output, labels, conf_threshold, crop_shape, image
         score = float(scores[cls])
         if score < conf_threshold:
             continue
-        detections.append(scale_detection(box, cls, score, labels, crop_shape, image_size, xyxy=False))
+        detections.append(scale_detection(box, cls, score, labels, crop_shape, image_size, xyxy=False, preprocess_meta=preprocess_meta))
     return [item for item in detections if item]
 
 
-def scale_detection(box, cls, score, labels, crop_shape, image_size, xyxy=False):
+def scale_detection(box, cls, score, labels, crop_shape, image_size, xyxy=False, preprocess_meta=None):
     label = labels[cls] if 0 <= cls < len(labels) else str(cls)
     crop_h, crop_w = crop_shape[:2]
     if xyxy:
@@ -208,13 +243,31 @@ def scale_detection(box, cls, score, labels, crop_shape, image_size, xyxy=False)
     else:
         cx, cy, w, h = [float(v) for v in box]
         x1, y1, x2, y2 = cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2
-    scale_x = crop_w / float(image_size)
-    scale_y = crop_h / float(image_size)
+    preprocess_meta = preprocess_meta or {"mode": "resize"}
+    if preprocess_meta.get("mode") == "letterbox":
+        gain = float(preprocess_meta.get("gain") or 1.0)
+        pad_x = float(preprocess_meta.get("padX") or 0.0)
+        pad_y = float(preprocess_meta.get("padY") or 0.0)
+        x1 = (x1 - pad_x) / gain
+        x2 = (x2 - pad_x) / gain
+        y1 = (y1 - pad_y) / gain
+        y2 = (y2 - pad_y) / gain
+    else:
+        scale_x = crop_w / float(image_size)
+        scale_y = crop_h / float(image_size)
+        x1 *= scale_x
+        x2 *= scale_x
+        y1 *= scale_y
+        y2 *= scale_y
+    x1 = max(0.0, min(float(crop_w), x1))
+    x2 = max(0.0, min(float(crop_w), x2))
+    y1 = max(0.0, min(float(crop_h), y1))
+    y2 = max(0.0, min(float(crop_h), y2))
     return {
-        "x1": x1 * scale_x,
-        "y1": y1 * scale_y,
-        "x2": x2 * scale_x,
-        "y2": y2 * scale_y,
+        "x1": x1,
+        "y1": y1,
+        "x2": x2,
+        "y2": y2,
         "label": str(label),
         "classId": cls,
         "confidence": score

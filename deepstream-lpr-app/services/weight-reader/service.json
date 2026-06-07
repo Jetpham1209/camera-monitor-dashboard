@@ -104,6 +104,17 @@
       "step": 32
     },
     {
+      "key": "preprocessMode",
+      "label": "Preprocess mode",
+      "type": "select",
+      "default": "letterbox",
+      "options": [
+        { "value": "letterbox", "label": "YOLO letterbox" },
+        { "value": "resize", "label": "Direct resize" }
+      ],
+      "help": "Ultralytics YOLO normally uses letterbox. Use direct resize only for models trained/exported with stretched square input."
+    },
+    {
       "key": "labels",
       "label": "Digit labels",
       "type": "json",
