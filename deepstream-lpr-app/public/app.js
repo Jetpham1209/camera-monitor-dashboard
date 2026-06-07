@@ -1100,10 +1100,6 @@ function renderServiceOutputs(result = null) {
         </article>
       `).join("") : '<div class="empty">No image output yet.</div>'}
     </div>
-    <div class="service-event-list">
-      <h3>Result events</h3>
-      ${events.length ? events.map(serviceOutputEventMarkup).join("") : '<div class="empty">No event result yet.</div>'}
-    </div>
   `;
 }
 
@@ -1116,33 +1112,6 @@ function serviceOutputSummaryMarkup(event = null) {
     <strong>${escapeHtml(title)}</strong>
     <span>${escapeHtml(event.analysisCode || event.crop?.zoneName || "")}${escapeHtml(method)}</span>
     <small>${escapeHtml(event.event?.eventId || event.payload?.trigger_event_id || "")}</small>
-  `;
-}
-
-function serviceOutputEventMarkup(event = {}) {
-  const payload = event.payload || {};
-  const value = event.weight ?? event.text ?? payload.weight ?? payload.weight_text ?? "";
-  const status = event.ok === false ? "failed" : "success";
-  const image = event.analysisImage || payload.weight_image || "";
-  return `
-    <article class="service-event-card ${status}">
-      <div>
-        <strong>${escapeHtml(value === "" ? "No result" : value)}</strong>
-        <span>${escapeHtml(event.cameraName || event.cameraId || "")} ${escapeHtml(event.analysisCode || "")}</span>
-      </div>
-      <div>
-        <span>${escapeHtml(event.processedAt ? new Date(event.processedAt).toLocaleString() : "")}</span>
-        <small>${escapeHtml(event.selectionMethod || "")}</small>
-      </div>
-      <pre>${escapeHtml(JSON.stringify({
-        ok: event.ok,
-        eventId: event.event?.eventId || payload.trigger_event_id,
-        triggerCode: event.event?.trigger_code || payload.trigger_code,
-        detectedObjectId: event.event?.detected_object_id || payload.detected_object_id,
-        weight: value,
-        image
-      }, null, 2))}</pre>
-    </article>
   `;
 }
 

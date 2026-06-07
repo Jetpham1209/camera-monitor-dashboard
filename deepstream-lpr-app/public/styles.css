@@ -2321,52 +2321,6 @@ pre {
   color: var(--muted);
   font-size: 12px;
 }
-.service-event-list {
-  display: grid;
-  gap: 10px;
-}
-.service-event-list h3 {
-  margin: 4px 0 0;
-}
-.service-event-card {
-  display: grid;
-  grid-template-columns: minmax(120px, 220px) minmax(120px, 220px) minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 10px;
-  background: #ffffff;
-}
-.service-event-card.success {
-  border-color: #86efac;
-  background: #f0fdf4;
-}
-.service-event-card.failed {
-  border-color: #fecaca;
-  background: #fff7f7;
-}
-.service-event-card strong,
-.service-event-card span,
-.service-event-card small {
-  display: block;
-}
-.service-event-card span,
-.service-event-card small {
-  color: var(--muted);
-  font-size: 12px;
-}
-.service-event-card pre {
-  min-width: 0;
-  max-height: 180px;
-  overflow: auto;
-  margin: 0;
-  border-radius: 6px;
-  padding: 8px;
-  background: var(--ink);
-  color: #e5e7eb;
-  font-size: 12px;
-}
 .triton-layout {
   display: grid;
   grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
